@@ -1,531 +1,559 @@
 /* ============================================================
-   HUD — telemetry, instruments, codex, menus
+   RALLYE — in-race HUD
+   ------------------------------------------------------------
+   Contract: docs/INTEGRATION-NOTES.md "HUD — src/ui/hud.js".
+     new HUD(audio) · showRace(info) · hideRace() · bakeMap(terrain, trackData)
+     update(dt, payload) · countdown(n) · banner(text, kind, ttl) ·
+     log(text, kind) · airtime(sec)
+
+   Cost discipline (this runs every frame at 60 Hz next to six cars of
+   physics):
+     • Every DOM write is guarded by a cached last-value. A frame where
+       nothing changed touches nothing.
+     • No allocation in update(): no object literals, no template strings
+       except where a value actually changed, no array methods.
+     • The rev arc redraws at 30 Hz off an accumulator. The minimap blits a
+       pre-baked background and draws six dots — cheap enough per frame, and
+       dots that lag look broken.
+     • The minimap background is baked ONCE per race into an offscreen
+       canvas; nothing samples the terrain after that.
    ============================================================ */
-import { CODEX, MISSIONS } from '../game/lore.js';
-import { HOME } from '../world/props.js';
-import { STATION, MASSIF } from '../game/gameplay.js';
-import { DRIVE } from '../game/rover.js';
-import { PLAYABLE_R, MACRO_RES, MACRO_EXT } from '../world/terrain.js';
-import { clamp, sstep } from '../core/rng.js';
+import { PLAYABLE_EXT } from '../world/terrain.js';
+import { TUNE } from '../game/config.js';
 
 const $ = (id) => document.getElementById(id);
-const MAP_EXT = 1020;                    // metres shown across the minimap base
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+
+const MAP_N = 96;          // heightfield samples per side (9216 heightAt calls, once)
+const MAP_BASE = 256;      // offscreen background resolution
+const ROAD_STEP = 8;       // metres between road-ribbon samples
+const RPM_HZ = 30;         // rev-arc redraw rate
+
+/** m:ss.cc — the only string the HUD builds per frame, and only on change. */
+function fmtTime(t) {
+  if (t == null || !isFinite(t) || t < 0) return '--:--.--';
+  const m = Math.floor(t / 60);
+  const s = t - m * 60;
+  return `${m}:${s < 10 ? '0' : ''}${s.toFixed(2)}`;
+}
+function fmtGap(g) {
+  if (g == null || !isFinite(g)) return '';
+  const a = Math.abs(g);
+  return (g < 0 ? '-' : '+') + (a < 10 ? a.toFixed(2) : a.toFixed(1));
+}
+function toCss(c, fallback) {
+  if (typeof c === 'number') return '#' + (c >>> 0 & 0xffffff).toString(16).padStart(6, '0');
+  if (typeof c === 'string' && c) return c;
+  return fallback;
+}
 
 export class HUD {
   constructor(audio) {
-    this.audio = audio;
+    this.audio = audio || null;
+
     this.el = {
-      hud: $('hud'), mission: $('missionBox'), tag: $('missionTag'), name: $('missionName'), obj: $('missionObj'),
-      sunPhase: $('sunPhase'), met: $('met'), rangeHome: $('rangeHome'),
-      batt: $('gBatt'), heat: $('gHeat'), hull: $('gHull'), chips: $('sysChips'),
-      bay: $('baygrid'), bayCount: $('bayCount'), mapScale: $('mapScale'),
-      prompt: $('prompt'), logfeed: $('logfeed'), vig: $('vig'),
-      discovery: $('discovery'), gprState: $('gprState'),
-      codexList: $('codexList'), codexRead: $('codexRead')
+      hud: $('hud'),
+      pos: $('hPos'), posN: $('hPosN'), posT: $('hPosT'), rival: $('hRival'),
+      lapN: $('hLapN'), lapT: $('hLapT'), track: $('hTrack'),
+      time: $('hTime'), last: $('hLast'), best: $('hBest'),
+      kmh: $('hKmh'), gear: $('hGear'), air: $('hAir'),
+      banner: $('hBanner'), log: $('hLog'),
+      count: $('hCount'), countN: $('hCountN'),
+      wrong: $('hWrong'), off: $('hOff'), reset: $('hReset'),
     };
-    this.cv = {
-      compass: $('compass').getContext('2d'),
-      minimap: $('minimap').getContext('2d'),
-      speedo: $('speedo').getContext('2d'),
-      wheel: $('wheelmon').getContext('2d'),
-      gpr: $('gprscope').getContext('2d')
+    this.cv = { map: $('hMap'), rpm: $('hRpm') };
+    this.ctx = {
+      map: this.cv.map ? this.cv.map.getContext('2d') : null,
+      rpm: this.cv.rpm ? this.cv.rpm.getContext('2d') : null,
     };
-    this.mapDirty = true; this.bayDirty = true; this.missionDirty = true; this.codexDirty = true;
-    this.logs = [];
-    this.interactProgress = 0;
-    this.gprTrace = new Float32Array(160);
-    this.mapBase = null;
+
+    this.mapBase = null;                       // offscreen canvas
+    this.fit = { cx: 0, cz: 0, half: PLAYABLE_EXT };   // world → map transform
+    this.racers = null;
+    this.laps = 1;
+
     this._t = 0;
-    this._discT = 0;
-    this._camLabel = '';
-    this.buildBay();
-    this.buildCodexList();
-  }
+    this._rpmAcc = 0;
+    this._banners = [];
+    this._logs = [];
+    this._cdT = 0;
+    this._lastCd = null;
+    this._airT = 0;
+    this._posFlashT = 0;
+    this._holdTime = (TUNE && TUNE.reset && TUNE.reset.holdTime) || 0.8;
 
-  /* ---------------- minimap base: hillshade the real height field ---------------- */
-  bakeMap(terrain) {
-    const N = 300;
-    const c = document.createElement('canvas'); c.width = c.height = N;
-    const g = c.getContext('2d');
-    const img = g.createImageData(N, N);
-    const sample = (x, z) => {
-      const u = clamp((x / MACRO_EXT + 0.5) * MACRO_RES, 0, MACRO_RES - 1) | 0;
-      const v = clamp((z / MACRO_EXT + 0.5) * MACRO_RES, 0, MACRO_RES - 1) | 0;
-      return terrain.macro[v * MACRO_RES + u];
+    // last-rendered cache — the whole point of update() being free
+    this._c = {
+      pos: -1, total: -1, lap: -1, lapT: -1, time: '', last: '', best: '',
+      kmh: -1, gear: '', rival: '', wrong: null, off: null, reset: -1,
     };
-    const step = MAP_EXT / N;
+
+    this._onResize = () => { this._sized = false; };
+    addEventListener('resize', this._onResize);
+    addEventListener('orientationchange', this._onResize);
+  }
+
+  dispose() {
+    removeEventListener('resize', this._onResize);
+    removeEventListener('orientationchange', this._onResize);
+  }
+
+  /* ============================================================
+     RACE LIFECYCLE
+     ============================================================ */
+  showRace(info) {
+    const i = info || {};
+    this.racers = Array.isArray(i.racers) ? i.racers : null;
+    this.laps = i.laps || 1;
+    if (this.el.track) this.el.track.textContent = i.trackName || '';
+    if (this.el.lapT) this.el.lapT.textContent = '/' + this.laps;
+    if (this.el.posT) this.el.posT.textContent = '/' + (this.racers ? this.racers.length : 6);
+    this._c.lapT = this.laps;
+
+    // wipe transients so a restart never inherits the last race's furniture
+    this._clearTransients();
+    const c = this._c;
+    c.pos = -1; c.total = -1; c.lap = -1; c.kmh = -1; c.gear = '';
+    c.time = ''; c.last = ''; c.best = ''; c.rival = '';
+    c.wrong = null; c.off = null; c.reset = -1;
+    if (this.el.pos) this.el.pos.classList.remove('up', 'down', 'bump');
+
+    if (this.el.hud) { this.el.hud.classList.remove('hidden'); this.el.hud.setAttribute('aria-hidden', 'false'); }
+    this._sized = false;
+  }
+
+  hideRace() {
+    if (this.el.hud) { this.el.hud.classList.add('hidden'); this.el.hud.setAttribute('aria-hidden', 'true'); }
+    this._clearTransients();
+  }
+
+  _clearTransients() {
+    if (this.el.banner) this.el.banner.innerHTML = '';
+    if (this.el.log) this.el.log.innerHTML = '';
+    if (this.el.air) this.el.air.innerHTML = '';
+    if (this.el.count) this.el.count.classList.add('hidden');
+    if (this.el.wrong) this.el.wrong.classList.add('hidden');
+    if (this.el.off) this.el.off.classList.add('hidden');
+    if (this.el.reset) this.el.reset.classList.add('hidden');
+    this._banners.length = 0;
+    this._logs.length = 0;
+    this._cdT = 0; this._airT = 0; this._lastCd = null;
+  }
+
+  /* ============================================================
+     MINIMAP BAKE
+     Shaded heightfield + road ribbon + checkpoints + start line, once.
+     ============================================================ */
+  bakeMap(terrain, trackData) {
+    const spline = trackData && trackData.spline;
+    if (!terrain || typeof terrain.heightAt !== 'function' || !spline) return;
+
+    /* ---- fit the view box to the track, then clamp to the playable world.
+       A map scaled to ±PLAYABLE_EXT wastes two thirds of its pixels on empty
+       vista for a 900 m loop; fitting the loop is what makes the 150 px
+       instrument readable at a glance. ---- */
+    let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
+    const L = spline.length || 1;
+    const step = Math.max(4, L / 512);
+    const p = { x: 0, y: 0, z: 0 };
+    for (let s = 0; s < L; s += step) {
+      spline.posAt(s, p);
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+    }
+    const cx = (minX + maxX) * 0.5, cz = (minZ + maxZ) * 0.5;
+    let half = Math.max(maxX - minX, maxZ - minZ) * 0.5 * 1.14 + 24;
+    half = clamp(half, 90, PLAYABLE_EXT);
+    this.fit.cx = cx; this.fit.cz = cz; this.fit.half = half;
+
+    /* ---- sun for the hillshade: whatever the terrain is actually lit by, so
+       the map's relief agrees with the world. ---- */
+    let sx = -0.55, sz = -0.5;
+    const sun = terrain.sunDir || (terrain.uniforms && terrain.uniforms.uSunDir && terrain.uniforms.uSunDir.value);
+    if (sun && (sun.x || sun.z)) {
+      const m = Math.hypot(sun.x, sun.z) || 1;
+      sx = sun.x / m; sz = sun.z / m;
+    }
+
+    const base = document.createElement('canvas');
+    base.width = base.height = MAP_BASE;
+    const g = base.getContext('2d');
+
+    // --- heightfield, MAP_N² samples, hillshaded ---
+    const H = new Float32Array(MAP_N * MAP_N);
+    const cell = (half * 2) / MAP_N;
     let mn = 1e9, mx = -1e9;
-    const H = new Float32Array(N * N);
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-      const x = (i / N - 0.5) * MAP_EXT, z = (j / N - 0.5) * MAP_EXT;
-      const h = sample(x, z);
-      H[j * N + i] = h;
-      if (h < mn) mn = h; if (h > mx) mx = h;
+    for (let j = 0; j < MAP_N; j++) {
+      const wz = cz - half + (j + 0.5) * cell;
+      for (let i = 0; i < MAP_N; i++) {
+        const wx = cx - half + (i + 0.5) * cell;
+        const h = terrain.heightAt(wx, wz);
+        H[j * MAP_N + i] = h;
+        if (h < mn) mn = h; if (h > mx) mx = h;
+      }
     }
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-      const h = H[j * N + i];
-      const hl = H[j * N + Math.max(i - 1, 0)], hr = H[j * N + Math.min(i + 1, N - 1)];
-      const hu = H[Math.max(j - 1, 0) * N + i], hd = H[Math.min(j + 1, N - 1) * N + i];
-      // light from the north-west, the cartographer's convention
-      const nx = (hl - hr) / (2 * step), nz = (hu - hd) / (2 * step);
-      const shade = clamp(0.5 + (nx * 0.62 + nz * 0.62) * 2.4, 0, 1);
-      const t = (h - mn) / Math.max(mx - mn, 1e-4);
-      const base = 0.10 + t * 0.30;
-      let v = base * (0.45 + 0.85 * shade);
-      const x = (i / N - 0.5) * MAP_EXT, z = (j / N - 0.5) * MAP_EXT;
-      const r = Math.hypot(x, z);
-      if (r > PLAYABLE_R) v *= 0.42;                  // outside the fence reads dead
-      const o = (j * N + i) * 4;
-      img.data[o] = v * 232; img.data[o + 1] = v * 226; img.data[o + 2] = v * 210;
-      img.data[o + 3] = 255;
+    const span = Math.max(mx - mn, 1e-3);
+    const shade = document.createElement('canvas');
+    shade.width = shade.height = MAP_N;
+    const sg = shade.getContext('2d');
+    const img = sg.createImageData(MAP_N, MAP_N);
+    for (let j = 0; j < MAP_N; j++) {
+      for (let i = 0; i < MAP_N; i++) {
+        const h = H[j * MAP_N + i];
+        const hl = H[j * MAP_N + (i > 0 ? i - 1 : i)];
+        const hr = H[j * MAP_N + (i < MAP_N - 1 ? i + 1 : i)];
+        const hu = H[(j > 0 ? j - 1 : j) * MAP_N + i];
+        const hd = H[(j < MAP_N - 1 ? j + 1 : j) * MAP_N + i];
+        // surface normal in XZ, dotted with the sun's ground track
+        const nx = (hl - hr) / (2 * cell), nz = (hu - hd) / (2 * cell);
+        const lit = clamp(0.5 + (nx * sx + nz * sz) * 2.1, 0, 1);
+        const t = (h - mn) / span;
+        // near-black plate with a warm lift: the map must read as HUD, not map
+        const v = (0.055 + t * 0.10) * (0.55 + 0.95 * lit);
+        const o = (j * MAP_N + i) * 4;
+        img.data[o] = clamp(v * 300, 0, 255);
+        img.data[o + 1] = clamp(v * 276, 0, 255);
+        img.data[o + 2] = clamp(v * 252, 0, 255);
+        img.data[o + 3] = 255;
+      }
     }
-    g.putImageData(img, 0, 0);
-    // fence ring
-    g.strokeStyle = 'rgba(255,180,84,.30)'; g.lineWidth = 1;
-    g.beginPath(); g.arc(N / 2, N / 2, PLAYABLE_R / MAP_EXT * N, 0, 6.2832); g.stroke();
-    this.mapBase = c;
+    sg.putImageData(img, 0, 0);
+    g.imageSmoothingEnabled = true;
+    g.drawImage(shade, 0, 0, MAP_N, MAP_N, 0, 0, MAP_BASE, MAP_BASE);
+
+    // --- world → base-canvas pixels ---
+    const K = MAP_BASE / (half * 2);
+    const px = (x) => (x - cx + half) * K;
+    const pz = (z) => (z - cz + half) * K;
+
+    const ribbon = (sp, dashed) => {
+      const SL = sp.length || 1;
+      g.beginPath();
+      let first = true;
+      for (let s = 0; s <= SL; s += ROAD_STEP) {
+        sp.posAt(Math.min(s, SL - 0.001), p);
+        const X = px(p.x), Y = pz(p.z);
+        if (first) { g.moveTo(X, Y); first = false; } else g.lineTo(X, Y);
+      }
+      if (!dashed) g.closePath();
+      g.lineCap = 'round'; g.lineJoin = 'round';
+      g.setLineDash(dashed ? [7, 6] : []);
+      g.strokeStyle = 'rgba(0,0,0,.62)'; g.lineWidth = dashed ? 6 : 8; g.stroke();
+      g.strokeStyle = dashed ? 'rgba(79,216,232,.85)' : 'rgba(236,232,224,.88)';
+      g.lineWidth = dashed ? 3 : 4.4; g.stroke();
+      g.setLineDash([]);
+    };
+    ribbon(spline, false);
+    if (trackData.shortcutSpline) ribbon(trackData.shortcutSpline, true);
+
+    // --- checkpoint ticks, perpendicular to the road ---
+    const cps = trackData.checkpoints || [];
+    const d = { x: 0, z: 0 };
+    g.strokeStyle = 'rgba(255,122,26,.75)'; g.lineWidth = 2;
+    for (let i = 0; i < cps.length; i++) {
+      const c = cps[i];
+      if (c.alt) continue;                       // alternates sit on the dashed line
+      const sp = spline;
+      sp.dirAt(c.s, d);
+      const X = px(c.x), Y = pz(c.z);
+      const nx = -d.z * 5, nz = d.x * 5;
+      g.beginPath(); g.moveTo(X - nx, Y - nz); g.lineTo(X + nx, Y + nz); g.stroke();
+    }
+
+    // --- start / finish line ---
+    spline.posAt(0, p); spline.dirAt(0, d);
+    const X0 = px(p.x), Y0 = pz(p.z);
+    const nx0 = -d.z * 9, nz0 = d.x * 9;
+    g.strokeStyle = '#ffffff'; g.lineWidth = 4;
+    g.beginPath(); g.moveTo(X0 - nx0, Y0 - nz0); g.lineTo(X0 + nx0, Y0 + nz0); g.stroke();
+    g.strokeStyle = '#0d0d0f'; g.lineWidth = 4; g.setLineDash([4, 4]);
+    g.beginPath(); g.moveTo(X0 - nx0, Y0 - nz0); g.lineTo(X0 + nx0, Y0 + nz0); g.stroke();
+    g.setLineDash([]);
+
+    this.mapBase = base;
+    this._sized = false;
   }
 
-  /* ---------------- sample bay ---------------- */
-  buildBay() {
-    this.el.bay.innerHTML = '';
-    for (let i = 0; i < 6; i++) {
-      const d = document.createElement('div'); d.className = 'slot';
-      this.el.bay.appendChild(d);
-    }
-  }
-  refreshBay(game) {
-    const slots = this.el.bay.children;
-    for (let i = 0; i < slots.length; i++) {
-      const s = game.bay[i];
-      slots[i].className = 'slot' + (s ? ' full' : '') + (s && s.rare ? ' rare' : '');
-      slots[i].title = s ? s.name : 'EMPTY';
-    }
-    this.el.bayCount.textContent = `${game.bay.length}/6`;
-    this.bayDirty = false;
+  /* ============================================================
+     PUSH API
+     ============================================================ */
+  countdown(n) {
+    const el = this.el.count, num = this.el.countN;
+    if (!el || !num) return;
+    const go = (n === 'GO' || n === 0 || n === '0');
+    const txt = go ? 'GO!' : String(n);
+    num.textContent = txt;
+    el.classList.toggle('go', go);
+    el.classList.remove('hidden');
+    // restart the CSS pop without a second class
+    num.style.animation = 'none'; void num.offsetWidth; num.style.animation = '';
+    this._cdT = go ? 0.8 : 1.0;
+    this._lastCd = go ? 0 : (+n || 0);
   }
 
-  /* ---------------- log feed ---------------- */
+  banner(text, kind = 'good', ttl = 2.2) {
+    const host = this.el.banner;
+    if (!host || !text) return;
+    const d = document.createElement('div');
+    d.className = 'banner ' + (kind || 'good');
+    d.textContent = String(text);
+    host.appendChild(d);
+    this._banners.push({ el: d, t: ttl > 0 ? ttl : 2.2 });
+    // never more than two on screen: a third is noise you cannot read anyway
+    while (this._banners.length > 2) {
+      const old = this._banners.shift();
+      if (old.el.parentNode) old.el.remove();
+    }
+  }
+
   log(text, kind) {
+    const host = this.el.log;
+    if (!host || !text) return;
     const d = document.createElement('div');
     d.className = 'logline' + (kind ? ' ' + kind : '');
-    d.textContent = text;
-    this.el.logfeed.prepend(d);
-    this.logs.push({ el: d, t: performance.now() });
-    while (this.el.logfeed.children.length > 6) this.el.logfeed.lastChild.remove();
-    if (this.audio) this.audio.ui(kind === 'bad' ? 'bad' : kind === 'warn' ? 'warn' : 'tick');
+    d.textContent = String(text);
+    host.prepend(d);
+    this._logs.push({ el: d, t: 0 });
+    while (host.children.length > 3) host.lastChild.remove();
   }
 
-  setPrompt(html) {
-    if (!html) { this.el.prompt.classList.add('hidden'); this._prompt = null; return; }
-    if (html !== this._prompt) { this.el.prompt.innerHTML = html; this._prompt = html; }
-    this.el.prompt.classList.remove('hidden');
-  }
-
-  flashDiscovery(kicker, name, sub) {
-    const d = this.el.discovery;
-    d.querySelector('.d-kicker').textContent = kicker;
-    d.querySelector('.d-name').textContent = name;
-    d.querySelector('.d-sub').textContent = sub || '';
-    d.classList.remove('hidden');
-    d.style.animation = 'none'; void d.offsetWidth; d.style.animation = '';
-    this._discT = 3.4;
-  }
-
-  hit(k) {
-    this.el.vig.classList.add('hit');
-    clearTimeout(this._hitT);
-    this._hitT = setTimeout(() => this.el.vig.classList.remove('hit'), 120 + k * 260);
-  }
-
-  /* ---------------- mission panel ---------------- */
-  refreshMission(game) {
-    const m = game.mission;
-    if (!m) {
-      this.el.tag.textContent = 'FREE SURVEY';
-      this.el.name.textContent = 'ANAXAGORAS';
-      this.el.obj.innerHTML = `<div>${game.excavated} excavations · ${(game.rover.odo / 1000).toFixed(2)} km driven</div>`;
-      this.missionDirty = false; return;
-    }
-    this.el.tag.textContent = m.tag;
-    this.el.name.textContent = m.name;
-    this.el.obj.innerHTML = m.objectives.map(o => {
-      const done = game.objDone[o.id];
-      const cnt = o.count ? ` ${Math.min(game.counts[o.id] || 0, o.count)}/${o.count}` : '';
-      const hint = !done && o.hint ? `<small>${o.hint}</small>` : '';
-      return `<div class="${done ? 'done' : ''}"><i>${done ? '✓' : '▸'}</i><span>${o.text}${cnt}${hint}</span></div>`;
-    }).join('');
-    this.missionDirty = false;
-  }
-
-  showCard(m) {
-    $('cardKicker').textContent = m.tag;
-    $('cardTitle').textContent = m.name;
-    $('cardText').innerHTML = (m.brief || '').split('\n\n').map(p => `<span>${p}</span>`).join('<br><br>');
-    $('cardObj').innerHTML = m.objectives.map(o => `<div>${o.text}</div>`).join('');
-    $('cardOverlay').classList.remove('hidden');
-    this.cardOpen = true;
-  }
-  hideCard() { $('cardOverlay').classList.add('hidden'); this.cardOpen = false; }
-
-  /* ---------------- codex ---------------- */
-  buildCodexList() {
-    this.el.codexList.innerHTML = '';
-    for (const e of CODEX) {
-      const li = document.createElement('li');
-      li.dataset.id = e.id;
-      li.innerHTML = `<small>${e.tag}</small>${e.title}`;
-      li.addEventListener('click', () => { if (!li.classList.contains('locked')) this.readCodex(e.id); });
-      this.el.codexList.appendChild(li);
-    }
-  }
-  refreshCodex(game) {
-    for (const li of this.el.codexList.children) {
-      const open = game.unlocked.has(li.dataset.id);
-      li.classList.toggle('locked', !open);
-      if (!open) {
-        const e = CODEX.find(c => c.id === li.dataset.id);
-        li.innerHTML = `<small>${e.tag}</small>[ SEALED ]`;
-      } else {
-        const e = CODEX.find(c => c.id === li.dataset.id);
-        li.innerHTML = `<small>${e.tag}</small>${e.title}`;
-      }
-    }
-    this.codexDirty = false;
-  }
-  readCodex(id) {
-    const e = CODEX.find(c => c.id === id);
-    if (!e) return;
-    for (const li of this.el.codexList.children) li.classList.toggle('on', li.dataset.id === id);
-    this.el.codexRead.innerHTML =
-      `<h3>${e.title}</h3><div class="meta">${e.meta}</div>` +
-      e.body.map((p, i) => `<p class="${i === e.body.length - 1 && e.tag === 'STATION LOG' ? 'sig' : ''}">${p}</p>`).join('');
-    this.el.codexRead.scrollTop = 0;
-    if (this.audio) this.audio.ui('tick');
+  /** T5 calls this on touchdown after a long flight. Number of seconds, or a
+      pre-formatted string if the caller wants its own wording. */
+  airtime(sec) {
+    const host = this.el.air;
+    if (!host) return;
+    const txt = typeof sec === 'string' ? sec
+      : `AIR ${(isFinite(sec) ? +sec : 0).toFixed(1)}s`;
+    host.innerHTML = '';
+    const d = document.createElement('div');
+    d.className = 'airtag';
+    d.textContent = txt;
+    host.appendChild(d);
+    this._airT = 1.6;
   }
 
   /* ============================================================
-     instruments
+     PER-FRAME
      ============================================================ */
-  drawCompass(rover, game, sky) {
-    const g = this.cv.compass, W = 660, H = 42;
+  update(dt, data) {
+    if (!this.el.hud || this.el.hud.classList.contains('hidden')) return;
+    const d = dt > 0 && dt < 1 ? dt : 0.016;
+    this._t += d;
+    if (!this._sized) this._resize();
+
+    const p = data || 0;
+    const race = (p && p.race) || 0;
+    const veh = (p && p.vehicle) || 0;
+    const c = this._c;
+
+    /* ---- position ---- */
+    if (race) {
+      const pos = race.position | 0, tot = race.total | 0;
+      if (pos && pos !== c.pos) {
+        if (c.pos > 0 && this.el.pos) {
+          const better = pos < c.pos;
+          this.el.pos.classList.remove('up', 'down', 'bump');
+          void this.el.pos.offsetWidth;
+          this.el.pos.classList.add('bump', better ? 'up' : 'down');
+          this._posFlashT = 1.1;
+        }
+        c.pos = pos;
+        if (this.el.posN) this.el.posN.textContent = pos;
+      }
+      if (tot && tot !== c.total) { c.total = tot; if (this.el.posT) this.el.posT.textContent = '/' + tot; }
+
+      /* ---- lap ---- */
+      const lap = race.lap | 0, laps = (race.laps | 0) || this.laps;
+      if (lap !== c.lap) { c.lap = lap; if (this.el.lapN) this.el.lapN.textContent = lap > 0 ? lap : 1; }
+      if (laps !== c.lapT) { c.lapT = laps; if (this.el.lapT) this.el.lapT.textContent = '/' + laps; }
+
+      /* ---- clocks: rebuild the string only when the centisecond ticks ---- */
+      const rt = race.raceTime;
+      const ts = fmtTime(rt == null ? 0 : rt);
+      if (ts !== c.time) { c.time = ts; if (this.el.time) this.el.time.textContent = ts; }
+      const ls = fmtTime(race.lastLap);
+      if (ls !== c.last) { c.last = ls; if (this.el.last) this.el.last.textContent = ls; }
+      const bs = fmtTime(race.bestLap);
+      if (bs !== c.best) { c.best = bs; if (this.el.best) this.el.best.textContent = bs; }
+
+      /* ---- countdown ----
+         race.js pushes these with countdown(); this is the belt-and-braces
+         path for a flow that only fills the payload. `_lastCd` makes the two
+         idempotent, so no digit is ever shown twice. */
+      const cd = race.countdown;
+      if (cd != null) {
+        if (cd < 0) this._lastCd = null;
+        else if (cd !== this._lastCd) this.countdown(cd === 0 ? 'GO' : cd);
+      }
+
+      /* ---- warnings ---- */
+      const ww = !!race.wrongWay;
+      if (ww !== c.wrong) {
+        c.wrong = ww;
+        if (this.el.wrong) this.el.wrong.classList.toggle('hidden', !ww);
+        if (ww && this.audio && this.audio.wrongWay) { try { this.audio.wrongWay(); } catch { /* audio optional */ } }
+      }
+      // No direction vector exists in the payload, so this is a fixed pill, not
+      // an arrow. See the report: a {x,z} for the next checkpoint would let the
+      // HUD point at it.
+      const oc = !!race.offCourse;
+      if (oc !== c.off) { c.off = oc; if (this.el.off) this.el.off.classList.toggle('hidden', !oc); }
+
+      /* ---- reset hold ring: accepts 0..1 progress or raw seconds ---- */
+      let rh = +race.resetHold || 0;
+      if (rh > 1.001) rh = rh / this._holdTime;
+      rh = clamp(rh, 0, 1);
+      const q = Math.round(rh * 40);                 // quantised: 40 steps is past visible
+      if (q !== c.reset) {
+        c.reset = q;
+        if (this.el.reset) {
+          this.el.reset.classList.toggle('hidden', rh <= 0.001);
+          this.el.reset.style.setProperty('--p', rh.toFixed(3));
+        }
+      }
+    }
+
+    /* ---- speed cluster ---- */
+    if (veh) {
+      const kmh = Math.abs(veh.speedKmh || 0) | 0;
+      if (kmh !== c.kmh) { c.kmh = kmh; if (this.el.kmh) this.el.kmh.textContent = kmh; }
+      const gearRaw = veh.gear;
+      const gs = gearRaw == null ? 'N' : (typeof gearRaw === 'string' ? gearRaw
+        : gearRaw < 0 ? 'R' : gearRaw === 0 ? 'N' : String(gearRaw));
+      if (gs !== c.gear) { c.gear = gs; if (this.el.gear) this.el.gear.textContent = gs; }
+    }
+
+    /* ---- rival gap ---- */
+    const rv = p && p.rival;
+    const rs = rv && rv.name ? `${rv.name} ${fmtGap(rv.gap)}` : '';
+    if (rs !== c.rival) { c.rival = rs; if (this.el.rival) this.el.rival.textContent = rs; }
+
+    /* ---- canvases ---- */
+    this._rpmAcc += d;
+    if (this._rpmAcc >= 1 / RPM_HZ) { this._rpmAcc = 0; this._drawRpm(veh ? +veh.rpmNorm || 0 : 0); }
+    this._drawMap(p && p.dots);
+
+    /* ---- transient timers ---- */
+    this._tick(d);
+  }
+
+  _tick(d) {
+    if (this._cdT > 0) {
+      this._cdT -= d;
+      if (this._cdT <= 0 && this.el.count) this.el.count.classList.add('hidden');
+    }
+    if (this._airT > 0) {
+      this._airT -= d;
+      if (this._airT <= 0 && this.el.air) this.el.air.innerHTML = '';
+    }
+    if (this._posFlashT > 0) {
+      this._posFlashT -= d;
+      if (this._posFlashT <= 0 && this.el.pos) this.el.pos.classList.remove('up', 'down', 'bump');
+    }
+    for (let i = this._banners.length - 1; i >= 0; i--) {
+      const b = this._banners[i];
+      b.t -= d;
+      if (b.t <= 0.32 && !b.out) { b.out = true; b.el.classList.add('out'); }
+      if (b.t <= 0) { if (b.el.parentNode) b.el.remove(); this._banners.splice(i, 1); }
+    }
+    for (let i = this._logs.length - 1; i >= 0; i--) {
+      const l = this._logs[i];
+      l.t += d;
+      if (l.t > 6.5 && !l.faded) { l.faded = true; l.el.classList.add('fade'); }
+      if (l.t > 7.4) { if (l.el.parentNode) l.el.remove(); this._logs.splice(i, 1); }
+    }
+  }
+
+  /* ---------------- canvas sizing ----------------
+     CSS drives the size (everything is a multiple of --hud-k); the backing
+     store follows it, capped at 2× so a 3× phone does not pay for pixels
+     nobody can see. */
+  _resize() {
+    this._sized = true;
+    const dpr = Math.min(2, (window.devicePixelRatio || 1));
+    for (const k in this.cv) {
+      const cv = this.cv[k];
+      if (!cv) continue;
+      const r = cv.getBoundingClientRect();
+      if (!r.width || !r.height) { this._sized = false; continue; }   // hidden: retry next frame
+      const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+      if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    }
+    this._c.kmh = -1;   // force a repaint of everything that shares the cluster
+  }
+
+  /* ---------------- rev arc ----------------
+     A shallow arc across the top of the speed plate. Redline is the last
+     18 %: it is drawn dim always and hot once you are in it, so the shift
+     point is visible in peripheral vision. */
+  _drawRpm(rpmNorm) {
+    const g = this.ctx.rpm, cv = this.cv.rpm;
+    if (!g || !cv || !cv.width) return;
+    const W = cv.width, H = cv.height;
     g.clearRect(0, 0, W, H);
-    // Map convention: north is −Z (up on the minimap), east is +X.
-    const heading = (Math.atan2(rover.forward.x, -rover.forward.z) * 180 / Math.PI + 360) % 360;
-    const span = 140;                                  // degrees across the strip
-    const pxPerDeg = W / span;
-    g.font = '10px ui-monospace, monospace';
-    g.textAlign = 'center';
-    const marks = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
-    // Step over ABSOLUTE bearings, not offsets from the current heading —
-    // otherwise no tick ever lands exactly on a multiple of 45 and the
-    // cardinal labels never appear.
-    for (let a = 0; a < 360; a += 5) {
-      const rel = ((a - heading + 540) % 360) - 180;
-      if (Math.abs(rel) > span / 2) continue;
-      const x = W / 2 + rel * pxPerDeg;
-      const major = a % 45 === 0;
-      const mid = a % 15 === 0;
-      g.strokeStyle = major ? 'rgba(216,210,198,.75)' : mid ? 'rgba(216,210,198,.38)' : 'rgba(216,210,198,.16)';
-      g.lineWidth = 1;
-      g.beginPath(); g.moveTo(x, H - 1); g.lineTo(x, H - (major ? 13 : mid ? 8 : 4)); g.stroke();
-      if (major) {
-        const lab = marks[a];
-        g.fillStyle = lab.length <= 2 ? '#d8d2c6' : 'rgba(216,210,198,.60)';
-        g.fillText(lab, x, H - 18);
-      }
-    }
-    // objective bearing
-    const targets = [];
-    if (game.mission) {
-      if (!game.objDone.reach && game.missionIdx === 3) targets.push([STATION.x, STATION.z, '#ffb454', 'BEACON-9']);
-      if (!game.objDone.massif && game.missionIdx === 4) targets.push([MASSIF.x, MASSIF.z, '#ffb454', 'MASSIF']);
-    }
-    if (game.bay.length >= 6 || game.objDone.deep || game.power < 25) targets.push([HOME.x, HOME.z, '#6fe3f5', 'SLED']);
-    for (const a of game.anoms) if (a.found && !a.taken && game.distTo(a.x, a.z) < 190)
-      targets.push([a.x, a.z, a.special || a.type === 'tube' ? '#ffb454' : '#6fe3f5', null]);
-    for (const [tx, tz, col, lab] of targets) {
-      const b = (Math.atan2(tx - rover.pos.x, -(tz - rover.pos.z)) * 180 / Math.PI + 360) % 360;
-      const rel = ((b - heading + 540) % 360) - 180;
-      if (Math.abs(rel) > span / 2) continue;
-      const x = W / 2 + rel * pxPerDeg;
-      g.fillStyle = col;
-      g.beginPath(); g.moveTo(x, 4); g.lineTo(x - 4, -3); g.lineTo(x + 4, -3); g.closePath();
-      g.beginPath(); g.moveTo(x, 12); g.lineTo(x - 5, 3); g.lineTo(x + 5, 3); g.closePath(); g.fill();
-      if (lab) { g.font = '8px ui-monospace, monospace'; g.fillText(lab, x, 22); g.font = '10px ui-monospace, monospace'; }
-    }
-    // sun bearing
-    const sb = (Math.atan2(sky.sunDir.x, -sky.sunDir.z) * 180 / Math.PI + 360) % 360;
-    const srel = ((sb - heading + 540) % 360) - 180;
-    if (Math.abs(srel) <= span / 2) {
-      const x = W / 2 + srel * pxPerDeg;
-      g.fillStyle = 'rgba(255,240,200,.85)';
-      g.beginPath(); g.arc(x, 8, 3.4, 0, 6.2832); g.fill();
-    }
-    // centre index
-    g.strokeStyle = '#6fe3f5'; g.lineWidth = 1.4;
-    g.beginPath(); g.moveTo(W / 2, H); g.lineTo(W / 2, H - 17); g.stroke();
-    g.fillStyle = '#6fe3f5'; g.font = '10px ui-monospace, monospace';
-    g.fillText(String(Math.round(heading)).padStart(3, '0'), W / 2, 10);
-  }
-
-  drawMinimap(rover, game) {
-    const g = this.cv.minimap, S = 300;
-    g.clearRect(0, 0, S, S);
-    if (!this.mapBase) return;
-    const zoom = this.mapZoom || 1.9;
-    const span = MAP_EXT / zoom;
-    const px = rover.pos.x, pz = rover.pos.z;
-    const src = this.mapBase.width;
-    const sx = ((px / MAP_EXT + 0.5) * src) - (span / MAP_EXT * src) / 2;
-    const sy = ((pz / MAP_EXT + 0.5) * src) - (span / MAP_EXT * src) / 2;
-    const sw = span / MAP_EXT * src;
-    g.save();
-    g.beginPath(); g.rect(0, 0, S, S); g.clip();
-    g.imageSmoothingEnabled = true;
-    g.drawImage(this.mapBase, sx, sy, sw, sw, 0, 0, S, S);
-
-    const w2s = (x, z) => [(x - px) / span * S + S / 2, (z - pz) / span * S + S / 2];
-
-    // relay coverage
-    if (game.props.relays) for (const r of game.props.relays) {
-      const [ux, uy] = w2s(r.position.x, r.position.z);
-      g.strokeStyle = 'rgba(42,210,255,.22)'; g.lineWidth = 1;
-      g.beginPath(); g.arc(ux, uy, 95 / span * S, 0, 6.2832); g.stroke();
-      g.fillStyle = '#2ad2ff'; g.fillRect(ux - 2.5, uy - 2.5, 5, 5);
-    }
-    // POIs
-    const poi = (x, z, col, label, shape) => {
-      const [ux, uy] = w2s(x, z);
-      if (ux < -20 || uy < -20 || ux > S + 20 || uy > S + 20) return;
-      g.fillStyle = col;
-      if (shape === 'home') {
-        g.beginPath(); g.moveTo(ux, uy - 6); g.lineTo(ux + 5, uy + 4); g.lineTo(ux - 5, uy + 4); g.closePath(); g.fill();
-      } else if (shape === 'x') {
-        g.strokeStyle = col; g.lineWidth = 1.6;
-        g.beginPath(); g.moveTo(ux - 4, uy - 4); g.lineTo(ux + 4, uy + 4);
-        g.moveTo(ux + 4, uy - 4); g.lineTo(ux - 4, uy + 4); g.stroke();
-      } else {
-        g.beginPath(); g.arc(ux, uy, 3.2, 0, 6.2832); g.fill();
-      }
-      if (label) {
-        g.font = '8px ui-monospace, monospace'; g.textAlign = 'center';
-        g.fillStyle = col; g.fillText(label, ux, uy - 9);
-      }
-    };
-    poi(HOME.x, HOME.z, '#6fe3f5', 'SLED', 'home');
-    if (game.missionIdx >= 3 || game.stationVisited) poi(STATION.x, STATION.z, '#ffb454', 'BEACON-9', 'x');
-    if (game.missionIdx >= 4) poi(MASSIF.x, MASSIF.z, '#ffb454', 'MASSIF', 'x');
-    for (const a of game.anoms) if (a.found && !a.taken)
-      poi(a.x, a.z, a.special || a.type === 'tube' ? '#ffb454' : '#2ad2ff', null, 'dot');
-
-    // rover
-    const hd = Math.atan2(rover.forward.x, -rover.forward.z);
-    g.save(); g.translate(S / 2, S / 2); g.rotate(hd);
-    g.fillStyle = '#ffffff';
-    g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 6); g.lineTo(0, 3); g.lineTo(-5, 6); g.closePath(); g.fill();
-    g.restore();
-    // scan pulse
-    if (game.scan.active) {
-      const [ux, uy] = w2s(game.scan.x, game.scan.z);
-      g.strokeStyle = `rgba(42,210,255,${0.8 - game.scan.t / 2.1 * 0.7})`; g.lineWidth = 1.4;
-      g.beginPath(); g.arc(ux, uy, game.scan.r / span * S, 0, 6.2832); g.stroke();
-    }
-    g.restore();
-    g.strokeStyle = 'rgba(216,210,198,.16)'; g.lineWidth = 1;
-    g.beginPath(); g.moveTo(S / 2, 0); g.lineTo(S / 2, S); g.moveTo(0, S / 2); g.lineTo(S, S / 2); g.stroke();
-    this.el.mapScale.textContent = `${Math.round(span)} m`;
-  }
-
-  drawSpeedo(rover, game) {
-    const g = this.cv.speedo, S = 150, c = S / 2;
-    g.clearRect(0, 0, S, S);
-    const spd = Math.abs(rover.speed);
-    const max = 9;
-    const a0 = Math.PI * 0.75, a1 = Math.PI * 2.25;
-    const R = 58;
+    const cx = W * 0.5, cy = H * 2.30, R = H * 1.92;
+    const a0 = Math.PI * 1.155, a1 = Math.PI * 1.845;
+    const t = clamp(+rpmNorm || 0, 0, 1);
+    const lw = Math.max(3, H * 0.16);
 
     g.lineCap = 'butt';
-    g.strokeStyle = 'rgba(216,210,198,.09)'; g.lineWidth = 6;
-    g.beginPath(); g.arc(c, c, R, a0, a1); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.13)'; g.lineWidth = lw;
+    g.beginPath(); g.arc(cx, cy, R, a0, a1); g.stroke();
 
-    for (let i = 0; i <= 9; i++) {
-      const a = a0 + (i / 9) * (a1 - a0);
-      const maj = i % 3 === 0;
-      g.strokeStyle = maj ? 'rgba(216,210,198,.50)' : 'rgba(216,210,198,.20)';
-      g.lineWidth = 1;
-      g.beginPath();
-      g.moveTo(c + Math.cos(a) * (R - 9), c + Math.sin(a) * (R - 9));
-      g.lineTo(c + Math.cos(a) * (R - 4), c + Math.sin(a) * (R - 4));
-      g.stroke();
+    const aRed = a0 + 0.82 * (a1 - a0);
+    g.strokeStyle = t > 0.82 ? 'rgba(255,83,71,.95)' : 'rgba(255,83,71,.30)';
+    g.beginPath(); g.arc(cx, cy, R, aRed, a1); g.stroke();
+
+    if (t > 0.002) {
+      g.strokeStyle = t > 0.82 ? '#ff5347' : '#ff7a1a';
+      g.lineWidth = lw;
+      g.beginPath(); g.arc(cx, cy, R, a0, a0 + t * (a1 - a0)); g.stroke();
     }
-
-    const t = clamp(spd / max, 0, 1);
-    g.strokeStyle = '#6fe3f5'; g.lineWidth = 6;
-    g.beginPath(); g.arc(c, c, R, a0, a0 + t * (a1 - a0)); g.stroke();
-
-    const slip = rover.wheels.reduce((s, w) => s + w.slipLong, 0) / 6;
-    if (slip > 0.02) {
-      g.strokeStyle = `rgba(255,180,84,${clamp(slip, 0, 1) * 0.85})`; g.lineWidth = 2;
-      g.beginPath(); g.arc(c, c, R + 6, a0, a0 + clamp(slip, 0, 1) * (a1 - a0)); g.stroke();
+    // ticks
+    g.strokeStyle = 'rgba(255,255,255,.30)'; g.lineWidth = Math.max(1, H * 0.02);
+    for (let i = 0; i <= 8; i++) {
+      const a = a0 + (i / 8) * (a1 - a0);
+      const c1 = Math.cos(a), s1 = Math.sin(a);
+      const r0 = R + lw * 0.62, r1 = R + lw * (i % 4 === 0 ? 1.25 : 0.95);
+      g.beginPath(); g.moveTo(cx + c1 * r0, cy + s1 * r0); g.lineTo(cx + c1 * r1, cy + s1 * r1); g.stroke();
     }
-
-    g.textAlign = 'center';
-    g.fillStyle = '#d8d2c6'; g.font = '300 30px ui-monospace, monospace';
-    g.fillText((spd * 3.6).toFixed(1), c, c + 6);
-    g.fillStyle = 'rgba(216,210,198,.40)'; g.font = '8px ui-monospace, monospace';
-    g.fillText('KM/H', c, c + 19);
-    g.fillStyle = rover.speed < -0.15 ? '#ffb454' : 'rgba(216,210,198,.55)';
-    g.font = '8.5px ui-monospace, monospace';
-    g.fillText(rover.airborne ? 'AIRBORNE' : rover.speed < -0.15 ? 'REVERSE' : 'DRIVE', c, c + 36);
-    g.fillStyle = 'rgba(216,210,198,.32)'; g.font = '8px ui-monospace, monospace';
-    g.fillText(this._camLabel, c, 22);
-    g.fillText(`${(rover.odo / 1000).toFixed(2)} KM`, c, S - 10);
-    void game;
   }
 
-  drawWheels(rover) {
-    const g = this.cv.wheel, W = 236, H = 130;
-    g.clearRect(0, 0, W, H);
-    g.font = '8px ui-monospace, monospace'; g.textAlign = 'left';
-    const cols = [42, 118, 194], rows = [36, 96];
-    rover.wheels.forEach((w) => {
-      const cx = cols[w.axle], cy = rows[w.side < 0 ? 0 : 1];
-      const load = clamp(w.load / 700, 0, 1.4);
-      g.strokeStyle = w.contact ? 'rgba(216,210,198,.35)' : 'rgba(255,95,86,.55)';
-      g.lineWidth = 1;
-      g.strokeRect(cx - 26, cy - 15, 52, 30);
-      g.fillStyle = w.slipLong > 0.25 ? `rgba(255,180,84,${0.25 + w.slipLong * 0.6})`
-                                      : `rgba(111,227,245,${0.16 + load * 0.5})`;
-      g.fillRect(cx - 25, cy + 14 - Math.max(2, load * 28), 50, Math.max(2, load * 28));
-      // sinkage bar
-      g.fillStyle = 'rgba(180,120,60,.75)';
-      g.fillRect(cx - 25, cy + 14, 50 * clamp(w.sink / 0.11, 0, 1), 2);
-      g.fillStyle = 'rgba(216,210,198,.55)';
-      g.fillText(['F', 'M', 'A'][w.axle] + (w.side < 0 ? 'L' : 'R'), cx - 24, cy - 6);
-    });
-  }
+  /* ---------------- minimap ---------------- */
+  _drawMap(dots) {
+    const g = this.ctx.map, cv = this.cv.map;
+    if (!g || !cv || !cv.width) return;
+    const S = cv.width;
+    g.clearRect(0, 0, S, cv.height);
+    if (this.mapBase) g.drawImage(this.mapBase, 0, 0, MAP_BASE, MAP_BASE, 0, 0, S, cv.height);
+    if (!dots || !dots.length) return;
 
-  drawGPR(game) {
-    const g = this.cv.gpr, W = 290, H = 130;
-    g.clearRect(0, 0, W, H);
-    
-    // depth grid
-    g.strokeStyle = 'rgba(111,227,245,.10)'; g.lineWidth = 1;
-    for (let i = 1; i < 6; i++) {
-      const y = i / 6 * H;
-      g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
-    }
-    g.fillStyle = 'rgba(111,227,245,.35)'; g.font = '7.5px ui-monospace, monospace'; g.textAlign = 'left';
-    for (let i = 1; i < 6; i++) g.fillText(`${i * 2} m`, 3, i / 6 * H - 2);
+    const half = this.fit.half, cx = this.fit.cx, cz = this.fit.cz;
+    const K = S / (half * 2);
+    const rAI = Math.max(2.6, S * 0.022), rMe = Math.max(3.6, S * 0.030);
 
-    // A-scope trace: noise, plus a real reflector where an anomaly sits below
-    const N = this.gprTrace.length;
-    const near = game.anoms.filter(a => a.found && !a.taken && game.distTo(a.x, a.z) < 30);
-    const scanning = game.scan.active;
-    for (let i = 0; i < N; i++) {
-      const depth = i / N * 12;
-      let v = (Math.random() - 0.5) * (scanning ? 0.30 : 0.10);
-      for (const a of near) {
-        const d = game.distTo(a.x, a.z);
-        const amp = (1 - d / 30) * (a.special ? 1.5 : a.type === 'tube' ? 1.1 : 0.7);
-        v += Math.exp(-Math.pow((depth - a.depth) / 0.34, 2)) * amp * Math.sin(this._t * 22 + i * 0.4);
+    // AI first, player last: the dot you are looking for is never underneath one
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i < dots.length; i++) {
+        const o = dots[i];
+        if (!o) continue;
+        const me = !!o.isPlayer;
+        if (me !== (pass === 1)) continue;
+        const X = (o.x - cx + half) * K, Y = (o.z - cz + half) * K;
+        if (X < -8 || Y < -8 || X > S + 8 || Y > cv.height + 8) continue;
+        const col = toCss(o.color, me ? '#ffffff' : '#9aa0a8');
+        if (me) {
+          g.fillStyle = '#ffffff';
+          g.beginPath(); g.arc(X, Y, rMe + 2, 0, 6.2832); g.fill();
+          g.fillStyle = '#ff7a1a';
+          g.beginPath(); g.arc(X, Y, rMe - 0.4, 0, 6.2832); g.fill();
+        } else {
+          g.fillStyle = 'rgba(0,0,0,.6)';
+          g.beginPath(); g.arc(X, Y, rAI + 1.4, 0, 6.2832); g.fill();
+          g.fillStyle = col;
+          g.beginPath(); g.arc(X, Y, rAI, 0, 6.2832); g.fill();
+        }
       }
-      this.gprTrace[i] = this.gprTrace[i] * 0.55 + v * 0.45;
     }
-    g.strokeStyle = near.length ? '#6fe3f5' : 'rgba(111,227,245,.42)';
-    g.lineWidth = 1.2;
-    g.beginPath();
-    for (let i = 0; i < N; i++) {
-      const y = i / N * H;
-      const x = W / 2 + this.gprTrace[i] * W * 0.34;
-      i ? g.lineTo(x, y) : g.moveTo(x, y);
-    }
-    g.stroke();
-    this.el.gprState.textContent = scanning ? 'SWEEPING' : game.scan.cool > 0 ? 'RECHARGING'
-      : near.length ? `${near.length} RETURN` : 'IDLE';
   }
-
-  /* ============================================================
-     per-frame
-     ============================================================ */
-  update(dt, game, rover, sky, rig) {
-    this._t += dt;
-    this._camLabel = rig.modeName;
-
-    if (this.missionDirty) this.refreshMission(game);
-    if (this.bayDirty) this.refreshBay(game);
-    if (this.codexDirty) this.refreshCodex(game);
-
-    // gauges
-    const setG = (el, frac, label, warn, crit) => {
-      el.querySelector('i').style.transform = `scaleX(${clamp(frac, 0, 1)})`;
-      el.querySelector('b').textContent = label;
-      el.classList.toggle('warn', frac < warn && frac >= crit);
-      el.classList.toggle('crit', frac < crit);
-    };
-    setG(this.el.batt, game.power / 100, `${Math.round(game.power)}%`, 0.35, 0.15);
-    setG(this.el.hull, game.hull / 100, `${Math.round(game.hull)}%`, 0.45, 0.20);
-    const ht = clamp((game.heat + 60) / 120, 0, 1);
-    this.el.heat.querySelector('i').style.transform = `scaleX(${ht})`;
-    this.el.heat.querySelector('b').textContent = `${game.heat > 0 ? '+' : ''}${Math.round(game.heat)}°`;
-    this.el.heat.classList.toggle('warn', game.heat < -35 || game.heat > 55);
-    this.el.heat.classList.toggle('crit', game.heat < -55 || game.heat > 75);
-
-    // system chips
-    const chips = [
-      [`UPLINK ${DRIVE.commsDelay > 0 ? DRIVE.commsDelay.toFixed(1) + 's' : 'LOCAL'}`, DRIVE.commsDelay > 0],
-      ['ARM', rover.armOut],
-      ['ARRAY', rover.panelDeploy > 0.6],
-      ['LAMPS', rover.lampPower > 0.1],
-      ['GPR', game.scan.active],
-      ['DRILL', game.drill.active],
-      ['TC', game.tc !== false],
-      [`RELAY ${game.relaysPlaced}/3`, game.relaysPlaced > 0]
-    ];
-    const sig = chips.map(c => c[0] + c[1]).join('|');
-    if (sig !== this._chipSig) {
-      this._chipSig = sig;
-      this.el.chips.innerHTML = chips.map(([t, on]) => `<span class="chip${on ? ' on' : ''}">${t}</span>`).join('');
-    }
-
-    // clocks
-    const s = Math.floor(game.met);
-    this.el.met.textContent = `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-    const alt = Math.asin(clamp(sky.sunDir.y, -1, 1)) * 180 / Math.PI;
-    const az = (Math.atan2(sky.sunDir.x, sky.sunDir.z) * 180 / Math.PI + 360) % 360;
-    this.el.sunPhase.textContent = `${alt.toFixed(1)}° / ${Math.round(az)}°`;
-    const dh = game.distTo(HOME.x, HOME.z);
-    this.el.rangeHome.textContent = dh > 999 ? `${(dh / 1000).toFixed(2)} km` : `${Math.round(dh)} m`;
-
-    // instruments
-    this.drawCompass(rover, game, sky);
-    this.drawMinimap(rover, game);
-    this.drawSpeedo(rover, game);
-    this.drawWheels(rover);
-    this.drawGPR(game);
-
-    // discovery banner
-    if (this._discT > 0) {
-      this._discT -= dt;
-      if (this._discT <= 0) this.el.discovery.classList.add('hidden');
-    }
-    // log fade
-    const now = performance.now();
-    for (const l of this.logs) {
-      if (!l.faded && now - l.t > 9000) { l.faded = true; l.el.classList.add('fade'); }
-      if (l.faded && now - l.t > 10200 && l.el.parentNode) l.el.remove();
-    }
-    this.logs = this.logs.filter(l => l.el.parentNode);
-
-    // interaction ring
-    if (this.interactProgress > 0.001) {
-      this.el.prompt.style.background =
-        `linear-gradient(90deg, rgba(111,227,245,.30) ${this.interactProgress * 100}%, rgba(4,5,10,.7) ${this.interactProgress * 100}%)`;
-    } else this.el.prompt.style.background = '';
-    void sstep; void MISSIONS;
-  }
-
-  show() { this.el.hud.classList.remove('hidden'); }
-  hideHUD() { this.el.hud.classList.add('hidden'); }
 }

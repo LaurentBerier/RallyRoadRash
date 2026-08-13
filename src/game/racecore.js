@@ -270,11 +270,22 @@ export class RaceTracker {
 
     const cx = bx - r.fromX, cz = bz - r.fromZ;
     const segD = Math.sqrt(cx * cx + cz * cz);
+    const fx = x - r.fromX, fz = z - r.fromZ;
+    const fromD = Math.sqrt(fx * fx + fz * fz);
 
     let segLen = next.s - r.fromS;
     if (segLen <= 0) segLen += this.lapLength;      // the segment through the line
 
-    const ratio = segD > 1e-3 ? (segD - bestD) / segD : 0;
+    /* Two chord estimates of the same fraction, averaged.
+         "closed"  = (segD − distToNext) / segD   — under-reads through a bend
+         "covered" = distFromLast / segD          — over-reads by the same shape
+       On a circular arc the two errors are equal and opposite, so the mean is
+       exact at the midpoint and roughly halves the error everywhere else. That
+       matters on PROVING GROUNDS, whose gates are 187 m apart around a 66 m
+       corner: the single-sided form is 13 m out there, the mean is 3.
+       Both terms shrink when a racer turns round, so the wrong-way signal is
+       if anything sharper. */
+    const ratio = segD > 1e-3 ? 0.5 * ((segD - bestD) + fromD) / segD : 0;
 
     // Reported estimate: clamped and monotonic. Nothing downstream may ever
     // see a racer lose ground it has already covered.

@@ -213,6 +213,61 @@ rig.addShake(v); rig.fovScale; rig.sens; rig.autoCentre  // settings-driven
 rig.snapBehind(vehicle)   // hard reset behind car (race start / respawn)
 ```
 
+### Race flow — AS BUILT (T5 done, 104/104 racecore checks incl. mutation testing)
+- Race.dispose() owns the whole world (terrain/sky/props/dust/vehicles) built by main.js
+  during LOADING. Racecore: checkpoint groups fold by idx ("slots"); nextSlot starts at 1
+  (slot 0 = start line ⇒ satisfying it always completes a lap); raceS ratchets (monotonic);
+  wrongway on separate unratcheted estimate (arm 1.2 s, >4 m/s); standings finished-first.
+- INTEGRATOR FIXES OWED: (a) vehicle.js should expose `collideR` (props reads it; vehicle
+  publishes collRadius — race.js bridges for now); (b) TUNE.reset should gain
+  `offCourseTime: 2.5` (race.js local today); (c) difficultyFor() curve in main.js is a
+  placeholder pending T6 skill mapping.
+- Known gaps (documented, acceptable v1): no player DNF/stage timeout; respawn uses main
+  spline s even for shortcut alternates (generous, safe).
+- race.js emits `race.nextCp {x,z,idx,dist}` in HUD payload (hud may point the off-course
+  pill later). newRecord carries new TIMES not booleans. audio.wrongWay is fired by hud.js
+  on payload edge, NOT race.js (no double stinger).
+
+### UI/HUD/Input — AS BUILT (T7 done)
+- ADDITION `ui.setAudio(audio)` — main.js MUST call after audio.init(); it also wires
+  audio.resume() on visibility/focus/pointerdown (iOS obligation discharged there).
+- NAV DEVIATION: `{type:'back'}` never emitted; navigation emits destination screens
+  (`{type:'tracks'|'garage'|'main'|'settings'|'pause', to, back?:true}`) — main.js default
+  case should `showScreen(a.to || a.type)`.
+- `input.lock()/unlock()` are no-op stubs (pointer lock removed) — safe to call, delete later.
+- **`poll().brake` is ALWAYS 0 by design**: brake/reverse is one channel = negative
+  throttle for every input method (vehicle.step turns opposing throttle into braking >1.2
+  m/s). AI may still use ctl.brake directly. Race/HUD logic must not wait for raw.brake.
+- Esc: while `body.ui-open` (set by UI), the UI consumes Escape — main.js must NOT also act
+  on `input.hit('Escape')` in that state or pause double-toggles. `body.ui-open` also routes
+  pad d-pad to menu nav — never clear it outside ui.js.
+- `input.setShowTouch(mode)` (alias setTouchMode). Results rows: include `color` per
+  placement for real livery colours (else name-hash hue fallback). `ui.show(screen, {})`
+  with empty object keeps cached data. Results→GARAGE emits `{quit}` then `{garage}`.
+- hud.airtime(numberOrString); off-course pill is directionless unless race payload gains
+  `nextCp {x,z}` (wave-3 nicety).
+- Browser QA firstlook list (wave 3): landscape-phone bottom row clearance
+  (--touch-clear 186px vs 375px-tall screens), rev-arc geometry, car silhouettes, gamepad
+  menu nav & START edge, multitouch reconcile, backdrop-filter cost on Android, portrait
+  rotate-toast once-only, minimap contrast on volcano/forest.
+
+### Camera/Feel — AS BUILT (T8 done, 88/88 gates)
+- Frame order: `feel.update(dt, playerVehicle)` MUST precede `rig.update(dt, v, look)`.
+- `look.zoom` is a per-frame delta. `look.looking` honoured if set.
+- `rig.setMode(camMode, v)` + `rig.snapBehind(v)` at grid formation, after EVERY respawn,
+  and on countdown→RUNNING; `feel.reset()` beside every snapBehind AND on pause/screen
+  change (Feel holds uniforms otherwise). ORBIT mode for results podium.
+- `feel.landing(v.hardHit)` once per touchdown EDGE (after step + pairs — same edge as
+  audio.land/hud.airtime); `feel.jump()` on lip departure; `feel.collision(impact, dirOrNull)`
+  from pair/prop hits; `feel.nearMiss()` optional (1.2 m at >8 m/s closing).
+- Feel exclusively owns final-pass uVignette/uExposure/uFlash while updating; race.js must
+  never write them, and must route all shake through feel (never rig.addShake directly).
+- Settings: rig.fovScale = fov/58; rig.sens; rig.invertY; rig.autoCentre.
+- Wave-3 tuning watchlist: rig.yawHz (1.91 — drift framing vs snap), CH.pivotYAir (4.5 —
+  jump arc read, verify on volcano 3.6 m lip), feel shakeLo/shakeHi (18/40 — rumble floor;
+  watch redline saturation).
+- vehicle.steerNorm read with typeof guard (T2 may expose; fallback _accelLat/9).
+
 ### AI — src/game/ai.js (T6) — NO three imports (plain math)
 ```js
 export class AIDriver {

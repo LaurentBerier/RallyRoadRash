@@ -45,6 +45,11 @@
   --z-hud:20; --z-touch:26; --z-rotate:34; --z-screen:40; --z-boot:60;
 
   --hud-k:1;
+  /* Height the touch furniture claims off the bottom of the screen. The HUD's
+     bottom row is pushed above it whenever body.touch-controls is set (the
+     class is applied by input.js, which is the only code that knows whether
+     the pedals are actually on screen — a (pointer:coarse) query does not). */
+  --touch-clear:214px;
 }
 
 *{box-sizing:border-box;margin:0;padding:0}
@@ -417,6 +422,11 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:2px solid #1a0
   color:var(--fg);
   transition:opacity .2s ease;
 }
+/* Thumbs own the bottom of the screen the moment the pedals appear, so the
+   whole bottom row of the HUD moves above them. */
+body.touch-controls .hud{
+  padding-bottom:calc(var(--touch-clear) + max(8px,env(safe-area-inset-bottom)));
+}
 .hud > div{min-width:0}
 .z-pos{grid-area:pos;justify-self:start;align-self:start}
 .z-lap{grid-area:lap;justify-self:center;align-self:start}
@@ -741,6 +751,10 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:2px solid #1a0
   .resetring{top:52%;width:calc(78 * var(--s));height:calc(78 * var(--s))}
   #touch .pad{height:calc(104px * var(--tk));min-height:88px}
   #touch .rbtn{width:64px;height:64px;font-size:9px}
+  /* 190 px of a 375 px-tall screen is already most of it; the log is the one
+     thing here nobody reads mid-corner, so it goes rather than the speed. */
+  :root{--touch-clear:186px}
+  body.touch-controls .z-log{display:none}
   .scr-head{padding-top:10px;padding-bottom:8px}
   .scr-head h2{font-size:19px}
   .scr-sub{display:none}
@@ -770,14 +784,19 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:2px solid #1a0
   .map canvas{width:calc(104 * var(--s));height:calc(104 * var(--s))}
   .countdown{top:32%}
   .z-banner{align-self:start}
+  /* Portrait stacks the furniture instead of splitting it left/right:
+     pedals 12..100, buttons 108..176, steering pad 184..284 from the bottom.
+     Nothing overlaps and every row is still a thumb's reach from the edge. */
+  :root{--touch-clear:296px}
   #touch .pad{width:calc(100vw - max(24px,env(safe-area-inset-left)) - max(24px,env(safe-area-inset-right)));
-    height:100px;bottom:calc(max(12px,env(safe-area-inset-bottom)) + 154px)}
-  #touch .pedal{width:calc(46vw - 18px)}
-  #touch .pedal.gas{height:88px}
-  #touch .pedal.brk{left:max(12px,env(safe-area-inset-left));right:auto;height:88px;
+    height:100px;bottom:calc(max(12px,env(safe-area-inset-bottom)) + 184px)}
+  #touch .pedal{width:calc(46vw - 16px)}
+  #touch .pedal.gas{height:88px;min-height:88px}
+  #touch .pedal.brk{left:max(12px,env(safe-area-inset-left));right:auto;height:88px;min-height:88px;
     bottom:max(12px,env(safe-area-inset-bottom))}
   #touch .rcol{right:auto;left:50%;transform:translateX(-50%);
-    bottom:calc(max(12px,env(safe-area-inset-bottom)) + 100px);grid-template-columns:repeat(4,auto);gap:8px}
+    bottom:calc(max(12px,env(safe-area-inset-bottom)) + 108px);grid-template-columns:repeat(4,auto);gap:7px}
+  #touch .rbtn{width:66px;height:66px;font-size:9px}
 }
 @media (orientation:portrait) and (min-width:621px){
   .hud{--u:.94px}
@@ -786,6 +805,7 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:2px solid #1a0
 /* ---- very short (landscape phone, browser chrome visible) ---- */
 @media (max-height:400px){
   .hud{--u:.78px}
+  :root{--touch-clear:158px}
   .scr-body{padding-top:8px;padding-bottom:8px}
   .btn{min-height:44px}
   #touch .pad{height:82px;min-height:82px}

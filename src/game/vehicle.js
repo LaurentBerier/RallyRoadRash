@@ -100,6 +100,9 @@ export class Vehicle {
     this.sphD = cs.spread * Math.max(0.05, L * 0.5 - this.sphR);
     this.sphY = -spec.comHeight + H * 0.5;
     this.collRadius = this.sphD + this.sphR;
+    // props.resolve() reads `collideR` — same number, published under the name
+    // the props contract uses so a Vehicle collides correctly outside race.js.
+    this.collideR = this.collRadius;
 
     /* ---- wheels ---- */
     this.wheels = [];

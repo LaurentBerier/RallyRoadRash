@@ -264,6 +264,7 @@ export const TUNE = {
     stuckTime: 4.0,         // s below stuckSpeed before auto-reset.
     stuckSpeed: 1.2,        // m/s — the "not actually going anywhere" threshold.
     offCourseDist: 25,      // m from the centreline before you count as lost.
+    offCourseTime: 2.5,     // s you must STAY lost — a crest overshoot is not a DNF.
     ghostTime: 1.5,         // s of collision-immune, semi-transparent respawn.
     holdTime: 0.8,          // s the player must hold R for a manual reset.
   },
