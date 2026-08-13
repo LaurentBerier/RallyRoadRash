@@ -753,6 +753,10 @@ function onJumpFace(jumps, s, ad, L) {
    not where the ground is.
    ============================================================ */
 export const TERRAIN_GLSL = /* glsl */`
+// ESSL 3.00 defaults samplers to lowp; the R32F height fields hold values to
+// ~250 m, and a strict GLES driver's lowp is ±2. Desktop ANGLE ignores this —
+// a mobile driver may not.
+precision highp sampler2D;
 uniform sampler2D uMacro, uFar, uDetail, uDent, uRoad, uBump;
 uniform vec4 uConst;      // MACRO_EXT, FAR_EXT, DET_TILE, DENT_EXT
 uniform vec4 uConst2;     // DET_AMP, DET_AMP2, DET_SCALE2, TRAIL_EXT
@@ -922,7 +926,7 @@ export class Terrain {
       },
       vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy*2.0,0.0,1.0); }`,
       fragmentShader: /* glsl */`
-        precision highp float; varying vec2 vUv;
+        precision highp float; precision highp sampler2D; varying vec2 vUv;
         uniform sampler2D uMacro, uFar; uniform vec3 uSun; uniform float uExt, uSteps;
         float hM(vec2 p){
           float m = texture2D(uMacro, clamp(p/${MACRO_EXT.toFixed(1)}+0.5, 0.0005, 0.9995)).r;
@@ -1159,8 +1163,9 @@ export class Terrain {
           rough = 0.72; gritK = 0.85;
         } else if (sid == 5) {
           // GRASS: green broken with brown, at two scales, or it reads as felt
-          float patch = fb(vW.xz*0.28);
-          albedo = mix(albedo, vec3(0.34,0.30,0.16), smoothstep(0.42,0.78,patch));
+          // 'patch' is reserved in ESSL 3.00 (tessellation) — hence the terse name.
+          float pch = fb(vW.xz*0.28);
+          albedo = mix(albedo, vec3(0.34,0.30,0.16), smoothstep(0.42,0.78,pch));
           albedo *= 0.82 + 0.36*n2(vW.xz*2.7);
           gritK = 0.70;
         } else if (sid == 6) {
@@ -1231,7 +1236,7 @@ export class Terrain {
             s += step(d, unpackRGBAToDepth(texture2D(uRShadow, sp.xy + vec2(-o, o))));
             s += step(d, unpackRGBAToDepth(texture2D(uRShadow, sp.xy + vec2( o, o))));
             s += step(d, unpackRGBAToDepth(texture2D(uRShadow, sp.xy)));
-            float edge = smoothstep(0.5, 0.42, max(abs(sp.x-0.5), abs(sp.y-0.5)));
+            float edge = 1.0 - smoothstep(0.42, 0.5, max(abs(sp.x-0.5), abs(sp.y-0.5)));
             sm *= mix(1.0, s * 0.2, edge);
           }
         }

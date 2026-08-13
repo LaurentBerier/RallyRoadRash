@@ -3,14 +3,16 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>REGOLITH — The Silence at Anaxagoras</title>
-<meta name="description" content="A lunar rover survey sim. 1/6 g, deformable regolith, ground-penetrating radar, and something under the basin floor." />
-<meta name="theme-color" content="#05060a" />
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%23cfc6b8'/><circle cx='11' cy='12' r='3.4' fill='%23a79c8c'/><circle cx='20' cy='19' r='4.6' fill='%23a79c8c'/><circle cx='22' cy='9' r='2' fill='%23a79c8c'/></svg>" />
-<!-- ?v= is a cache buster: GitHub Pages serves assets with max-age=600, so a
+<title>RALLYE — Off-Road Championship</title>
+<meta name="description" content="Arcade off-road rally: six cars, four procedural stages, big air. No downloads, no plugins — it all builds itself in your browser." />
+<meta name="theme-color" content="#0a0a0c" />
+<!-- Procedural favicon: tyre + chequer. Data URI so the game still ships with
+     zero asset files (see docs/ARCHITECTURE.md hard rule 1). -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230a0a0c'/><g fill='%23f2efe9'><rect x='18' y='4' width='5' height='5'/><rect x='23' y='9' width='5' height='5'/></g><g fill='%23ff7a1a'><rect x='23' y='4' width='5' height='5' opacity='.55'/><rect x='18' y='9' width='5' height='5' opacity='.55'/></g><circle cx='13' cy='20' r='8.4' fill='none' stroke='%23ff7a1a' stroke-width='4.2'/><circle cx='13' cy='20' r='2.4' fill='%23f2efe9'/></svg>" />
+<!-- ?v= is a cache buster: static hosts serve assets with max-age=600, so a
      returning player keeps the old layout for ten minutes after a deploy.
      Bump this whenever styles.css changes in a way players must see. -->
-<link rel="stylesheet" href="src/ui/styles.css?v=4" />
+<link rel="stylesheet" href="src/ui/styles.css?v=5" />
 <script type="importmap">
 {
   "imports": {
@@ -24,164 +26,209 @@
 
 <canvas id="stage" aria-label="Game viewport"></canvas>
 
-<!-- ============ BOOT / LOADING ============ -->
+<!-- ============ BOOT / LOADING ============
+     Also reused as the per-race bake progress screen: UI.boot(p, msg). -->
 <div id="boot" class="overlay boot">
   <div class="boot-inner">
-    <div class="crest" aria-hidden="true">
-      <svg viewBox="0 0 120 120" width="88" height="88">
-        <circle cx="60" cy="60" r="52" fill="none" stroke="currentColor" stroke-width="1" opacity=".35"/>
-        <circle cx="60" cy="60" r="40" fill="none" stroke="currentColor" stroke-width="1" opacity=".55"/>
-        <path d="M60 8 v14 M60 98 v14 M8 60 h14 M98 60 h14" stroke="currentColor" stroke-width="1" opacity=".6"/>
-        <circle cx="60" cy="60" r="26" fill="none" stroke="currentColor" stroke-width="1.5"/>
-        <circle cx="49" cy="52" r="6" fill="currentColor" opacity=".28"/>
-        <circle cx="69" cy="68" r="8.5" fill="currentColor" opacity=".28"/>
-        <circle cx="72" cy="47" r="3.5" fill="currentColor" opacity=".28"/>
-      </svg>
+    <div class="wordmark" aria-label="RALLYE">
+      <span class="wm-r">R</span><span>ALLYE</span>
     </div>
-    <h1 class="title">REGOLITH</h1>
-    <p class="subtitle">The Silence at Anaxagoras</p>
-    <div class="loadbar"><i id="loadfill"></i></div>
-    <p class="loadtext" id="loadtext">initialising telemetry link…</p>
-    <p class="legal">SELENE DIRECTORATE · FAR-SIDE SURVEY DIVISION · MU-7 “CASSIOPEIA”</p>
+    <p class="strap">OFF-ROAD CHAMPIONSHIP</p>
+    <div class="loadbar"><i id="bootBar"></i></div>
+    <p class="loadmsg" id="bootMsg">warming up the engine…</p>
+    <p class="boot-legal">PROCEDURAL STAGES · SIX-CAR GRID · NO DOWNLOADS</p>
   </div>
 </div>
 
-<!-- ============ MAIN MENU ============ -->
-<div id="menu" class="overlay menu hidden">
-  <div class="menu-grid">
-    <div class="menu-left">
-      <h1 class="title big">REGOLITH</h1>
-      <p class="subtitle">The Silence at Anaxagoras</p>
-      <div class="brief" id="menuBrief"></div>
-      <div class="menu-actions">
-        <button class="btn primary" id="btnPlay">BEGIN DESCENT</button>
-        <button class="btn" id="btnContinue" hidden>RESUME SURVEY</button>
-        <button class="btn ghost" id="btnFreeRoam">FREE SURVEY</button>
-        <button class="btn ghost" id="btnControls">CONTROLS</button>
-        <button class="btn ghost" id="btnSettings">SYSTEMS</button>
+<!-- ============ SCREENS ============
+     Static chrome lives here; every data-driven list is filled by src/ui/ui.js.
+     One container so the focus manager and the backdrop have a single root. -->
+<div id="screens" class="screens hidden" aria-live="polite">
+
+  <!-- ---- main menu ---- -->
+  <section id="scr-main" class="screen main hidden">
+    <div class="main-wrap">
+      <div class="main-brand">
+        <div class="wordmark big" aria-label="RALLYE">
+          <span class="wm-r">R</span><span>ALLYE</span>
+        </div>
+        <p class="strap">OFF-ROAD CHAMPIONSHIP</p>
+        <div class="badge-slot" id="mainBadge"></div>
       </div>
-      <p class="hint">WebGL2 · GPU accelerated · headphones recommended</p>
+      <nav class="main-actions">
+        <button class="btn primary" data-focus data-act="main-race">RACE</button>
+        <button class="btn" data-focus data-act="main-settings">SETTINGS</button>
+      </nav>
+      <p class="hintline" id="mainHints"></p>
     </div>
-    <div class="menu-right">
-      <div class="dossier">
-        <div class="dossier-row"><span>OPERATION</span><b>ANAXAGORAS</b></div>
-        <div class="dossier-row"><span>BODY</span><b>LUNA · FAR SIDE</b></div>
-        <div class="dossier-row"><span>GRAVITY</span><b>1.62 m/s²</b></div>
-        <div class="dossier-row"><span>ATMOSPHERE</span><b>NONE</b></div>
-        <div class="dossier-row"><span>SURFACE TEMP</span><b>−173 … +117 °C</b></div>
-        <div class="dossier-row"><span>LAST CONTACT</span><b>D+214</b></div>
-        <div class="dossier-row alert"><span>STATUS</span><b>SILENT</b></div>
+  </section>
+
+  <!-- ---- track select ---- -->
+  <section id="scr-tracks" class="screen sheet hidden">
+    <header class="scr-head">
+      <div><h2>STAGE SELECT</h2><p class="scr-sub" id="tracksSub">Pick where you want to lose the back end.</p></div>
+      <div class="scr-head-right" id="tracksChampion"></div>
+    </header>
+    <div class="scr-body"><div class="card-grid" id="trackGrid"></div></div>
+    <footer class="scr-foot">
+      <button class="btn ghost" data-focus data-act="tracks-back">BACK</button>
+      <span class="foot-spacer"></span>
+      <span class="foot-note" id="tracksNote"></span>
+      <button class="btn primary" data-focus data-act="tracks-next" id="tracksNext">NEXT</button>
+    </footer>
+  </section>
+
+  <!-- ---- garage ---- -->
+  <section id="scr-garage" class="screen sheet hidden">
+    <header class="scr-head">
+      <div><h2>GARAGE</h2><p class="scr-sub" id="garageSub">Three cars. No wrong answers, only different mistakes.</p></div>
+      <div class="scr-head-right" id="garageTrack"></div>
+    </header>
+    <div class="scr-body"><div class="card-grid cars" id="garageGrid"></div></div>
+    <footer class="scr-foot">
+      <button class="btn ghost" data-focus data-act="garage-back">BACK</button>
+      <span class="foot-spacer"></span>
+      <span class="foot-note" id="garageNote"></span>
+      <button class="btn primary" data-focus data-act="garage-start" id="garageStart">START RACE</button>
+    </footer>
+  </section>
+
+  <!-- ---- settings ---- -->
+  <section id="scr-settings" class="screen sheet hidden">
+    <header class="scr-head">
+      <div><h2>SETTINGS</h2><p class="scr-sub">Everything applies immediately.</p></div>
+    </header>
+    <div class="scr-body">
+      <div class="settings-cols">
+        <div class="set-list" id="settingsBody"></div>
+        <aside class="controls-ref" id="controlsBody"></aside>
+      </div>
+    </div>
+    <footer class="scr-foot">
+      <button class="btn ghost" data-focus data-act="settings-back">BACK</button>
+    </footer>
+  </section>
+
+  <!-- ---- pause ---- -->
+  <section id="scr-pause" class="screen pause hidden">
+    <div class="pause-card">
+      <h2>PAUSED</h2>
+      <p class="pause-ctx" id="pauseCtx"></p>
+      <nav class="pause-actions">
+        <button class="btn primary" data-focus data-act="pause-resume">RESUME</button>
+        <button class="btn" data-focus data-act="pause-restart">RESTART STAGE</button>
+        <button class="btn" data-focus data-act="pause-settings">SETTINGS</button>
+        <button class="btn ghost danger" data-focus data-act="pause-quit">QUIT TO MENU</button>
+      </nav>
+    </div>
+  </section>
+
+  <!-- ---- results ---- -->
+  <section id="scr-results" class="screen sheet results hidden">
+    <header class="scr-head">
+      <div><h2 id="resultsTitle">RESULTS</h2><p class="scr-sub" id="resultsSub"></p></div>
+      <div class="scr-head-right" id="resultsMedal"></div>
+    </header>
+    <div class="scr-body">
+      <div class="results-grid">
+        <div class="podium" id="podium"></div>
+        <div class="classification">
+          <div class="class-head"><span>POS</span><span>DRIVER</span><span>TOTAL</span><span>BEST LAP</span></div>
+          <div id="resultsTable"></div>
+          <div class="records" id="resultsRecord"></div>
+        </div>
+      </div>
+      <div class="unlocks" id="unlockList"></div>
+    </div>
+    <footer class="scr-foot" id="resultsBtns"></footer>
+  </section>
+
+</div>
+
+<!-- ============ HUD ============
+     hud.js owns every value in here; markup is static so nothing allocates
+     per frame. Three bands (top / mid / bottom) on the --hud-k scale. -->
+<div id="hud" class="hud hidden" aria-hidden="true">
+
+  <!-- ── top-left: position ─────────────────────────────── -->
+  <div class="z-pos">
+    <div class="card pos" id="hPos">
+      <div class="pos-big"><span class="pos-p">P</span><b id="hPosN">1</b><i id="hPosT">/6</i></div>
+      <div class="pos-rival" id="hRival"></div>
+    </div>
+  </div>
+
+  <!-- ── top-centre: lap + clock ─────────────────────────── -->
+  <div class="z-lap">
+    <div class="card lap">
+      <div class="lap-row">
+        <span class="k">LAP</span><b id="hLapN">1</b><i id="hLapT">/3</i>
+        <span class="lap-track" id="hTrack"></span>
+      </div>
+      <div class="clock" id="hTime">0:00.00</div>
+      <div class="splits">
+        <span><em>LAST</em><b id="hLast">--:--.--</b></span>
+        <span class="best"><em>BEST</em><b id="hBest">--:--.--</b></span>
       </div>
     </div>
   </div>
-</div>
 
-<!-- ============ HUD ============ -->
-<div id="hud" class="hud hidden">
-  <!-- ── row 1 ─────────────────────────────────────────────── -->
-  <div class="z-mission">
-    <section class="panel mission" id="missionBox">
-      <header><span id="missionTag">MISSION 01</span></header>
-      <h3 id="missionName">COLD START</h3>
-      <div class="mission-obj" id="missionObj">—</div>
-    </section>
+  <!-- ── top-right: minimap ──────────────────────────────── -->
+  <div class="z-map">
+    <div class="card map">
+      <canvas id="hMap" width="280" height="280" aria-hidden="true"></canvas>
+    </div>
   </div>
 
-  <div class="z-compass"><canvas id="compass" width="660" height="42"></canvas></div>
-
-  <div class="z-clock">
-    <section class="panel clock">
-      <div class="row"><span>SOL PHASE</span><b id="sunPhase">—</b></div>
-      <div class="row"><span>MET</span><b id="met">00:00:00</b></div>
-      <div class="row"><span>RANGE · SLED</span><b id="rangeHome">—</b></div>
-    </section>
+  <!-- ── bottom-right: speed cluster ─────────────────────── -->
+  <div class="z-speed">
+    <div class="air-slot" id="hAir"></div>
+    <div class="speedbox">
+      <canvas id="hRpm" width="240" height="72" aria-hidden="true"></canvas>
+      <div class="speedrow">
+        <b class="kmh" id="hKmh">0</b>
+        <span class="unit">KM/H</span>
+        <span class="gear" id="hGear">N</span>
+      </div>
+    </div>
   </div>
 
-  <!-- ── row 2 ─────────────────────────────────────────────── -->
-  <div class="z-log"><div class="logfeed" id="logfeed"></div></div>
+  <!-- ── bottom-centre: transient banners ────────────────── -->
+  <div class="z-banner" id="hBanner"></div>
 
-  <div class="z-rail">
-    <section class="panel map">
-      <header><span>ANAXAGORAS BASIN</span><b id="mapScale">400 m</b></header>
-      <canvas id="minimap" width="300" height="300"></canvas>
-    </section>
-    <section class="panel bay">
-      <header><span>SAMPLE BAY</span><b id="bayCount">0/6</b></header>
-      <div class="baygrid" id="baygrid"></div>
-    </section>
+  <!-- ── bottom-left: race log ───────────────────────────── -->
+  <div class="z-log" id="hLog"></div>
+
+  <!-- ── centre overlays ─────────────────────────────────── -->
+  <div class="countdown hidden" id="hCount"><b id="hCountN">3</b></div>
+
+  <div class="flag wrong hidden" id="hWrong">
+    <span class="chev" aria-hidden="true">‹‹‹</span>WRONG WAY<span class="chev" aria-hidden="true">›››</span>
   </div>
+  <div class="flag off hidden" id="hOff">RETURN TO TRACK <span aria-hidden="true">↩</span></div>
 
-  <!-- ── row 3 ─────────────────────────────────────────────── -->
-  <div class="z-bottom">
-    <section class="panel sys">
-      <header><span>SYSTEMS</span></header>
-      <div class="gauge" id="gBatt"><label>POWER</label><b>100%</b><div class="bar"><i></i></div></div>
-      <div class="gauge" id="gHeat"><label>THERMAL</label><b>+18°</b><div class="bar"><i></i></div></div>
-      <div class="gauge" id="gHull"><label>INTEGRITY</label><b>100%</b><div class="bar"><i></i></div></div>
-      <div class="chips" id="sysChips"></div>
-    </section>
-
-    <section class="panel inst drive"><canvas id="speedo" width="150" height="150"></canvas></section>
-
-    <section class="panel inst wheels">
-      <header><span>WHEEL LOAD / SLIP</span></header>
-      <canvas id="wheelmon" width="236" height="112"></canvas>
-    </section>
-
-    <section class="panel inst gpr">
-      <header><span>GROUND PENETRATING RADAR</span><b id="gprState">IDLE</b></header>
-      <canvas id="gprscope" width="290" height="112"></canvas>
-    </section>
-  </div>
-
-  <!-- centre reticle / context prompt -->
-  <div class="reticle" id="reticle"></div>
-  <div class="prompt hidden" id="prompt"></div>
-
-  <!-- damage / discovery flashes -->
-  <div class="vig" id="vig"></div>
-  <div class="discovery hidden" id="discovery"><div class="d-kicker">SUBSURFACE RETURN</div><div class="d-name"></div><div class="d-sub"></div></div>
-</div>
-
-<!-- ============ CODEX ============ -->
-<div id="codex" class="overlay sheet hidden">
-  <div class="panel-head"><h2>FIELD CODEX</h2><button class="x" data-close="codex">ESC</button></div>
-  <div class="codex-body">
-    <ul class="codex-list" id="codexList"></ul>
-    <article class="codex-read" id="codexRead"><h3>SELECT AN ENTRY</h3><p>Recovered fragments, sample analyses and Directorate telemetry appear here as you survey the basin.</p></article>
+  <div class="resetring hidden" id="hReset" style="--p:0">
+    <div class="rr-fill"></div><div class="rr-hole"><span>RESET</span></div>
   </div>
 </div>
 
-<!-- ============ PAUSE / SETTINGS ============ -->
-<div id="pause" class="overlay sheet hidden">
-  <div class="panel-head"><h2 id="pauseTitle">SYSTEMS</h2><button class="x" data-close="pause">ESC</button></div>
-  <div class="settings" id="settingsBody"></div>
-  <div class="panel-foot">
-    <button class="btn" id="btnResume">RESUME</button>
-    <button class="btn ghost" id="btnCodexFromPause">CODEX</button>
-    <button class="btn ghost" id="btnHelp">CONTROLS</button>
-    <button class="btn ghost danger" id="btnAbort">ABORT TO MENU</button>
+<!-- ============ TOUCH CONTROLS ============
+     Filled in by src/core/input.js (buildTouch) — the layout vars and the
+     z-index between HUD and screens are reserved in styles.css. Left empty
+     here so a desktop session never pays for the nodes. -->
+<div id="touch" class="hidden" aria-hidden="true"></div>
+
+<!-- one-shot, non-blocking, dismissed on tap or after a few seconds -->
+<div id="rotate" class="rotate hidden"><b>↻</b> Rotate your device for the full HUD</div>
+
+<noscript>
+  <div class="overlay boot">
+    <div class="boot-inner">
+      <div class="wordmark"><span class="wm-r">R</span><span>ALLYE</span></div>
+      <p class="strap">JavaScript is required to run this game.</p>
+    </div>
   </div>
-</div>
-
-<!-- ============ CONTROLS ============ -->
-<div id="help" class="overlay sheet hidden">
-  <div class="panel-head"><h2>ROVER CONTROL SCHEME</h2><button class="x" data-close="help">ESC</button></div>
-  <div class="keys" id="keysBody"></div>
-</div>
-
-<!-- ============ MISSION CARD ============ -->
-<div id="cardOverlay" class="overlay card hidden">
-  <div class="card-inner">
-    <div class="card-kicker" id="cardKicker">MISSION 01</div>
-    <h2 class="card-title" id="cardTitle"></h2>
-    <p class="card-text" id="cardText"></p>
-    <div class="card-obj" id="cardObj"></div>
-    <button class="btn primary" id="cardGo">ACKNOWLEDGE</button>
-  </div>
-</div>
-
-<noscript><div class="overlay boot"><div class="boot-inner"><h1 class="title">REGOLITH</h1><p class="subtitle">JavaScript is required.</p></div></div></noscript>
+</noscript>
 
 <script type="module" src="src/main.js"></script>
 </body>

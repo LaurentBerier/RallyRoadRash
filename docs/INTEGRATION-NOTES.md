@@ -1,5 +1,29 @@
 # Integration notes — as-built module facts
 
+## FIRST LIGHT (integrator, browser, HIGH tier) — PASSED all 4 tracks
+- All wave-1 systems render together on GPU at 56–57 fps: terrain + road ribbon + surface
+  albedos, sky/clouds/haze per theme, props (cones/barrels/rails/signs/rocks/trees/basalt),
+  wheel dust, all 3 vehicles driving the racing line, jumps launch (~1.6 s air observed).
+- FIXED during first light: `patch` → `pch` in terrain fragment shader (`patch` is a
+  reserved word in ESSL 3.00 — terrain failed to compile on WebGL2 at all); added
+  `precision highp sampler2D;` to TERRAIN_GLSL + sun-mask shader (lowp sampler default
+  would break R32F heights on strict GLES); un-reversed a smoothstep in the shadow-edge
+  fade (UB per spec).
+- Steering sign convention CONFIRMED on GPU: positive ctl.steer turns RIGHT (−X);
+  target-right ⇒ cross(f→v) > 0 ⇒ steer = +atan2(cross, dot)·k. (An inverted-sign
+  controller drives to the horizon — symptom: d grows monotonically.)
+- Dev harness: dev/firstlight.html?track=id&veh=id (server: `node server.js 5490`).
+  window.__FL exposes {veh, terrain, engine, fps}.
+- Root index.html still boots OLD REGOLITH main.js (throws on missing MOON_G export) —
+  expected until T5/T7 land; ignore that console error when testing the harness.
+- Visual polish backlog (wave 3): pale streak artifact on distant canyon hillside;
+  forest tree density near track too sparse (more corridor feel); ROAD "two-tone"
+  comment in terrain.js describes an effect the flat road mask can't produce (either
+  bake lateral offset into a channel or fix the comment); surface-id dither in shader
+  vs undithered CPU surfaceAt (~0.75 m visual/physical divergence — intentional,
+  document); baked sun mask marches mipped field vs sunVis base level (soft divergence,
+  acceptable); unroll pragma in surface loop is regex-fragile — do not reformat it.
+
 Living document maintained by the lead. Wave-2+ contributors: treat this as authoritative
 addenda to ARCHITECTURE.md — it records what each module ACTUALLY shipped.
 
