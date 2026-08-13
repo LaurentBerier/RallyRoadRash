@@ -45,10 +45,13 @@ const FinalShader = {
   uniforms: {
     tDiffuse: { value: null },
     uTime: { value: 0 },
+    // daylight defaults: the lunar build ran a noisy, heavily vignetted sensor
+    // because the scene was mostly black. A sunlit rally stage is not, so the
+    // grain and the aberration come right down and exposure sits at neutral.
     uExposure: { value: 1.0 },
-    uVignette: { value: 1.0 },
-    uGrain: { value: 1.0 },
-    uAberr: { value: 1.0 },
+    uVignette: { value: 0.85 },
+    uGrain: { value: 0.35 },
+    uAberr: { value: 0.5 },
     uGlitch: { value: 0.0 },
     uFlash: { value: 0.0 },
     uLetterbox: { value: 0.0 },
@@ -168,29 +171,42 @@ export class Engine {
     this.camera = new THREE.PerspectiveCamera(58, 1, 0.08, 26000);
     this.camera.position.set(0, 3, -8);
 
-    /* ---- sun: one hard, parallel, uncompromising light source ---- */
-    this.sun = new THREE.DirectionalLight(0xfff4e4, 3.0);
-    this.sun.castShadow = this.quality.shadow > 0;
-    if (this.sun.castShadow) {
-      const S = this.quality.shadow;
-      this.sun.shadow.mapSize.set(S, S);
-      const d = 26;
-      this.sun.shadow.camera.left = -d; this.sun.shadow.camera.right = d;
-      this.sun.shadow.camera.top = d; this.sun.shadow.camera.bottom = -d;
-      this.sun.shadow.camera.near = 1; this.sun.shadow.camera.far = 180;
-      this.sun.shadow.bias = -0.0009;
-      this.sun.shadow.normalBias = 0.045;
-      this.sun.shadow.radius = 1.4;
-    }
+    /* ---- sun: one parallel key light, warm daylight by default ----
+       Defaults are the training theme; world/sky.js pushes the real per-theme
+       values through setLightTheme() when a race is built. The shadow box is
+       sized for cars, not for a landscape: d=30 covers the player plus the two
+       or three rivals close enough to matter, and anything further away is
+       already inside the terrain's own baked sun mask. */
+    this.sun = new THREE.DirectionalLight(0xfff3e2, 2.6);
+    this._configureShadow();
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
-    // earthshine: the only soft light for 380 000 km
-    this.fill = new THREE.HemisphereLight(0x2a4270, 0x3a3128, 0.34);
+    // sky/ground fill: blue from above, bounce from the dirt below
+    this.fill = new THREE.HemisphereLight(0xa8c8ff, 0x7a6a52, 0.60);
     this.scene.add(this.fill);
 
     this.buildComposer();
     this.resize();
     window.addEventListener('resize', () => this.resize());
+  }
+
+  /* Shadow frustum + filtering. Called from the constructor and again on every
+     tier change: booting on LOW (shadow 0) and then raising quality used to
+     leave the camera at three.js's default +-5 m box, which puts the shadow
+     under the car and nowhere else. */
+  _configureShadow() {
+    this.sun.castShadow = this.quality.shadow > 0;
+    if (!this.sun.castShadow) return;
+    const S = this.quality.shadow;
+    this.sun.shadow.mapSize.set(S, S);
+    const d = 30;
+    this.sun.shadow.camera.left = -d; this.sun.shadow.camera.right = d;
+    this.sun.shadow.camera.top = d; this.sun.shadow.camera.bottom = -d;
+    this.sun.shadow.camera.near = 1; this.sun.shadow.camera.far = 180;
+    this.sun.shadow.camera.updateProjectionMatrix();
+    this.sun.shadow.bias = -0.0007;
+    this.sun.shadow.normalBias = 0.035;
+    this.sun.shadow.radius = 1.5;
   }
 
   buildComposer() {
@@ -229,11 +245,8 @@ export class Engine {
   setQuality(key) {
     this.quality = QUALITY[key] || QUALITY.high;
     this.renderer.shadowMap.enabled = this.quality.shadow > 0;
-    this.sun.castShadow = this.quality.shadow > 0;
-    if (this.sun.castShadow && this.sun.shadow.map) {
-      this.sun.shadow.map.dispose(); this.sun.shadow.map = null;
-      this.sun.shadow.mapSize.set(this.quality.shadow, this.quality.shadow);
-    }
+    if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    this._configureShadow();
     this.resize();
     this.buildComposer();
     this.resize();
@@ -278,7 +291,18 @@ export class Engine {
     }
   }
 
-  /** keep the shadow frustum tight around the rover so 2 k feels like 8 k */
+  /** Per-race lighting, from world/sky.js SKY_THEMES. Call once when the track
+      is built (and again if the theme changes); every field is optional. */
+  setLightTheme(t) {
+    if (!t) return;
+    if (t.sunColor !== undefined) this.sun.color.set(t.sunColor);
+    if (t.sunIntensity !== undefined) this.sun.intensity = t.sunIntensity;
+    if (t.hemiSky !== undefined) this.fill.color.set(t.hemiSky);
+    if (t.hemiGround !== undefined) this.fill.groundColor.set(t.hemiGround);
+    if (t.hemiIntensity !== undefined) this.fill.intensity = t.hemiIntensity;
+  }
+
+  /** keep the shadow frustum tight around the car so 2 k feels like 8 k */
   aimShadow(target, sunDir) {
     if (!this.sun.castShadow) return;
     this.sun.target.position.copy(target);
