@@ -747,6 +747,9 @@ export class Vehicle {
       metal: new THREE.MeshStandardMaterial({ color: 0x9aa0a8, metalness: 0.90, roughness: 0.38 }),
       tyre: new THREE.MeshStandardMaterial({ color: 0x1a1a1c, metalness: 0.05, roughness: 0.92 }),
       rim: new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.85, roughness: 0.32 }),
+      spring: new THREE.MeshStandardMaterial({
+        map: springTexture(), color: 0xe8eaee, metalness: 0.55, roughness: 0.48,
+      }),
       glass: new THREE.MeshPhysicalMaterial({
         color: 0x0b1015, metalness: 0.20, roughness: 0.10,
         clearcoat: 1.0, clearcoatRoughness: 0.05, envMapIntensity: 1.8,
@@ -781,14 +784,42 @@ export class Vehicle {
   }
 
   _buildRunningGear(spec, M) {
-    const wheelGeo = buildWheelGeometry(spec.wheelR, spec.wheelW);
+    const sxs = spec.bodyStyle === 'buggy';
+    // An SxS wears its rubber big: the buggy's tyres run visually wider than
+    // the contact-patch number the physics uses. Purely cosmetic.
+    const visW = spec.wheelW * (sxs ? 1.16 : 1);
+    const wheelGeo = buildWheelGeometry(spec.wheelR, visW);
+    // The rim face must reach the tyre face or it vanishes inside the sidewall.
     const discGeo = new THREE.CylinderGeometry(spec.wheelR * 0.60, spec.wheelR * 0.60,
-      spec.wheelW * 0.20, 16);
+      sxs ? visW * 0.96 : spec.wheelW * 0.20, 16);
     discGeo.rotateZ(Math.PI / 2);
-    const armGeo = roundedBox(0.11, 0.09, 1, 0.03);      // unit +Z member, stretched by span()
-    const coilGeo = new THREE.CylinderGeometry(0.055, 0.055, 1, 9);
+    const armGeo = roundedBox(sxs ? 0.075 : 0.11, sxs ? 0.075 : 0.09, 1, 0.028);
+    const coilGeo = new THREE.CylinderGeometry(sxs ? 0.075 : 0.055, sxs ? 0.075 : 0.055, 1, 9);
     coilGeo.rotateX(Math.PI / 2);                        // make it a +Z member too
+    const shaftGeo = sxs ? (() => { const g = new THREE.CylinderGeometry(0.026, 0.026, 1, 7); g.rotateX(Math.PI / 2); return g; })() : null;
+    let beadGeo = null;
+    if (sxs) {
+      // Beadlock face: outer ring + eight bolt heads, one merged geometry that
+      // spins with the tyre. Mirrored per side at attach time via scale.x.
+      const parts = [];
+      const face = visW * 0.5 + 0.008, ringR = spec.wheelR * 0.60;
+      const ring = new THREE.TorusGeometry(ringR, 0.030, 8, 22);
+      ring.rotateY(Math.PI / 2);
+      ring.translate(face, 0, 0);
+      parts.push(ring);
+      for (let i = 0; i < 8; i++) {
+        const a = i / 8 * Math.PI * 2;
+        const bolt = new THREE.CylinderGeometry(0.022, 0.022, 0.04, 6);
+        bolt.rotateZ(Math.PI / 2);
+        bolt.translate(face + 0.012, Math.cos(a) * ringR, Math.sin(a) * ringR);
+        parts.push(bolt);
+      }
+      beadGeo = mergeGeometries(parts, false);
+      parts.forEach(p => p.dispose());
+    }
     this.geos.push(wheelGeo, discGeo, armGeo, coilGeo);
+    if (shaftGeo) this.geos.push(shaftGeo);
+    if (beadGeo) this.geos.push(beadGeo);
 
     for (const w of this.wheels) {
       const g = new THREE.Group();
@@ -797,19 +828,36 @@ export class Vehicle {
       g.add(tyre);
       const disc = new THREE.Mesh(discGeo, M.rim);
       g.add(disc);
+      if (beadGeo) {
+        const bead = new THREE.Mesh(beadGeo, M.rim);
+        bead.scale.x = w.side;                 // outboard face on both sides
+        g.add(bead);
+      }
       w.obj = g; w.hub = tyre;
       this.wheelRoot.add(g);
 
-      /* Visible linkage. Both members are unit-length +Z boxes re-spanned every
+      /* Visible linkage. All members are unit-length +Z pieces re-spanned every
          frame between their chassis pickup and the live hub position, which is
          the only way the suspension reads as *travelling* rather than as wheels
-         sliding around inside the arches. */
-      w.arm = new THREE.Mesh(armGeo, M.dark);
-      w.coil = new THREE.Mesh(coilGeo, M.metal);
+         sliding around inside the arches. The buggy gets the full SxS set:
+         upper + lower A-arm in body colour and a coilover with a visible
+         spring; the others keep the single dark arm + strut. */
+      const armMat = sxs ? M.paint : M.dark;
+      w.arm = new THREE.Mesh(armGeo, armMat);
+      w.coil = new THREE.Mesh(coilGeo, sxs ? M.spring : M.metal);
       w.arm.castShadow = w.coil.castShadow = true;
       this.wheelRoot.add(w.arm, w.coil);
-      w.armRoot.set(w.side * spec.track * 0.26, w.mount.y - spec.suspRest * 0.86, w.mount.z);
-      w.coilRoot.set(w.side * spec.track * 0.42, w.mount.y + 0.14, w.mount.z);
+      w.armRoot.set(w.side * spec.track * 0.20, w.mount.y - spec.suspRest * 0.90, w.mount.z);
+      w.coilRoot.set(w.side * spec.track * 0.30, w.mount.y + 0.20, w.mount.z - 0.06);
+      if (sxs) {
+        w.arm2 = new THREE.Mesh(armGeo, armMat);
+        w.arm2.castShadow = true;
+        this.wheelRoot.add(w.arm2);
+        w.arm2Root = new THREE.Vector3(w.side * spec.track * 0.22,
+          w.mount.y - spec.suspRest * 0.52, w.mount.z + 0.10);
+        w.shaft = new THREE.Mesh(shaftGeo, M.metal);
+        this.wheelRoot.add(w.shaft);
+      }
     }
   }
 
@@ -830,6 +878,7 @@ export class Vehicle {
       w.obj.rotateX(w.spin);
       span(w.arm, w.armRoot, _v1);
       span(w.coil, w.coilRoot, _v1);
+      if (w.arm2) { span(w.arm2, w.arm2Root, _v1); span(w.shaft, w.coilRoot, _v1); }
     }
 
     /* Body lean. Purely cosmetic and capped at 3°: the rigid body already
@@ -1084,6 +1133,23 @@ function liveryTexture(paint, paint2, num, name, rng, size = 512) {
   return t;
 }
 
+/* One shared coil-spring stripe texture for every coilover in the game. Never
+   disposed with a vehicle — it is module state, not instance state. */
+let _springTex = null;
+function springTexture() {
+  if (_springTex) return _springTex;
+  const c = document.createElement('canvas'); c.width = 16; c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#20242c'; g.fillRect(0, 0, 16, 64);
+  g.fillStyle = '#e0e4ea';
+  for (let i = 0; i < 4; i++) g.fillRect(0, i * 16, 16, 9);   // coils
+  _springTex = new THREE.CanvasTexture(c);
+  _springTex.wrapS = _springTex.wrapT = THREE.RepeatWrapping;
+  _springTex.repeat.set(1, 5);
+  _springTex.colorSpace = THREE.NoColorSpace;
+  return _springTex;
+}
+
 /** Collects build-time geometry into one merged mesh per material. */
 class Kit {
   constructor() { this.b = new Map(); }
@@ -1150,65 +1216,103 @@ function addLights(kit, y, zF, zR, spread) {
   }
 }
 
-function addDriver(kit, spec, y, z, lean = 0.22) {
+function addDriver(kit, spec, y, z, lean = 0.22, x = 0) {
   const w = spec.dims.W;
-  kit.box('dark', w * 0.34, 0.42, 0.16, 0, y + 0.06, z - 0.34, 0.05, -lean);   // seat back
-  kit.box('dark', w * 0.34, 0.10, 0.44, 0, y - 0.15, z - 0.10, 0.04);          // seat base
-  kit.sphere('helmet', 0.145, 0, y + 0.20, z - 0.20);
-  kit.plate('glass', 0.20, 0.11, 0, y + 0.20, z - 0.065);                      // visor
-  kit.cyl('dark', 0.115, 0.115, 0.03, 14, 0, y + 0.06, z + 0.26, 1.15);        // steering wheel
+  kit.box('dark', w * 0.34, 0.42, 0.16, x, y + 0.06, z - 0.34, 0.05, -lean);   // seat back
+  kit.box('dark', w * 0.34, 0.10, 0.44, x, y - 0.15, z - 0.10, 0.04);          // seat base
+  kit.sphere('helmet', 0.145, x, y + 0.20, z - 0.20);
+  kit.plate('glass', 0.20, 0.11, x, y + 0.20, z - 0.065);                      // visor
+  kit.cyl('dark', 0.115, 0.115, 0.03, 14, x, y + 0.06, z + 0.26, 1.15);        // steering wheel
 }
 
-/* --- BUGGY: tube frame, open wheels, cage, spoiler ---------------------- */
+/* --- BUGGY: modern sport side-by-side — low panelled hull, raked cage with
+   a roof, angular LED brows, tube bumper, and its suspension worn on the
+   outside. Modelled on the Can-Am Maverick X3 silhouette. ------------------ */
 function buildBuggy(kit, spec) {
   const { L, W, H } = spec.dims;
   const y0 = -spec.comHeight;                 // ground plane in body space
   const hw = W * 0.5;
   const top = y0 + H;
 
-  kit.box('dark', W * 0.60, 0.10, L * 0.62, 0, y0 + 0.32, 0.02, 0.03);          // floor pan
-  kit.box('paint2', W * 0.44, 0.26, 0.86, 0, y0 + 0.44, L * 0.34, 0.09);        // nose box
-  kit.box('paint', W * 0.30, 0.16, 0.62, 0, y0 + 0.60, L * 0.36, 0.06);         // bonnet scoop
-  for (const s of [-1, 1]) {                                                     // side pods
-    kit.box('paint', 0.26, 0.40, 1.42, s * hw * 0.80, y0 + 0.52, -0.06, 0.07);
-    kit.plate('livery', 1.20, 0.36, s * (hw * 0.80 + 0.135), y0 + 0.53, -0.06,
-      0, s * Math.PI / 2);
-    kit.box('dark', 0.16, 0.10, 0.9, s * hw * 0.86, y0 + 0.24, 0.30, 0.03);     // rock slider
-  }
-  kit.box('dark', W * 0.52, 0.40, 1.00, 0, y0 + 0.56, -0.16, 0.06);             // cockpit tub
-  kit.box('metal', W * 0.46, 0.34, 0.72, 0, y0 + 0.62, -L * 0.34, 0.05);        // engine
-  kit.box('dark', W * 0.30, 0.20, 0.30, 0, y0 + 0.92, -L * 0.34, 0.05);         // airbox
-
-  /* Roll cage. Drawn as real tubes between real joints, because the cage is
-     what says "buggy" from 40 m away — the bodywork barely registers. */
-  const cy = top - 0.10, cw = W * 0.34, zf = 0.44, zr = -0.74;
-  const r = 0.045;
+  /* ---- hull. The body core is much narrower than the track — an SxS wears
+     its wheels a full arm's length outboard, and that gap IS the look. ---- */
+  const bw = W * 0.62;                        // body core width
+  kit.box('dark', bw, 0.10, L * 0.66, 0, y0 + 0.30, 0.02, 0.03);               // belly pan
+  kit.box('paint', bw * 0.98, 0.34, 1.55, 0, y0 + 0.52, 0.02, 0.10);           // lower hull
+  // sloped bonnet, dropping toward the nose, with a centre vent
+  kit.box('paint', bw * 0.84, 0.11, 1.10, 0, y0 + 0.735, L * 0.265, 0.05, 0.135);
+  kit.box('dark', bw * 0.30, 0.055, 0.62, 0, y0 + 0.80, L * 0.245, 0.02, 0.135); // hood vent
+  // front fascia: black grille panel under angry LED brows
+  kit.box('dark', bw * 0.86, 0.30, 0.16, 0, y0 + 0.545, L * 0.455, 0.04);
   for (const s of [-1, 1]) {
-    kit.tube('metal', s * cw, y0 + 0.36, zf, s * cw, cy, zf, r);                // front hoop leg
-    kit.tube('metal', s * cw, y0 + 0.36, zr, s * cw, cy, zr, r);                // main hoop leg
-    kit.tube('metal', s * cw, cy, zf, s * cw, cy, zr, r);                       // roof rail
-    kit.tube('metal', s * cw, cy, zf, s * hw * 0.78, y0 + 0.46, L * 0.42, r);   // nose stay
-    kit.tube('metal', s * cw, cy, zr, s * hw * 0.80, y0 + 0.34, -L * 0.46, r);  // rear stay
-    kit.tube('metal', s * cw, y0 + 0.36, zr, -s * cw, cy, zr, r * 0.8);         // X brace
+    // LED brows — thin lit slashes, angled down-inward like the reference
+    kit.box('lamp', 0.30, 0.035, 0.03, s * bw * 0.28, y0 + 0.665, L * 0.468, 0.008, 0, 0, s * -0.22);
+    kit.box('dark', 0.34, 0.075, 0.05, s * bw * 0.28, y0 + 0.665, L * 0.452, 0.015, 0, 0, s * -0.22);
   }
-  kit.tube('metal', -cw, cy, zf, cw, cy, zf, r);
-  kit.tube('metal', -cw, cy, zr, cw, cy, zr, r);
-  kit.tube('metal', -cw, y0 + 0.36, L * 0.42, cw, y0 + 0.36, L * 0.42, r);      // front bar
 
-  addDriver(kit, spec, y0 + 0.72, -0.10);
-  kit.plate('glass', W * 0.50, 0.30, 0, y0 + 0.86, zf - 0.02, -0.55);           // aero screen
+  /* ---- front tube bumper: twin rails wrapping the nose ---- */
+  const bz = L * 0.50, by = y0 + 0.40, br = 0.038, bwid = bw * 0.55;
+  kit.tube('metal', -bwid, by, bz, bwid, by, bz, br);
+  kit.tube('metal', -bwid * 0.82, by + 0.24, bz - 0.03, bwid * 0.82, by + 0.24, bz - 0.03, br);
+  for (const s of [-1, 1]) {
+    kit.tube('metal', s * bwid, by, bz, s * bwid * 0.82, by + 0.24, bz - 0.03, br);
+    kit.tube('metal', s * bwid, by, bz, s * bw * 0.52, by + 0.02, L * 0.36, br);      // wrap-back
+    kit.tube('metal', s * bwid * 0.5, by, bz, s * bwid * 0.42, by + 0.24, bz - 0.03, 0.030);
+  }
 
-  // spoiler on two stays
-  const sy = cy + 0.10, sz = -L * 0.48;
-  for (const s of [-1, 1]) kit.tube('metal', s * cw * 0.8, cy - 0.06, zr, s * cw * 0.9, sy, sz, 0.035);
-  kit.box('paint2', W * 0.88, 0.05, 0.34, 0, sy, sz, 0.02, 0.26);
-  for (const s of [-1, 1]) kit.box('paint', 0.04, 0.16, 0.32, s * W * 0.43, sy + 0.07, sz, 0.01);
+  /* ---- doors and flanks ---- */
+  for (const s of [-1, 1]) {
+    // half-door panel carrying the livery (number, graphics)
+    kit.plate('livery', 1.34, 0.44, s * (bw * 0.5 + 0.005), y0 + 0.60, -0.10, 0, s * Math.PI / 2);
+    kit.box('dark', 0.07, 0.50, 1.40, s * bw * 0.515, y0 + 0.575, -0.10, 0.045);
+    // white slash accent along the door top — the "RS" streak
+    // fender flares over both arches, wider than the hull
+    kit.box('dark', 0.30, 0.075, 1.02, s * hw * 0.74, y0 + 0.82, spec.wheelbase.front, 0.03);
+    kit.box('dark', 0.32, 0.075, 1.10, s * hw * 0.76, y0 + 0.84, spec.wheelbase.rear, 0.03);
+    // rock slider under the door
+    kit.box('dark', 0.17, 0.09, 1.30, s * bw * 0.56, y0 + 0.20, -0.06, 0.03);
+  }
 
-  addLights(kit, y0 + 0.52, L * 0.47, -L * 0.47, hw * 0.52);
-  // light pod on the cage — pure rally
+  /* ---- cockpit: side-by-side, driver offset left ---- */
+  kit.box('dark', bw * 0.92, 0.30, 1.10, 0, y0 + 0.66, -0.18, 0.05);            // tub
+  addDriver(kit, spec, y0 + 0.80, -0.12, 0.22, -0.26);
+  // empty co-driver seat
+  kit.box('dark', W * 0.20, 0.42, 0.16, 0.26, y0 + 0.86, -0.46, 0.05, -0.22);
+  kit.box('dark', W * 0.20, 0.10, 0.44, 0.26, y0 + 0.65, -0.22, 0.04);
+  kit.plate('glass', bw * 0.82, 0.26, 0, y0 + 1.00, 0.42, -0.62);               // low screen
+
+  /* ---- cage: raked pillars, flat roof, kicked-up rear hoop ---- */
+  const cw = bw * 0.52, r = 0.048;
+  const roofY = top + 0.02, roofF = 0.14, roofR = -0.86;
+  for (const s of [-1, 1]) {
+    kit.tube('metal', s * bw * 0.5, y0 + 0.70, 0.66, s * cw, roofY, roofF, r);  // raked A-pillar
+    kit.tube('metal', s * cw, y0 + 0.44, roofR, s * cw, roofY, roofR, r);       // main hoop leg
+    kit.tube('metal', s * cw, roofY, roofF, s * cw, roofY, roofR, r);           // roof rail
+    kit.tube('metal', s * cw, roofY, roofR, s * bw * 0.42, y0 + 0.62, -L * 0.44, r); // rear stay
+    kit.tube('metal', s * cw, y0 + 0.44, roofR, -s * cw, roofY, roofR, r * 0.75);    // X brace
+    kit.tube('metal', s * bw * 0.5, y0 + 0.70, 0.66, s * cw, y0 + 0.98, -0.20, r * 0.7); // intrusion
+    // side mirror on the A-pillar
+    kit.box('dark', 0.05, 0.09, 0.14, s * (bw * 0.5 + 0.09), y0 + 1.05, 0.52, 0.02);
+  }
+  kit.tube('metal', -cw, roofY, roofF, cw, roofY, roofF, r);
+  kit.tube('metal', -cw, roofY, roofR, cw, roofY, roofR, r);
+  kit.box('dark', cw * 2.06, 0.045, roofF - roofR, 0, roofY + 0.045, (roofF + roofR) / 2, 0.02); // roof panel
+
+  /* ---- rear: exposed engine, twin exhausts, no wing (the cage is the wing) */
+  kit.box('dark', bw * 0.72, 0.30, 0.66, 0, y0 + 0.50, -L * 0.335, 0.05);       // engine block
+  kit.box('metal', bw * 0.34, 0.14, 0.34, 0, y0 + 0.70, -L * 0.32, 0.04);       // cam cover
+  kit.box('dark', bw * 0.42, 0.16, 0.28, 0, y0 + 0.84, -L * 0.33, 0.05);        // airbox
+  kit.box('dark', bw * 0.95, 0.24, 0.30, 0, y0 + 0.42, -L * 0.455, 0.06);     // rear valance
+  for (const s of [-1, 1]) {
+    kit.cyl('dark', 0.055, 0.062, 0.22, 10, s * bw * 0.24, y0 + 0.60, -L * 0.475, Math.PI / 2);
+    kit.tube('metal', s * bw * 0.45, y0 + 0.40, -L * 0.50, s * bw * 0.45, y0 + 0.72, -L * 0.44, 0.034);
+  }
+
+  addLights(kit, y0 + 0.60, L * 0.472, -L * 0.49, bw * 0.40);
+  // cage light pod — pure rally
   for (let i = 0; i < 4; i++) {
-    kit.cyl('lamp', 0.075, 0.075, 0.04, 12, (i - 1.5) * 0.20, cy + 0.11, zf + 0.06, Math.PI / 2);
-    kit.cyl('dark', 0.09, 0.09, 0.07, 12, (i - 1.5) * 0.20, cy + 0.11, zf + 0.02, Math.PI / 2);
+    kit.cyl('lamp', 0.070, 0.070, 0.04, 12, (i - 1.5) * 0.19, roofY + 0.10, roofF + 0.05, Math.PI / 2);
+    kit.cyl('dark', 0.085, 0.085, 0.07, 12, (i - 1.5) * 0.19, roofY + 0.10, roofF + 0.01, Math.PI / 2);
   }
 }
 

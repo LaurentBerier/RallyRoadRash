@@ -82,7 +82,7 @@ export class Dust {
         uAmb: { value: new THREE.Vector3(0.16, 0.15, 0.13) },
         uSky: { value: new THREE.Vector3(0.18, 0.25, 0.40) },
         uWrap: { value: 0.45 },
-        uOpacity: { value: 1.0 },
+        uOpacity: { value: 0.78 },   // full-opacity puffs read as solid spheres
         uTime: { value: 0 },
         uViewH: { value: 1080 },
         uMaxPx: { value: 512 }
@@ -99,7 +99,7 @@ export class Dust {
 
           float age = 1.0 - aLife;
           float isPuff = step(aParam.y, 0.5);
-          float sizeM = aParam.x * mix(1.0, 1.0 + 1.35 * age, isPuff);
+          float sizeM = aParam.x * mix(1.0, 1.0 + 0.95 * age, isPuff);
 
           vec3 vv = (viewMatrix * vec4(aVel, 0.0)).xyz;
           vStretch = mix(1.0, clamp(1.0 + length(vv.xy) * 0.030, 1.0, 1.8), isPuff);
@@ -260,7 +260,9 @@ export class Dust {
       } else {
         out = (0.30 + r3 * 0.95) * force;
         vy = (0.50 + r4 * 0.95) * force * (biased ? 0.60 : 1.0);
-        size = 0.60 + r2 * 1.60;
+        // First light showed 2.2 m puffs growing past 5 m read as boulders, not
+        // dust — cap the base under 1.5 m and let the growth term do the rest.
+        size = 0.42 + r2 * 1.00;
         life = 1.50 + r3 * 1.50;
         drg = 0.42 + r4 * 0.40;
         spin = 0.15 + r1 * 0.35;

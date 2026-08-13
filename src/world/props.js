@@ -616,6 +616,9 @@ export class Props {
         map: tex, side: THREE.DoubleSide, roughness: 0.85, metalness: 0
       })));
     banner.position.y = H - 1.1;
+    // The group's +Z points DOWNSTREAM; racers approach from upstream and would
+    // read the plane's back face mirrored. Face the text at the traffic.
+    banner.rotation.y = Math.PI;
     banner.castShadow = true;
     g.add(banner);
 
@@ -657,6 +660,7 @@ export class Props {
       }
       const bn = new THREE.Mesh(this._keepGeo(new THREE.PlaneGeometry(span, 0.9)), gateMat);
       bn.position.y = 4.0;
+      bn.rotation.y = Math.PI;          // face oncoming traffic, not the exit
       g.add(bn);
       const d = sp.dirAt(c.s, _dd);
       g.position.set(c.x, this.terrain.heightAt(c.x, c.z), c.z);

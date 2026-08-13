@@ -436,6 +436,9 @@ body.touch-controls .hud{
   align-items:center;gap:calc(6 * var(--s));padding-bottom:calc(4 * var(--s))}
 .z-speed{grid-area:speed;justify-self:end;align-self:end;display:flex;flex-direction:column;
   align-items:flex-end;gap:calc(5 * var(--s))}
+/* The pedal stack owns the right edge and is TALLER than --touch-clear, so the
+   speed cluster must step left of it as well as up, or it hides behind GAS. */
+body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right, 0px))}
 
 .card{
   border:1px solid var(--line);border-radius:calc(3 * var(--s));

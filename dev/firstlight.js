@@ -81,7 +81,8 @@ async function boot() {
     if (dt > 0.1) dt = 0.1;
     elapsed += dt;
 
-    const ctl = veh.airborne ? { throttle: 0.5, steer: 0, brake: 0, handbrake: 0 } : drive();
+    const ctl = q.get('orbit') ? { throttle: 0, steer: 0, brake: 1, handbrake: 1 }
+      : veh.airborne ? { throttle: 0.5, steer: 0, brake: 0, handbrake: 0 } : drive();
     veh.step(dt, ctl);
     veh.updateVisuals(dt);
 
@@ -96,12 +97,19 @@ async function boot() {
       }
     }
 
-    // hand-rolled chase cam (NOT the real rig — that's T8's)
-    const back = _v.copy(veh.forward).multiplyScalar(-8.5);
-    engine.camera.position.copy(veh.pos).add(back);
-    engine.camera.position.y = Math.max(veh.pos.y + 3.2,
-      terrain.heightAt(engine.camera.position.x, engine.camera.position.z) + 1.2);
-    engine.camera.lookAt(veh.pos.x + veh.forward.x * 6, veh.pos.y + 1, veh.pos.z + veh.forward.z * 6);
+    // hand-rolled chase cam (NOT the real rig — that's T8's). ?orbit=1 circles
+    // the car slowly instead, for vehicle inspection.
+    if (q.get('orbit')) {
+      const a = elapsed * 0.45;
+      engine.camera.position.set(veh.pos.x + Math.cos(a) * 6.5, veh.pos.y + 2.1, veh.pos.z + Math.sin(a) * 6.5);
+      engine.camera.lookAt(veh.pos.x, veh.pos.y + 0.5, veh.pos.z);
+    } else {
+      const back = _v.copy(veh.forward).multiplyScalar(-8.5);
+      engine.camera.position.copy(veh.pos).add(back);
+      engine.camera.position.y = Math.max(veh.pos.y + 3.2,
+        terrain.heightAt(engine.camera.position.x, engine.camera.position.z) + 1.2);
+      engine.camera.lookAt(veh.pos.x + veh.forward.x * 6, veh.pos.y + 1, veh.pos.z + veh.forward.z * 6);
+    }
 
     terrain.update(dt, engine.camera, sky.sunDir);
     sky.update(dt, engine.camera, elapsed);

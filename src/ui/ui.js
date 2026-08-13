@@ -144,6 +144,35 @@ export class UI {
       const t = e.target && e.target.closest ? e.target.closest('[data-focus]') : null;
       if (t) this._setFocus(this._focus.indexOf(t), false);
     });
+    /* Tap-robustness: some WebViews (and touch-translation layers) fail to
+       synthesize `click` after a tap. Activate on a clean pointerdown→pointerup
+       pair ourselves, and swallow the browser's own click if it then arrives —
+       whichever path fires first wins, the other is deduped by timestamp. */
+    if (this.el.screens) {
+      let downBtn = null;
+      this.el.screens.addEventListener('pointerdown', (e) => {
+        downBtn = e.target && e.target.closest ? e.target.closest('button') : null;
+      });
+      this.el.screens.addEventListener('pointerup', (e) => {
+        const b = e.target && e.target.closest ? e.target.closest('button') : null;
+        if (b && b === downBtn) {
+          const now = performance.now();
+          if (!b._actT || now - b._actT > 350) { b._actT = now; b.click(); }
+        }
+        downBtn = null;
+      });
+      this.el.screens.addEventListener('click', (e) => {
+        const b = e.target && e.target.closest ? e.target.closest('button') : null;
+        if (!b) return;
+        const now = performance.now();
+        if (b._actT && now - b._actT < 350 && !e._uiSynth) {
+          // second arrival of the same tap — the pointerup path already ran it
+          if (b._clicked) { e.stopImmediatePropagation(); e.preventDefault(); }
+          b._clicked = true;
+          setTimeout(() => { b._clicked = false; }, 400);
+        }
+      }, true);
+    }
 
     this._buildSettings();
     this._buildControls();

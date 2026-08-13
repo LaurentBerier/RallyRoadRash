@@ -1,12 +1,13 @@
 {
-  "name": "regolith-anaxagoras",
+  "name": "rallye",
   "version": "1.0.0",
   "private": true,
-  "description": "REGOLITH — The Silence at Anaxagoras. A GPU-rendered 3D lunar rover exploration game.",
+  "description": "RALLYE — Off-Road Championship. A 3D arcade rally racer in a browser tab: zero dependencies, no build step, everything procedural.",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js 5173"
+    "dev": "node server.js 5173",
+    "test": "node --test tests/all.test.mjs"
   },
   "engines": { "node": ">=18" }
 }

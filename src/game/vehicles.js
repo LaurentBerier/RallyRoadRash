@@ -49,8 +49,8 @@ export const VEHICLES = [
   {
     id: 'hopper',
     name: 'DUNE HOPPER',
-    desc: 'Light tube-frame buggy. Forgiving, floaty, quick everywhere.',
-    color: 0xff7a1a,
+    desc: 'Sport side-by-side. Forgiving, floaty, quick everywhere.',
+    color: 0x2857e0,
     bodyStyle: 'buggy',
 
     mass: 1120,                       // kg

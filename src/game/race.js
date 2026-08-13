@@ -597,8 +597,10 @@ export class Race {
 
         /* Wheelspin in soft ground digs a hole you can drop into — the reason
            flooring it out of a mud hairpin is the wrong answer. */
-        if (ground && S.sink > 0.30 && w.slipLong > 0.28 && Math.abs(v.speed) < 3) {
-          this.terrain.rut(gx, gz, 0.30, 0.05, (w.slipLong - 0.24) * dt * 0.5);
+        if (ground && S.sink > 0.30 && w.slipLong > 0.35 && Math.abs(v.speed) < 2) {
+          // Slow enough that a few seconds of panic throttle costs you a rut,
+          // not the race — first light buried cars axle-deep at the old rate.
+          this.terrain.rut(gx, gz, 0.30, 0.05, (w.slipLong - 0.30) * dt * 0.22);
         }
 
         /* Rooster tail. Rate is contact-patch speed plus slip, scaled by how

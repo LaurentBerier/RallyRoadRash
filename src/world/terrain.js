@@ -46,7 +46,8 @@ export const FADE0 = 600, FADE1 = 668;   // macro -> far crossfade radius
 
 const BERM_OUT = 1.72;      // berm reaches this multiple of the rut half-width
 const BERM_GAIN = 0.85;     // how much displaced volume shows up as lip
-const DIG_CAP = 0.40;       // buried to the axle; past this you are not driving out
+const DIG_CAP = 0.22;       // hub-deep, not axle-deep: a rally car must always
+                            // have a fighting chance of powering out of its hole
 const SLUMP_TTL = 2.0;
 const CURVE_R = 620000;     // horizon-curvature radius
 
