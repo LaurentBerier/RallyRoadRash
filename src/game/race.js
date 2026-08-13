@@ -693,6 +693,24 @@ export class Race {
         (r.isPlayer ? Math.abs(this._pctl.throttle) > 0.5 : true) && !v.airborne;
       r.stuckT = stuck ? r.stuckT + dt : 0;
 
+      /* Scorched: wallowing in lava. The gap-jump voids are floored with it,
+         their walls are too steep to climb at lava grip, and a car crawling
+         at 1–4 km/h dodges the strict stuck gate forever — QA proved a racer
+         can marinate down there for half a minute. Crossing at speed stays
+         legal; loitering does not. */
+      const inLava = v.surfaceId === SURF.LAVA && !v.airborne &&
+        Math.hypot(v.vel.x, v.vel.z) < 7;
+      r.lavaT = inLava ? (r.lavaT || 0) + dt : 0;
+      if (r.lavaT > 1.2) { this._respawn(r, 'SCORCHED — RECOVERED'); r.lavaT = 0; continue; }
+
+      /* Wedged: nose-planted in a crevice or leaned hard on a wall. Not
+         flipped (up.y can sit near 0.5), not stuck (the wheels still turn it
+         a little), but going nowhere at a silly attitude. QA found a car
+         standing vertically on its bumper for half a minute. */
+      const wedged = v.up.y < 0.55 && Math.abs(v.speed) < 1.5 && !v.airborne;
+      r.wedgeT = wedged ? (r.wedgeT || 0) + dt : 0;
+      if (r.wedgeT > 3) { this._respawn(r, 'RECOVERED'); r.wedgeT = 0; continue; }
+
       /* Off course is measured against the MAIN spline and, where the track
          has one, the shortcut — a legal detour is 40 m off the centreline and
          must not be dragged back onto it. */
@@ -851,13 +869,27 @@ export class Race {
 
     const table = this.tracker.results();
     const placements = [];
+    const L = this.trackData.spline.length, finishS = this.laps * L;
     let playerPos = FIELD, playerTotal = null, playerBest = null;
     for (let i = 0; i < table.length; i++) {
       const row = table[i];
       const r = this.racers[row.id];
+      /* The classification freezes the moment the player's podium settles, so
+         a rival mid-final-lap has no total. "DNF" is a lie about a car that is
+         still audibly racing behind you — project its finish from its own
+         average pace instead. Cars that never cleared lap one earn the DNF. */
+      let total = row.total, dnf = false;
+      if (!row.finished) {
+        const prog = this.tracker.progress(row.id);
+        if (prog.raceS < L) { dnf = true; }
+        else {
+          const pace = prog.raceS / Math.max(1, this.raceTime);   // m/s of race made good
+          total = this.raceTime + (finishS - prog.raceS) / Math.max(6, pace);
+        }
+      }
       placements.push({
-        name: r.name, isPlayer: r.isPlayer,
-        total: row.total, bestLap: row.bestLap, dnf: !row.finished
+        name: r.name, isPlayer: r.isPlayer, color: r.color,
+        total, bestLap: row.bestLap, dnf, est: !row.finished && !dnf
       });
       if (r.isPlayer) { playerPos = i + 1; playerTotal = row.total; playerBest = row.bestLap; }
     }

@@ -399,7 +399,11 @@ export class UI {
 
   _renderGarage(d) {
     const list = this._vehicleList(d);
-    if (d.trackId) this._sel.trackId = d.trackId;
+    /* d.trackId is main.js's idea of the track, which is STALE the moment the
+       player picks a different card on the tracks screen — main.js only learns
+       the pick from the final {type:'race'} action. The UI's own selection is
+       the authority; the payload only seeds it when we have none at all. */
+    if (d.trackId && !this._sel.trackId) this._sel.trackId = d.trackId;
     if (!this._sel.vehicleId || !list.some(v => v.spec.id === this._sel.vehicleId && !v.locked)) {
       const first = list.find(v => !v.locked) || list[0];
       this._sel.vehicleId = first ? first.spec.id : null;

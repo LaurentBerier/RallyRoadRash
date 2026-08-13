@@ -1,0 +1,6 @@
+# Local tooling that has no business on the platform. Everything else —
+# including dev/ harnesses, tests/ and docs/ — is kept: it documents the
+# game and runs fine as static files.
+.claude/
+.gitignore
+.sandscapeignore

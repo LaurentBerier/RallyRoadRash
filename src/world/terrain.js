@@ -115,8 +115,10 @@ export const THEMES = {
     // Low red sun through smoke. Everything not lit by it is lit by the ground.
     name: 'CALDERA RUN',
     sun: [-0.62, 0.28, 0.73], sunCol: [1.50, 0.94, 0.62],
-    sky: [0.30, 0.20, 0.20], ground: [0.24, 0.11, 0.07], ambient: 0.50,
-    haze: [0.36, 0.20, 0.17], hazeDensity: 0.00140, hazeStart: 60,
+    // Ambient raised from 0.50 after QA: away-from-sun climbs read as a wall
+    // of murk at 0.50, and this track needs its road legible at 130 km/h.
+    sky: [0.34, 0.24, 0.23], ground: [0.28, 0.14, 0.09], ambient: 0.64,
+    haze: [0.36, 0.20, 0.17], hazeDensity: 0.00115, hazeStart: 70,
     tint: [1.02, 0.90, 0.86],
     surf: { 4: [0.25, 0.23, 0.23], 1: [0.31, 0.24, 0.19] }
   }
@@ -1179,6 +1181,19 @@ export class Terrain {
           albedo *= 0.55 + 0.30*crack;
           emis = vec3(2.6, 0.72, 0.14) * glow * pulse;
           rough = 0.55; gritK = 0.45;
+        }
+
+        /* ---- steep ground can't hold its coat ----
+           The surface map is painted in plan view, so an embankment cut by the
+           road carve gets the same GRASS or SAND id as the flat beside it — and
+           a 60° green wall reads as a hedge, a pale one as a snowdrift. Loose
+           cover slides off a slope in reality; blend steep faces toward the
+           ROCK palette (darkened raw substrate) regardless of painted id. */
+        float steep = smoothstep(0.86, 0.62, N.y);   // 0 flat .. 1 past ~38°
+        if (sid != 6) {                              // lava keeps its glow
+          vec3 scree = uSurfCol[4] * (0.62 + 0.30*fb(vW.xz*0.5) + 0.14*g0);
+          albedo = mix(albedo, scree, steep * 0.85);
+          rough = mix(rough, 0.8, steep);
         }
 
         vec3 Nr = N;
