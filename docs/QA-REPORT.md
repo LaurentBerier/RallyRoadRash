@@ -1,8 +1,9 @@
-# RALLYE — QA report
+# RALLY ROAD RASH — QA report
 
-Date: 2026-08-13 · Build: main (post wave-3 integration) · Platform under
-test: Windows 11 desktop, Chromium-based in-app browser, HIGH tier;
-mobile layouts via emulated viewports (375×812 portrait, 736×414 landscape).
+Date: 2026-08-13 / Build: main (post arcade-exaggeration + QA hardening
+pass) / Platform under test: Windows 11 desktop, Chromium-based in-app
+browser, HIGH tier; mobile layouts via emulated viewports (375x812
+portrait, 736x414 landscape).
 
 ## Automated suites — ALL GREEN
 
@@ -21,6 +22,12 @@ mobile layouts via emulated viewports (375×812 portrait, 736×414 landscape).
 | deep: ai-check | 3-lap completion ×3 tracks, cross-track ≤7 m, gap-jump commitment, pair avoidance | pass |
 | deep: camera-check | 87/88 gates (88th needs --expose-gc; self-skips) | pass |
 
+Two camera-check gates track feel.js's own re-tuning this pass, not a relaxation: the
+heavy-landing white-pop now asserts `uFlash` 0.08 (was 0.06), and the jump-anticipation
+peak now asserts ~1.2 deg (was 0.6 deg), settling inside the widened jumpIn/jumpOut
+envelope (0.10 s + 0.40 s, jumpOut was 0.22 s) within the test's 0.60 s settle window.
+Both still fail the moment feel.js drifts from these numbers.
+
 ## Full-campaign playthrough (automated driver on the player car, real input path)
 
 - PROVING GROUNDS: finished (P6 first run) → **canyon unlocked** ✔
@@ -29,8 +36,28 @@ mobile layouts via emulated viewports (375×812 portrait, 736×414 landscape).
   **volcano + REDLINE unlocked** ✔
 - CALDERA RUN: **P1 gold**, 3:31.05 total, fastest lap 1:09.22 →
   **CHAMPION** flag set and persisted ✔
-- AI lap-time spreads observed: training 36.6–38.5 s; volcano 67.7–72.7 s
-  (4 of 5 rivals clean; see known issues #4).
+- AI lap-time spreads observed: training 36.6-38.5 s; volcano 67.7-72.7 s
+  (4 of 5 rivals clean; see known issues #2).
+
+## Arcade hang-time and track set-piece verification (this pass)
+
+Fresh pass over the hang-time/air-control tuning, the recovery watchdogs and the rebuilt
+jump set pieces, same automated-driver-on-the-player-car technique as above (ROADRASH.tick
+driving the frame loop with an AIDriver's ctl patched onto the player car):
+
+- PROVING GROUNDS: raced clean to results.
+- SUNSTRIKE CANYON: full 3-lap race completes.
+- TIMBERLINE CLIMB: full race, all 6 finish, max air 4.88 s.
+- CALDERA RUN: full 3-lap race, all 6 cars finish, Caldera Leap (s=575) cleared every lap
+  by every car -- max air 4.53 s, against 5.08 s recorded at the original s~110 site the
+  leap was relocated away from (tracks/volcano.js: that corner bent and climbed inside the
+  flight zone, and the field overfly-crashed there in QA).
+- Zero console errors across the run; save snapshot/restore verified.
+- Camera: results -> NEXT STAGE / RESTART / MENU -> race all grid up in CHASE, never stuck
+  in the results ORBIT -- verified on all three paths (see the camera/results contract in
+  INTEGRATION-NOTES.md and Flows below).
+
+Harness-driver caveat: see known issues #7.
 
 ## Flows verified in-browser
 
@@ -68,7 +95,7 @@ profile (unlocks/medals/records/champion) survives reload.
   progress bar shown). Load-to-menu well under 4 s.
 - 6-car grid ≈ 47 k tris of vehicles; whole-scene in-view ≈ 500 k at HIGH.
   MEDIUM/LOW tiers drop clipmap density, shadows, particles, prop counts
-  (REGOLITH's pixel-budget cap + adaptive governor retained and untouched).
+  (pixel-budget cap + adaptive governor retained and untouched).
 - Physics cost: 6 vehicles + 15 collision pairs ≈ 31 µs/frame (measured in
   vehicle-check); AI ≈ 0.4–2.4 µs/driver/frame.
 
@@ -96,8 +123,14 @@ profile (unlocks/medals/records/champion) survives reload.
    sparse in places; canyon distant-wall streaking is fixed by the
    slope-scree blend but a faint band remains at extreme distance; gear
    indicator briefly reads N while coasting between virtual gears.
-6. **No player DNF/stage-timeout** — a player who never finishes can sit in
+6. **No player DNF/stage-timeout** -- a player who never finishes can sit in
    a race forever (quit/restart always available). Deliberate v1 scope.
+7. **QA-harness driver skill is flat, not competitive**: the arcade/recovery
+   re-verification pass (see above) drives the player car with a flat-skill-0.95
+   AIDriver and no rubber-banding, so it legitimately finishes P5-P6 -- that is the
+   harness, not a regression. The real rival AI (AI_BALANCE on) completes every
+   track cleanly. Human difficulty on the new jump set pieces has not been
+   hand-tested. Severity: test-methodology note, not a defect.
 
 ## Environment coverage
 

@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE test suite — run with:  npm test   (node --test tests/)
+   RALLY ROAD RASH test suite — run with:  npm test   (node --test tests/)
    ------------------------------------------------------------
    Two layers:
    1. Direct unit tests over the pure modules (racecore, progression,

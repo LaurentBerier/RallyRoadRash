@@ -3,7 +3,7 @@
    ------------------------------------------------------------
    WebGL2, linear HDR pipeline, MSAA-backed composer, bloom, and a
    final pass that treats the image as what it is in fiction: a
-   camera bolted to a rover, with sensor noise that rises in shadow.
+   camera bolted to the car, with sensor noise that rises in shadow.
    ============================================================ */
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -40,14 +40,14 @@ export const QUALITY = {
   }
 };
 
-/* ACES fitted + the rover-camera conceit */
+/* ACES fitted + the onboard-camera conceit */
 const FinalShader = {
   uniforms: {
     tDiffuse: { value: null },
     uTime: { value: 0 },
-    // daylight defaults: the lunar build ran a noisy, heavily vignetted sensor
-    // because the scene was mostly black. A sunlit rally stage is not, so the
-    // grain and the aberration come right down and exposure sits at neutral.
+    // daylight defaults: these are tuned for a sunlit rally stage, so the grain
+    // and the aberration sit low and exposure is neutral. Push them up only for
+    // a deliberately degraded look — the shader still supports it.
     uExposure: { value: 1.0 },
     uVignette: { value: 0.85 },
     uGrain: { value: 0.35 },
@@ -163,7 +163,7 @@ export class Engine {
       aniso: this.renderer.capabilities.getMaxAnisotropy()
     };
     if (!this.caps.floatLinear) {
-      console.warn('[REGOLITH] OES_texture_float_linear unavailable — terrain sampling will be blocky.');
+      console.warn('[RALLY ROAD RASH] OES_texture_float_linear unavailable — terrain sampling will be blocky.');
     }
 
     this.scene = new THREE.Scene();
@@ -232,8 +232,8 @@ export class Engine {
     }
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    // Threshold sits above a sunlit white radiator on purpose: at 0.72 the
-    // rover's own thermal panels bloomed and veiled the entire frame.
+    // Threshold sits above sunlit white bodywork on purpose: any lower and
+    // bright panels bloom and veil the entire frame.
     this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.48, 0.70, 1.15);
     this.bloom.enabled = q.bloom;
     this.composer.addPass(this.bloom);

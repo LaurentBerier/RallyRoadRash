@@ -1,4 +1,4 @@
-# RALLYE — Controls
+# RALLY ROAD RASH — Controls
 
 Prompts in the UI follow the input method you last used ('kb' | 'pad' |
 'touch'); detection lives in `src/core/input.js` (`lastMethod`, 300 ms

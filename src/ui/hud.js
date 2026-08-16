@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — in-race HUD
+   RALLY ROAD RASH — in-race HUD
    ------------------------------------------------------------
    Contract: docs/INTEGRATION-NOTES.md "HUD — src/ui/hud.js".
      new HUD(audio) · showRace(info) · hideRace() · bakeMap(terrain, trackData)

@@ -1,4 +1,4 @@
-# RALLYE — Production Plan
+# RALLY ROAD RASH — Production Plan
 
 Lead/integrator: Fable. Specialist tasks are delegated to Opus agents with exclusive file
 ownership per `docs/ARCHITECTURE.md`. The game is expected to be non-runnable between waves;
@@ -18,7 +18,7 @@ integrator does visual/browser QA at wave boundaries.
 - **T8 camera-feel** → camera.js, feel.js
 
 ## Wave 3 — Integration & hardening
-- Integrator: wire-up fixes, delete dead REGOLITH modules, first full playthrough
+- Integrator: wire-up fixes, delete dead legacy modules, first full playthrough
 - **T9 qa-tests** → tests/* (node:test for racecore/progression/trackdata), self-test harness
 - **T10 performance** → profiling pass, pooling, mobile scaling (after game is playable)
 - Integrator: tuning passes (handling, AI difficulty, par times), browser QA on desktop +

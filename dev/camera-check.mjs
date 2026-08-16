@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — camera & feel smoke test
+   RALLY ROAD RASH — camera & feel smoke test
    ------------------------------------------------------------
    Drives CameraRig + Feel through a scripted stunt (launch → hard corner →
    1.8 s air arc → heavy landing) against a mock terrain and a mock vehicle,
@@ -529,7 +529,7 @@ head('9. FEEL — every trigger moves something, and nothing is left behind');
   feel.update(DT, v);
   ok('a moderate landing dips exposure to 0.97', U.uExposure.value < 0.985 && U.uExposure.value >= 0.969,
     `${f(U.uExposure.value, 4)}`);
-  ok('a heavy landing (>7) pops uFlash to 0.06', Math.abs(U.uFlash.value - 0.06) < 1e-9,
+  ok('a heavy landing (>6) pops uFlash to 0.08', Math.abs(U.uFlash.value - 0.08) < 1e-9,
     `${f(U.uFlash.value, 3)}`);
   ok('the landing kick is nose-DOWN', rig.kickPitch < 0, `${f(rig.kickPitch * 180 / Math.PI, 3)}°`);
   feel.update(DT, v);
@@ -565,10 +565,11 @@ head('9. FEEL — every trigger moves something, and nothing is left behind');
   // -- jump anticipation lifts, then goes away
   feel.reset(); feel.jump();
   let peak = 0; tt = 0;
-  while (tt < 0.45) { feel.update(DT, v); peak = Math.max(peak, rig.kickPitch); tt += DT; }
-  info(`jump anticipation peak ${f(peak * 180 / Math.PI, 3)}° (spec 0.6°), settled at ${f(rig.kickPitch, 6)}`);
-  ok('jump() lifts the nose ~0.6° and returns',
-    peak > 0.55 * Math.PI / 180 && peak <= 0.601 * Math.PI / 180 && rig.kickPitch === 0,
+  // Envelope is jumpIn (0.10 s) + jumpOut (0.40 s); give it 0.60 s to settle.
+  while (tt < 0.60) { feel.update(DT, v); peak = Math.max(peak, rig.kickPitch); tt += DT; }
+  info(`jump anticipation peak ${f(peak * 180 / Math.PI, 3)}° (spec 1.2°), settled at ${f(rig.kickPitch, 6)}`);
+  ok('jump() lifts the nose ~1.2° and returns',
+    peak > 1.10 * Math.PI / 180 && peak <= 1.201 * Math.PI / 180 && rig.kickPitch === 0,
     `${f(peak * 180 / Math.PI, 3)}°`);
 
   // -- near miss

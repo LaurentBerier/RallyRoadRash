@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — THE THREE CARS
+   RALLY ROAD RASH — THE THREE CARS
    ------------------------------------------------------------
    Pure data. No three.js, no DOM: importable from Node tests, from the UI,
    and from the physics alike.
@@ -66,10 +66,10 @@ export const VEHICLES = [
     suspK: 51200,                     // N/m per corner  → 2.15 Hz, sag 0.070 m = 17.5 %
     suspC: 5900,                      // N·s/m per corner → ζ = 0.78
 
-    motorForce: 10200,                // N total at the contact patches → 9.1 m/s² peak
+    motorForce: 11800,                // N total at the contact patches → 10.5 m/s² peak
     brakeForce: 24000,                // N total. Sized above the friction limit so ABS,
                                       //   not the calipers, decides the stopping distance.
-    topSpeed: 36,                     // m/s (130 km/h)
+    topSpeed: 39,                     // m/s (140 km/h)
     revRange: [850, 7600],            // rpm — rpmNorm 0..1 maps onto this for HUD + audio
 
     gripF: 1.46,                      // base µ, multiplied by SURFACES[].grip
@@ -89,7 +89,7 @@ export const VEHICLES = [
      RIDGEBACK — the heavy one. Wide track, long wheelbase, the most grip on
      the card and the most torque under 20 m/s. It shrugs off ruts and body
      contact that would put the other two in the scenery, and it pays for all
-     of that with 4 m/s of top end and a lazy change of direction.
+     of that with 5 m/s of top end and a lazy change of direction.
      ----------------------------------------------------------------- */
   {
     id: 'ridgeback',
@@ -111,9 +111,9 @@ export const VEHICLES = [
     suspK: 67900,                     // → 2.02 Hz, sag 0.079 m = 16.5 %
     suspC: 8760,                      // → ζ = 0.82, the most damped of the three
 
-    motorForce: 15000,                // 8.9 m/s² peak — out-drags the Hopper to 20 m/s
+    motorForce: 17500,                // 10.4 m/s² peak — out-drags the Hopper to 20 m/s
     brakeForce: 36000,
-    topSpeed: 32,
+    topSpeed: 34,
     revRange: [700, 6200],            // low and gruff
 
     gripF: 1.48,
@@ -134,7 +134,7 @@ export const VEHICLES = [
   /* -----------------------------------------------------------------
      REDLINE — the fast one, and the one that will bin you. Low, light, short
      on rear grip and rear-drive biased, so it rotates the instant you lift
-     mid-corner. Its reward is 41 m/s and the sharpest turn-in in the game.
+     mid-corner. Its reward is 45 m/s and the sharpest turn-in in the game.
      Demands throttle discipline: squeeze, do not stab.
      ----------------------------------------------------------------- */
   {
@@ -157,13 +157,17 @@ export const VEHICLES = [
     suspK: 47800,                     // → 2.19 Hz, sag 0.068 m = 17.8 % — stiffest ride
     suspC: 5140,                      // → ζ = 0.74, the loosest damping: it moves about
 
-    motorForce: 10400,                // 10.3 m/s² peak — best power-to-weight
+    motorForce: 11800,                // 11.7 m/s² peak — best power-to-weight.
+                                      //   12200 overpowered the rear axle: it spun out
+                                      //   of the steady-state cornering check instead
+                                      //   of settling. 11800 + gripR 1.42 keeps the
+                                      //   tail lively but catchable.
     brakeForce: 23000,
-    topSpeed: 41,
+    topSpeed: 45,
     revRange: [950, 8600],            // screams
 
     gripF: 1.56,                      // huge front end…
-    gripR: 1.38,                      // …and a rear axle that is only ever a suggestion
+    gripR: 1.42,                      // …and a rear axle that is only ever a suggestion
     driveSplit: 0.28,                 // rear-drive biased: throttle rotates it
     brakeBias: 0.62,                  // forward bias to stop the rear stepping out on entry
 
@@ -189,8 +193,8 @@ export const VEHICLE_BY_ID = Object.fromEntries(VEHICLES.map(v => [v.id, v]));
    make the existing three look different. Pick ranges that leave headroom.
    ============================================================ */
 const RANGE = {
-  speed:  [26, 44],       // m/s of topSpeed
-  accel:  [6.5, 11.5],    // m/s² of motorForce / mass
+  speed:  [26, 48],       // m/s of topSpeed
+  accel:  [6.5, 12.5],    // m/s² of motorForce / mass
   grip:   [1.30, 1.60],   // mean of gripF and gripR
   weight: [950, 1800],    // kg
 };

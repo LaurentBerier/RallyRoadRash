@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — screens (boot, menu, stage select, garage, settings, pause,
+   RALLY ROAD RASH — screens (boot, menu, stage select, garage, settings, pause,
    results) and the focus manager that makes all of them drivable with a
    keyboard, a gamepad d-pad or a thumb.
 

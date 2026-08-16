@@ -1,18 +1,18 @@
-# RALLYE — Architecture & Interface Contracts
+# RALLY ROAD RASH — Architecture & Interface Contracts
 
-**RALLYE** is a 3D arcade off-road rally racing game: one player + 5 AI racers, themed tracks
+**RALLY ROAD RASH** is a 3D arcade off-road rally racing game: one player + 5 AI racers, themed tracks
 (desert canyon, forest/mountain, volcanic badlands, plus a training ground), laps, checkpoints,
 big jumps, progression and unlocks. Desktop (keyboard/gamepad) + mobile (touch), 60 fps target.
 
-It is built on the bones of REGOLITH (moon-rover): vanilla ES modules, **zero npm dependencies,
-no build step**, vendored three.js r160, everything generated procedurally at load time.
+The house style is vanilla ES modules, **zero npm dependencies, no build step**, vendored
+three.js r160, everything generated procedurally at load time.
 This document is the binding contract between modules. **If you need to change a contract,
 stop and flag it in your report instead of unilaterally changing it.**
 
 ## Hard rules (all contributors)
 
 1. **No new dependencies. No asset files. No network fetches.** Everything is code-generated
-   (canvas textures, procedural geometry, WebAudio synthesis), same as REGOLITH.
+   (canvas textures, procedural geometry, WebAudio synthesis).
 2. **ES modules** loaded via the import map in `index.html` (`three`, `three/addons/`).
    Relative imports between our modules. Must run from a static file server, Chrome 89+ /
    Firefox 108+ / Safari 16.4+ (WebGL2 + import maps).
@@ -30,7 +30,7 @@ stop and flag it in your report instead of unilaterally changing it.**
 8. Syntax-check every file you write with `node --check <file>` before finishing.
    **Do not use browser tools; do not start dev servers.** The integrator does visual QA.
 9. Units: metres, seconds, radians. Y is up. Vehicle-local forward is **+Z**, right is **−X**
-   (matches existing rover math). World is the XZ plane.
+   (matches existing vehicle math). World is the XZ plane.
 10. Keep files under ~1400 lines; split coherently if larger.
 
 ## Module map & ownership
@@ -75,10 +75,6 @@ src/
 tests/                    node:test suites for pure modules      [T9 qa]
 docs/                     this file + tuning/QA docs             [lead]
 ```
-
-Old REGOLITH files `src/game/rover.js`, `gameplay.js`, `lore.js` are **dead** — do not import
-from them; the integrator deletes them. Mine them for patterns (the wheel solver in rover.js
-is the reference implementation).
 
 ## Coordinate/track conventions
 
@@ -144,7 +140,7 @@ export class Terrain {
   surfaceAt(x, z) → surface id (int)   // nearest-sample from baked surface map
   onRoad(x, z) → 0..1                  // road-mask sample (1 = centre of road)
   spline   // TrackSpline for this track (set by whoever constructs it — see race flow)
-  rut(x, z, halfWidth, depth, dig)     // deformable ground (keep from REGOLITH)
+  rut(x, z, halfWidth, depth, dig)     // deformable ground
   addTrack(ax, az, bx, bz, width, strength)   // tyre-mark decal into trail buffer
   update(dt, camera, sunDir)
   setQuality(q); clearDent(); clearTrails(); dispose()
@@ -161,7 +157,7 @@ export class Terrain {
   distance haze colour per theme) driven by theme uniforms. Keep: baked sun-occlusion mask
   (static sun per track → bake once), directional-shadow-map sampling for vehicles, trail
   buffer, dent field (ruts), clipmap + mips + manual-bilinear fallback.
-- The world extent stays ~±600 m playable inside a larger vista like REGOLITH. Track loop
+- The world extent stays ~±600 m playable inside a larger non-playable vista. Track loop
   lengths: training ~900 m, canyon ~1600 m, forest ~1800 m, volcano ~2000 m.
 
 ## Track spline & race data — `src/world/track.js` (T1)
@@ -253,8 +249,9 @@ ones they bypass — encode as checkpoint groups: `idx` equal ⇒ either satisfi
 
 `race.js` drives the session: LOADING → GRID → COUNTDOWN (3-2-1-GO, inputs locked) → RUNNING →
 FINISHED → RESULTS. Owns: spawning player + 5 AI, per-frame vehicle stepping, pair collisions,
-reset/recovery (hold-R or auto after flipped >2.5 s / stuck >4 s / off-course >25 m → respawn
-at last checkpoint, aligned to spline, 1.5 s ghosted), timing, HUD feed, audio cues, autosave
+reset/recovery (hold-R or auto after flipped >2.5 s / stuck >4 s / off-course >30 m (grounded
+time only) / no race-line progress >6 s → respawn at last checkpoint — never inside a gap
+jump's void — aligned to spline, 1.5 s ghosted), timing, HUD feed, audio cues, autosave
 of records. `progression.js` (pure): unlock graph, medals by finish position, records,
 localStorage schema `rallye.v1` via `core/save.js`.
 
@@ -312,8 +309,8 @@ menu theme + in-race driving loop (intensity input), generative, energetic but n
 
 - HIGH tier: ≤2.4 Mpx framebuffer, ≤450 k tris in view, 6 vehicles stepped in <2.0 ms on a
   desktop core, bake <6 s desktop.
-- Mobile (MEDIUM/LOW): 30 fps floor on 2020-era Android; keep REGOLITH's pixel-budget +
-  governor untouched; particle pools bounded by quality tier; no allocations per frame.
+- Mobile (MEDIUM/LOW): 30 fps floor on 2020-era Android; keep the pixel-budget cap +
+  adaptive governor untouched; particle pools bounded by quality tier; no allocations per frame.
 - Download stays ≈ current repo size (three.js dominates). Load-to-menu <4 s desktop.
 
 ## The frame (who calls whom — integrated by T5 in main.js)

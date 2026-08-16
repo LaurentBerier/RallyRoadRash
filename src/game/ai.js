@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — AI DRIVERS
+   RALLY ROAD RASH — AI DRIVERS
    ------------------------------------------------------------
    NO three imports. Plain math over plain numbers. The Vehicle happens to
    expose THREE vectors; we read `.x/.y/.z` off them and never construct one.

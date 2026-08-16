@@ -7,8 +7,11 @@
    Design intent: a wide, flat, forgiving bowl with nothing on it that
    can end your run. Half-widths of 10.4-12.1 m are half again what
    the other tracks give you, the tightest corner is 66 m radius (flat
-   out in third), and the two jumps are 1.1-1.4 m kickers — enough to
-   teach that landings compress the suspension, not enough to bin it.
+   out in third). Two small kickers (1.15-1.35 m) teach that landings
+   compress the suspension; two bigger set pieces - First Air (s=318,
+   a 3 m tabletop) and the Finish Line Flyer (s=835, 4 m, landing
+   through the start gantry) - teach real air with nothing around to
+   bin it on.
    One lap: this is a shakedown, not a race.
    ============================================================ */
 import { SURF } from '../surfaces.js';
@@ -45,8 +48,10 @@ export default {
   ],
 
   jumps: [
+    { s: 318, len: 18, h: 3.0 },   // First Air - tabletop, ~34 m/s on the open back straight
     { s: 380, len: 11, h: 1.15 },
-    { s: 700, len: 11, h: 1.35 }
+    { s: 700, len: 11, h: 1.35 },
+    { s: 835, len: 20, h: 4.0 }    // Finish Line Flyer - lands through the start gantry, clear of the grid
   ],
 
   walls: [{ s0: 820, s1: 140, side: 0 }],

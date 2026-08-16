@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — CENTRAL TUNING
+   RALLY ROAD RASH — CENTRAL TUNING
    ------------------------------------------------------------
    Every number that decides how the game FEELS lives here. Nothing in this
    file imports anything: it is pure data, readable from Node tests and from
@@ -24,6 +24,12 @@
    the ground fast enough that the suspension does the talking. It also lets
    the tyres carry more absolute grip (grip scales with weight) without the
    cornering speeds getting silly.
+
+   G itself stays this heavy so GROUND handling — grip, suspension sag, the
+   arc a car carries into a lip — keeps its bite. The arcade float on a big
+   jump comes instead from TUNE.air.hangGravity, which scales gravity back
+   only once the car has been genuinely airborne, so jumps fly ~1.7x further
+   while rut-chatter and landings still carry full weight.
 
    EVERY module reads gravity from here. Do not hardcode 9.81 anywhere. */
 export const G = 12.8;                       // m/s²
@@ -200,18 +206,18 @@ export const TUNE = {
   air: {
     /* Authorities are sized against HANG TIME, not against how they feel in a
        vacuum. With `damp` below, holding full input for a typical 1.2 s jump
-       buys about 35° of pitch — enough to save a bad launch, not enough to
+       buys about 58° of pitch — enough to save a bad launch, not enough to
        flip. A three-second volcano jump held flat out gets you most of the way
        round, which is the correct punishment for holding throttle off a lip. */
-    pitchAuthority: 1.15,   // rad/s² at full (throttle − brake). Throttle lifts the
+    pitchAuthority: 1.85,   // rad/s² at full (throttle − brake). Throttle lifts the
                             //       nose, brake drops it — the way every player expects.
-    yawAuthority: 1.30,     // rad/s² at full steer, about the body's up axis. This is
+    yawAuthority: 2.10,     // rad/s² at full steer, about the body's up axis. This is
                             //       how you line a landing up with the road, so it is
                             //       the most generous of the three.
-    rollAuthority: 0.75,    // rad/s² at full steer, about the body's forward axis.
+    rollAuthority: 1.25,    // rad/s² at full steer, about the body's forward axis.
                             //       Deliberately smallest: it is garnish, and roll is
                             //       the axis that ruins a landing.
-    alignAssist: 1.5,       // rad/s² of levelling torque toward the ground normal, at
+    alignAssist: 2.3,       // rad/s² of levelling torque toward the ground normal, at
                             //       90° of misalignment. Weighted by sin(error) and then
                             //       faded OUT past alignGiveUp — the assist tidies up the
                             //       landing you nearly had, and abandons you completely
@@ -219,12 +225,29 @@ export const TUNE = {
                             //       whole design: without it, a stronger assist just
                             //       means the game lands for you and jumps stop mattering.
     alignGiveUp: [1.0, 2.2],// rad — assist fades from full to nothing between these.
-    alignDelay: 0.6,        // s of airtime before the assist starts fading in.
+    alignDelay: 0.45,       // s of airtime before the assist starts fading in.
     alignRamp: 0.9,         // s over which it fades to full once it starts.
     damp: 0.75,             // 1/s — angular damping while airborne. Sets the terminal
                             //       rotation rate at authority/damp, which is the number
                             //       that actually decides whether you can flip.
     spinCap: 5.0,           // rad/s — hard cap on airborne angular rate. Anti-explosion.
+                            //       Stays at 5.0: airborne rates are authority/damp
+                            //       limited far below it anyway, and a higher cap lets
+                            //       crash-bounce chaos carry enough spin to make the
+                            //       flip watchdog non-deterministic.
+
+    /* Hang time. A different mechanic from the authorities above: instead of
+       shaping how the car ROTATES in the air, this scales gravity itself once
+       the car has been genuinely airborne for a beat, so a jump flies further
+       without changing how it tumbles. Gated on airTime the same way as the
+       camera's airLo/airHi, so rut chatter never floats — only a real jump
+       does. See the gravity term in vehicle.js and the note above
+       `export const G` below. */
+    hangGravity: 0.58,      // fraction of G while fully airborne — the arcade
+                            //       hang-time. 1.0 = realistic.
+    hangLo: 0.12,           // s of continuous airTime below which gravity stays
+                            //       full (rut blips get no float).
+    hangHi: 0.35,           // s of airTime by which the float is fully in.
   },
 
   /* ---------------------------------------------------------------
@@ -262,8 +285,20 @@ export const TUNE = {
   reset: {
     flipTime: 2.5,          // s upside-down (Vehicle.flipped true) before auto-reset.
     stuckTime: 4.0,         // s below stuckSpeed before auto-reset.
-    stuckSpeed: 1.2,        // m/s — the "not actually going anywhere" threshold.
-    offCourseDist: 25,      // m from the centreline before you count as lost.
+    stuckSpeed: 1.6,        // m/s — the "not actually going anywhere" threshold.
+                            //       1.2 let a car beached on a slope slide backwards
+                            //       through the window forever; 1.6 still clears any
+                            //       real crawl (a mud bog at full throttle is mercy).
+    noProgressDist: 4,      // m of race-line progress that counts as "still racing".
+    noProgressTime: 6.0,    // s on the ground without it before recovery. The net
+                            //       under every other gate: beached cars can dodge
+                            //       stuck/wedge/off-course thresholds indefinitely,
+                            //       but they cannot fake forward progress.
+    offCourseDist: 30,      // m from the centreline before you count as lost.
+                            //       Raised from 25 alongside the longer arcade
+                            //       hang (TUNE.air.hangGravity) — bigger air can
+                            //       carry you further off-line before you are
+                            //       back down to be judged.
     offCourseTime: 2.5,     // s you must STAY lost — a crest overshoot is not a DNF.
     ghostTime: 1.5,         // s of collision-immune, semi-transparent respawn.
     holdTime: 0.8,          // s the player must hold R for a manual reset.

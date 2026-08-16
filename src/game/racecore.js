@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — RACE CORE
+   RALLY ROAD RASH — RACE CORE
    ------------------------------------------------------------
    Laps, checkpoint slots, progress, standings and results.
 

@@ -6,13 +6,14 @@
    The lap in three acts:
      s    0- 500  fast open sweepers along the mesa flank, sand over
                   hardpack, nothing to hit
-     s  560- 740  THE GAP. A 15 m void carved across a rising straight
-                  behind a 2.2 m kicker. Ballistics say ~21 m/s clears
+     s  560- 740  THE GAP. A 24 m void carved across a rising straight
+                  behind a 3.2 m kicker. Ballistics say ~26 m/s clears
                   it, so it is free at racing speed and fatal at a
                   crawl. The `shortcut` is the way round: a slot canyon
                   that costs ~33 m of extra road and two blind corners.
      s 1120-1310  the hairpin, 31 m radius, bare rock between walls
-   Three more kickers pace the rest of the lap.
+   Six more kickers pace the rest of the lap - Mesa Launcher (s=100)
+   and a rhythm double (s=1475/1545) among them.
    ============================================================ */
 import { SURF } from '../surfaces.js';
 
@@ -54,10 +55,13 @@ export default {
   ],
 
   jumps: [
+    { s: 100, len: 20, h: 4.5 },                 // Mesa Launcher - 40+ m/s opening straight
     { s: 250, len: 12, h: 1.6 },
-    { s: 630, len: 16, h: 2.2, gap: 15 },        // ~21 m/s to clear; see header
+    { s: 630, len: 18, h: 3.2, gap: 24 },        // true canyon leap, ~26 m/s to clear; see header
     { s: 880, len: 13, h: 1.9 },
-    { s: 1330, len: 12, h: 1.7 }
+    { s: 1330, len: 12, h: 1.7 },
+    { s: 1475, len: 13, h: 2.4 },                // rhythm double 1/2
+    { s: 1545, len: 13, h: 2.4 }                 // rhythm double 2/2, 70 m on
   ],
 
   /* The slot canyon. Leaves the main line 70 m before the kicker and rejoins

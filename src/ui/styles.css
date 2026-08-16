@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — UI / HUD
+   RALLY ROAD RASH — UI / HUD
    ------------------------------------------------------------
    Bold arcade rally: near-black plates, one hot orange accent, one cool
    cyan for information, off-white type. Chunky italic numerals for the
@@ -86,12 +86,14 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
    ============================================================ */
 .wordmark{
   font-weight:900;font-style:italic;letter-spacing:-.035em;line-height:.86;
-  font-size:clamp(46px,9vw,104px);
+  /* Two lines ("RALLY ROAD" / "RASH"), so the sizing is set by the 10-char
+     first line rather than the block height — see the <br> in index.html. */
+  font-size:clamp(32px,6.2vw,72px);
   transform:scaleX(.88) skewX(-4deg);transform-origin:left center;
   display:inline-block;white-space:nowrap;
   text-shadow:0 calc(2px + .4vw) 0 rgba(0,0,0,.55);
 }
-.wordmark.big{font-size:clamp(56px,10vw,132px)}
+.wordmark.big{font-size:clamp(38px,7vw,90px)}
 .wordmark .wm-r{color:var(--acc)}
 .strap{
   margin-top:.55em;font-size:clamp(10px,1.5vw,14px);font-weight:700;
@@ -762,7 +764,7 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   .scr-head h2{font-size:19px}
   .scr-sub{display:none}
   .main-actions .btn{min-height:48px}
-  .wordmark.big{font-size:clamp(40px,8vh,64px)}
+  .wordmark.big{font-size:clamp(26px,5.2vh,44px)}
   .podium{min-height:132px}
   .riser.p1 .block{height:80px}.riser.p2 .block{height:58px}.riser.p3 .block{height:42px}
 }

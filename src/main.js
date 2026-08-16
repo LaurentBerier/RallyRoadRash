@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — BOOTSTRAP, APP STATE MACHINE, FRAME LOOP
+   RALLY ROAD RASH — BOOTSTRAP, APP STATE MACHINE, FRAME LOOP
    ------------------------------------------------------------
    BOOT → MENU → TRACKS → GARAGE → RACE-LOADING → RACE → (results, inside
    Race) → MENU. Pause lives inside Race.
@@ -113,7 +113,7 @@ async function boot() {
   App.tick = tick;
   App.showScreen = showScreen;
   App.startRace = startRace;
-  window.RALLYE = App;                 // QA harness: RALLYE.tick(1/60), .race, .state
+  window.ROADRASH = App;                 // QA harness: ROADRASH.tick(1/60), .race, .state
   requestAnimationFrame(frame);
 }
 

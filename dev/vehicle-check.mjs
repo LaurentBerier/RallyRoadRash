@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — vehicle physics smoke test
+   RALLY ROAD RASH — vehicle physics smoke test
    ------------------------------------------------------------
    These gates ARE the acceptance criteria for the handling model. Every one
    of them is a number a player can feel; if one moves, the car changed.

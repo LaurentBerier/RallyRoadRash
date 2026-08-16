@@ -1,4 +1,4 @@
-/* Zero-dependency static server for REGOLITH.
+/* Zero-dependency static server for RALLY ROAD RASH.
    node server.js [port]                                     */
 import http from 'node:http';
 import fs from 'node:fs';
@@ -63,6 +63,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`\n  REGOLITH — The Silence at Anaxagoras`);
+  console.log(`\n  RALLY ROAD RASH — Off-Road Championship`);
   console.log(`  running at  http://localhost:${PORT}\n`);
 });

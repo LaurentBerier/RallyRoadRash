@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — 4-wheel rigid-body vehicle
+   RALLY ROAD RASH — 4-wheel rigid-body vehicle
    ------------------------------------------------------------
    A proper rigid body (quaternion + body-frame inertia tensor) with a raycast
    wheel at each corner: spring/damper suspension along the chassis's own down
@@ -7,7 +7,7 @@
    wheel-spin solver because the wheel inertia is small and the slip stiffness
    is large — an explicit step on that pair oscillates and then explodes.
 
-   It is the REGOLITH rover solver, re-aimed at Earth arcade:
+   The solver is aimed squarely at Earth arcade:
      • gravity comes from config.G (12.8, heavy on purpose — see config.js)
      • springs sized from mass to a target ride frequency, not hand-picked
      • grip is per-wheel and comes from the surface map under that wheel
@@ -427,8 +427,8 @@ export class Vehicle {
 
       /* Contact patch, NOT the hub. The lever from the centre of mass down to
          the patch is comHeight, and it is what turns tyre force into pitch and
-         roll — i.e. into weight transfer. Applying tyre force at the hub (as
-         the rover did, where it hardly mattered) would cancel that lever out. */
+         roll — i.e. into weight transfer. Applying tyre force at the hub
+         instead would cancel that lever out entirely. */
       const cp = _p8.copy(_p4).addScaledVector(up, -(S.suspRest - w.comp + S.wheelR));
       const cv = _p9.copy(this.vel).add(_p10.crossVectors(this.omega, cp));
       const vLong = cv.dot(wf), vLat = cv.dot(wr);
@@ -515,8 +515,17 @@ export class Vehicle {
     this.slipLat = slipLatMax;
     this.slipLong = slipLongMax;
 
-    /* ---- gravity ---- */
-    force.y -= this.mass * G;
+    /* ---- gravity ----
+       Full weight on the ground. Once the car has been genuinely airborne for
+       a beat (the airTime gate ignores rut blips, same idea as the camera's
+       airLo), TUNE.air.hangGravity scales the weight back — the arcade hang
+       that turns a kicker into a set piece without touching ground handling.
+       Touchdown restores full weight instantly, so landings still thump. */
+    let gMul = 1;
+    if (contacts === 0) {
+      gMul = 1 - (1 - T.air.hangGravity) * sstep(T.air.hangLo, T.air.hangHi, this.airTime);
+    }
+    force.y -= this.mass * G * gMul;
 
     if (contacts > 0) {
       this.airTime = 0;
@@ -1054,8 +1063,8 @@ function buildWheelGeometry(R, W) {
     face.rotateY(s * Math.PI / 2); face.translate(s * (W / 2 + W * 0.16), 0, 0);
     parts.push(face);
   }
-  // Cleats. Meatier than the rover's grousers — these are the silhouette at
-  // speed, and a tyre without them reads as a black doughnut.
+  // Cleats, deliberately chunky — these are the silhouette at speed, and a
+  // tyre without them reads as a black doughnut.
   const N = 16;
   for (let i = 0; i < N; i++) {
     const a = i / N * Math.PI * 2;
@@ -1115,7 +1124,7 @@ function liveryTexture(paint, paint2, num, name, rng, size = 512) {
   g.fillText(name, size * 0.50, H * 0.24);
   g.font = `600 ${Math.round(H * 0.052)}px ui-monospace, Menlo, monospace`;
   g.fillStyle = 'rgba(20,20,22,0.66)';
-  g.fillText('RALLYE  ·  WORKS TEAM', size * 0.50, H * 0.545);
+  g.fillText('ROAD RASH · WORKS TEAM', size * 0.50, H * 0.545);
   for (let i = 0; i < 5; i++) {
     const bx = size * (0.50 + i * 0.095), by = H * 0.80;
     g.fillStyle = `rgba(${20 + rng() * 40 | 0},${20 + rng() * 40 | 0},${24 + rng() * 40 | 0},0.55)`;

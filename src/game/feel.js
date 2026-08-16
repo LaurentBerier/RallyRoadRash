@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — GAME FEEL
+   RALLY ROAD RASH — GAME FEEL
    ------------------------------------------------------------
    One class, one owner for every "juice" transient in the game. race.js gets
    five call sites (landing / collision / jump / nearMiss / reset) plus one
@@ -28,7 +28,12 @@ const D2R = Math.PI / 180;
 
 const F = {
   /* ---- continuous ---- */
-  shakeLo: 18, shakeHi: 40,   // m/s over which the speed shake fades in
+  shakeLo: 26, shakeHi: 48,   // m/s over which the speed shake fades in. 18 m/s is
+                              //   65 km/h — barely above a trundle for these cars, so
+                              //   the old window had the shake at half strength for
+                              //   most of a lap and it read as the camera being loose
+                              //   rather than as speed. It now starts at ~95 km/h and
+                              //   is still climbing past the fastest car's top speed.
   shakeUp: 8, shakeDown: 6,   // 1/s attack / release
   airCalm: 10,                // 1/s — how fast the continuous channels die in the air
   swayRef: 0.9,               // _accelLat as a fraction of G that reads as full sway
@@ -43,13 +48,13 @@ const F = {
   /* ---- landing ---- */
   landShake: 0.09,            // per m/s of hardHit
   landShakeMax: 0.9,
-  landPitch: 1.2 * D2R,       // rad of nose-down kick at full k
+  landPitch: 1.7 * D2R,       // rad of nose-down kick at full k
   landDecay: 7.0,             // 1/s ≈ gone in 0.45 s
   landModerate: 3.5,          // m/s — TUNE.susp.hitVel is 3.0; a hit worth an exposure
                               //       dip is a step above "the suspension noticed"
-  landHeavy: 7.0,             // m/s — white pop threshold
+  landHeavy: 6.0,             // m/s — white pop threshold
   expDip: 0.97, expTime: 0.12,
-  flashAmt: 0.06,
+  flashAmt: 0.08,
 
   /* ---- collision ---- */
   hitShake: 0.07,             // per m/s of impact
@@ -59,8 +64,8 @@ const F = {
   pinchFov: -2.0, pinchTime: 0.15,
 
   /* ---- jump ---- */
-  jumpPitch: 0.6 * D2R,       // rad of anticipation lift
-  jumpIn: 0.10, jumpOut: 0.22,
+  jumpPitch: 1.2 * D2R,       // rad of anticipation lift
+  jumpIn: 0.10, jumpOut: 0.40,
 
   /* ---- near miss ---- */
   missFov: 1.5, missTime: 0.09,

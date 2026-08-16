@@ -14,8 +14,6 @@
   controller drives to the horizon — symptom: d grows monotonically.)
 - Dev harness: dev/firstlight.html?track=id&veh=id (server: `node server.js 5490`).
   window.__FL exposes {veh, terrain, engine, fps}.
-- Root index.html still boots OLD REGOLITH main.js (throws on missing MOON_G export) —
-  expected until T5/T7 land; ignore that console error when testing the harness.
 - Visual polish backlog (wave 3): pale streak artifact on distant canyon hillside;
   forest tree density near track too sparse (more corridor feel); ROAD "two-tone"
   comment in terrain.js describes an effect the flat road mask can't produce (either
@@ -62,7 +60,7 @@ Race-flow obligations:
   (sunDir/sunColor/hemi/zenith/horizon/haze/fog/clouds). Terrain does NOT hardcode sun:
   race flow passes `sky.sunDir` into `terrain.update(dt, camera, sky.sunDir)` (bakes the
   occlusion mask once on first change) and copies sun colors into terrain uniforms at race
-  setup, REGOLITH `syncSun` style.
+  setup, `syncSun` style.
 - `new Sky(renderer, scene, quality, themeName)`; statics per race; `sky.sunMesh` is the
   billboard (`engine.sun` remains the DirectionalLight). `sky.projectSun(camera, out)` feeds
   `engine.final.uniforms.uSunUV` (replaces old main.js flare math).
@@ -83,18 +81,24 @@ Race-flow obligations:
 - Lead follow-ups at integration: try bloom threshold ~1.4 for daylight (currently 1.15);
   watch near-camera gl.POINTS dust clipping; `QUALITY.stars` now dead data.
 
-## Vehicle (config.js 327 / vehicles.js 212 / vehicle.js 1342) — DONE, 102/102 gates
+## Vehicle (config.js 363 / vehicles.js 216 / vehicle.js 1458) -- DONE, 102/102 gates
 
 - `G = 12.8` and `TUNE` live in src/game/config.js (groups: steer, assists, air, reset,
   collide, drift, drive, tyre, susp, aero, sim). `VEHICLES`, `VEHICLE_BY_ID`,
-  `statBars(spec)` in vehicles.js. Specs: hopper 36 m/s understeery-friendly, ridgeback
-  32 m/s heavy/planted (won't swap ends), redline 41 m/s throttle-rotates.
+  `statBars(spec)` in vehicles.js. Specs: hopper 39 m/s understeery-friendly, ridgeback
+  34 m/s heavy/planted (won't swap ends), redline 45 m/s throttle-rotates.
 - Race-flow wiring: `v.step(dt, ctl)` for all → `resolveVehiclePair(a,b)` each pair once →
   THEN read `v.hardHit` (step zeroes it, collisions max into it). Reset = `placeAt(x,z,yaw)`
   (aligns to ground normal, zeroes motion); set `v.ghost = true` for TUNE.reset.ghostTime
   after respawn — pair resolver early-returns on ghosts. `flipped` latches per TUNE.reset.
-  Thresholds in TUNE.reset verbatim (flipTime 2.5, stuckTime 4, stuckSpeed 1.2,
-  offCourseDist 25, ghostTime 1.5, holdTime 0.8).
+  Thresholds in TUNE.reset verbatim (flipTime 2.5, stuckTime 4, stuckSpeed 1.6,
+  noProgressDist 4, noProgressTime 6, offCourseDist 30, offCourseTime 2.5,
+  ghostTime 1.5, holdTime 0.8). Recovery hardening this pass: stuckSpeed was 1.2 (a
+  car beached on a slope could slide backward through the window forever);
+  offCourseDist was 25 (raised to give the longer arcade air room to land before
+  being judged); noProgress is the new watchdog underneath every other gate, keyed
+  off race-line progress so a beached car cannot fake it, and airborne time never
+  counts against it.
 - AI contract: output only ctl; throttle opposite travel >1.2 m/s = braking (not reverse);
   built-in countersteer assist catches slides if AI just aims at the line; yaw rate capped
   2.0 rad/s. Read spec.topSpeed as honest terminal speed.
@@ -112,15 +116,15 @@ Race-flow obligations:
 
 ## Terrain/tracks/props (terrain.js 1709 / track.js 714 / tracks/* / props.js 946) — DONE
 
-- Tracks: training 900 m (7 cp, 2 jumps, laps 1), canyon 1600 m (13 cp + 1 alt, 4 jumps
-  incl. 15 m gap needing ≥24.2 m/s, slot-canyon shortcut), forest 1800 m (14 cp + 2 alt,
-  3 wooden-ramp jumps, high-route shortcut, 58 m climb), volcano 2000 m (16 cp, 4 jumps,
-  biggest 3.6 m lip / 12 m gap over lava, 19% grades). All deterministic; bake 0.4–0.8 s
-  in Node; road fidelity within 0.3 m everywhere; only jump lips are sharp.
+- Tracks: training 900 m (9 cp, 4 jumps, laps 1), canyon 1600 m (14 cp + 1 alt, 7 jumps
+  incl. a 24 m gap needing ~26 m/s, slot-canyon shortcut), forest 1800 m (15 cp + 2 alt,
+  5 wooden-ramp jumps incl. an 18 m gap, high-route shortcut, 58 m climb), volcano 2000 m
+  (16 cp, 5 jumps, biggest 5.0 m lip / 24 m gap over lava, 19% grades). All deterministic;
+  bake 0.4-0.8 s in Node; road fidelity within 0.3 m everywhere; only jump lips are sharp.
 - `bakeTrack(trackDef, report)` generator → baked carries `{theme, trackDef, trackData}`;
   `new Terrain(renderer, baked, quality, caps, trackDef)`; **terrain.spline and
   terrain.trackData are pre-populated — do NOT call buildTrackData again** (14–24 ms).
-- REMOVED exports: `MOON_G`, `bakeTerrain`, `baseHeight`, `HOME`, `RIM_R/RIM_W`,
+- REMOVED exports: `bakeTerrain`, `baseHeight`, `HOME`, `RIM_R/RIM_W`,
   `Terrain.excavate`. CHANGED: `MACRO_EXT` 1200→1360, `DENT_EXT`→1200. NEW exports:
   `PLAYABLE_EXT 600`, `PLAYABLE_R 620`, `THEMES`, `themePalette(theme)`,
   `themeBaseFn(theme)`. `terrain.update(dt, camera, sunDir?)` — sunDir optional
@@ -218,12 +222,20 @@ rig.snapBehind(vehicle)   // hard reset behind car (race start / respawn)
   during LOADING. Racecore: checkpoint groups fold by idx ("slots"); nextSlot starts at 1
   (slot 0 = start line ⇒ satisfying it always completes a lap); raceS ratchets (monotonic);
   wrongway on separate unratcheted estimate (arm 1.2 s, >4 m/s); standings finished-first.
-- INTEGRATOR FIXES OWED: (a) vehicle.js should expose `collideR` (props reads it; vehicle
-  publishes collRadius — race.js bridges for now); (b) TUNE.reset should gain
-  `offCourseTime: 2.5` (race.js local today); (c) difficultyFor() curve in main.js is a
-  placeholder pending T6 skill mapping.
+- INTEGRATOR FIXES OWED, status this pass: (a) vehicle.js should expose `collideR` --
+  DONE, vehicle.js now publishes `collideR` directly (race.js's bridge in `_buildField`
+  is redundant but harmless, left alone); (b) TUNE.reset should gain `offCourseTime: 2.5`
+  -- DONE, it is a real TUNE.reset field now (race.js keeps a local const as a
+  convenience alias); (c) difficultyFor() curve in main.js is still a placeholder
+  pending T6 skill mapping.
 - Known gaps (documented, acceptable v1): no player DNF/stage timeout; respawn uses main
   spline s even for shortcut alternates (generous, safe).
+- Recovery fix this pass: gates sit ON jump lips, so the respawn point (slot.s + 3) could
+  land inside a gap jump's carved void -- QA watched a car clear the Caldera Leap's lip
+  gate, fall short, and respawn straight into the lava floor, forever. Any respawn that
+  would fall inside a void now goes to the landing side of the gap instead. HUD air-time
+  flourish (`AIRTIME_BRAG`) raised to 1.3 s: hang-time gravity makes 1 s airs routine, so
+  the brag needed to stay something you earn.
 - race.js emits `race.nextCp {x,z,idx,dist}` in HUD payload (hud may point the off-course
   pill later). newRecord carries new TIMES not booleans. audio.wrongWay is fired by hud.js
   on payload edge, NOT race.js (no double stinger).
@@ -257,15 +269,22 @@ rig.snapBehind(vehicle)   // hard reset behind car (race start / respawn)
 - `rig.setMode(camMode, v)` + `rig.snapBehind(v)` at grid formation, after EVERY respawn,
   and on countdown→RUNNING; `feel.reset()` beside every snapBehind AND on pause/screen
   change (Feel holds uniforms otherwise). ORBIT mode for results podium.
+- Camera/results contract: `_showResults` forces `CAM.ORBIT` for the podium but first
+  stashes the mode the player was actually driving in on `rig.raceMode` (the rig outlives
+  the Race instance); `_enterGrid` reads it back on the next grid -- next track, restart,
+  or a fresh race from the menu -- and sanitises ORBIT itself to CHASE, since a race must
+  never start in the podium orbit. Fixes "every race after any results screen starts
+  stuck orbiting."
 - `feel.landing(v.hardHit)` once per touchdown EDGE (after step + pairs — same edge as
   audio.land/hud.airtime); `feel.jump()` on lip departure; `feel.collision(impact, dirOrNull)`
   from pair/prop hits; `feel.nearMiss()` optional (1.2 m at >8 m/s closing).
 - Feel exclusively owns final-pass uVignette/uExposure/uFlash while updating; race.js must
   never write them, and must route all shake through feel (never rig.addShake directly).
 - Settings: rig.fovScale = fov/58; rig.sens; rig.invertY; rig.autoCentre.
-- Wave-3 tuning watchlist: rig.yawHz (1.91 — drift framing vs snap), CH.pivotYAir (4.5 —
-  jump arc read, verify on volcano 3.6 m lip), feel shakeLo/shakeHi (18/40 — rumble floor;
-  watch redline saturation).
+- Tuning watchlist, numbers current as of this pass: rig.yawHz (1.91 -- drift framing vs
+  snap), CH.pivotYAir (3.4 -- jump arc read, verify on volcano's 5.0 m Caldera Leap lip),
+  CH.airDist/airFov (1.22 / 8 deg -- boom-out and FOV widen while airborne, same read),
+  feel shakeLo/shakeHi (26/48 -- rumble floor; watch redline saturation).
 - vehicle.steerNorm read with typeof guard (T2 may expose; fallback _accelLat/9).
 
 ### AI — src/game/ai.js (T6) — NO three imports (plain math)

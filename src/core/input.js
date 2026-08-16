@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — input: keyboard, mouse, gamepad, touch
+   RALLY ROAD RASH — input: keyboard, mouse, gamepad, touch
    ------------------------------------------------------------
    Contract: docs/INTEGRATION-NOTES.md "Input (T7 owns input.js changes)".
      poll() -> { throttle -1..1, steer -1..1, brake 0..1, handbrake 0|1,
@@ -19,8 +19,8 @@
       because a real pedal set would use it.
 
    2. NO POINTER LOCK. This is a rally game played in short bursts; grabbing
-      the cursor to look around was a REGOLITH survey-sim affordance and it is
-      gone. Look is right-drag on desktop, right stick on a pad.
+      the cursor to look around is a survey-sim affordance that has no place
+      here. Look is right-drag on desktop, right stick on a pad.
 
    3. THE GAMEPAD DRIVES MENUS THROUGH REAL KEY EVENTS. The d-pad and A/B
       dispatch synthetic KeyboardEvents on window while a screen is open (the
@@ -273,8 +273,8 @@ export class Input {
   /* Pointer lock is gone (see the header). These stay as no-ops because
      race.js and main.js still call them; delete the call sites and then
      delete these. */
-  lock() { /* no pointer lock in RALLYE */ }
-  unlock() { /* no pointer lock in RALLYE */ }
+  lock() { /* no pointer lock in RALLY ROAD RASH */ }
+  unlock() { /* no pointer lock in RALLY ROAD RASH */ }
 
   _applyTouchVis() {
     if (!this.touchEl) return;

@@ -1,8 +1,8 @@
 {
-  "name": "rallye",
+  "name": "rally-road-rash",
   "version": "1.0.0",
   "private": true,
-  "description": "RALLYE — Off-Road Championship. A 3D arcade rally racer in a browser tab: zero dependencies, no build step, everything procedural.",
+  "description": "RALLY ROAD RASH — Off-Road Championship. A 3D arcade rally racer in a browser tab: zero dependencies, no build step, everything procedural.",
   "type": "module",
   "scripts": {
     "start": "node server.js",

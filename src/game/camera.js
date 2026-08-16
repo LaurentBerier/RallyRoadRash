@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — CAMERA RIG   (CHASE / HOOD / ORBIT)
+   RALLY ROAD RASH — CAMERA RIG   (CHASE / HOOD / ORBIT)
    ------------------------------------------------------------
    The chase camera is most of what a player calls "game feel", so almost every
    number in here is a feel decision rather than a technical one. Three rules
@@ -89,13 +89,24 @@ const CH = {
                           //     reads as rubber-banding, not as weight.
   pivotY: 13,             // 1/s — vertical follow on the ground. Loose enough that
                           //     suspension chatter never reaches the lens.
-  pivotYAir: 4.5,         // 1/s — vertical follow in the air. THIS is what makes a jump
+  pivotYAir: 3.4,         // 1/s — vertical follow in the air. THIS is what makes a jump
                           //     read: the car climbs out of the frame and drops back in.
+                          //     Lowered further still: the car climbs even further out of
+                          //     frame on a big jump, and that IS the jump reading bigger.
   airBlend: 6,            // 1/s — how fast the airborne settings fade in and back out.
                           //     ~0.5 s of recovery after touchdown, which is the whole
                           //     "no snap on landing" requirement.
-  airDist: 1.12,          // boom length multiplier while airborne.
-  airFov: 4,              // deg of extra FOV while airborne.
+  airLo: 0.07,            // s of continuous air below which the blend stays at zero…
+  airHi: 0.20,            // …and above which it is allowed to go all the way to 1.
+                          //   `vehicle.airborne` is literally `contacts === 0`, so at
+                          //   speed a rutted straight sets it for one or two frames at
+                          //   a time. Chasing those blips pumps the boom by 12 %, the
+                          //   FOV by 4° and the vertical follow rate by 3×, several
+                          //   times a second — which is most of what "the camera goes
+                          //   unstable when I go fast" actually is. A real jump clears
+                          //   airHi in the first 12 frames and is unaffected.
+  airDist: 1.22,          // boom length multiplier while airborne.
+  airFov: 8,              // deg of extra FOV while airborne.
 
   fovBase: 58,            // deg (× fovScale)
   fovSpeed: 13,           // deg added by speed…
@@ -136,7 +147,23 @@ const BLEND = 0.28;         // s — cross-fade on a mode change. Cutting from a
 const SHAKE_CAP = 1.5;      // impulse channel ceiling
 const SHAKE_DECAY = 2.6;    // 1/s
 const ROT_CAP = 0.055;      // rad (~3.2°) — total rotational shake clamp
-const POS_CAP = 0.060;      // m — total positional shake clamp
+const POS_CAP = 0.045;      // m — total positional shake clamp
+
+/* Shake oscillator rates, rad/s. These are SAMPLED once a frame, never
+   filtered, so the ceiling is set by the frame rate and not by taste: at 60 Hz
+   anything past ~30 rad/s (4.8 Hz) gets under seven samples a cycle and reads
+   as erratic judder rather than as vibration — and because dt is whatever rAF
+   hands us, the phase step is irregular too, so the judder does not even repeat.
+   The originals ran at 47–62 rad/s (7.5–9.8 Hz), which is why the continuous
+   speed shake looked like the camera coming loose. Everything here is under
+   30 rad/s and mutually non-commensurate so the sum still never repeats. */
+const RS = {
+  rotA: 24.1, rotB: 13.7,   // yaw pair  — 3.8 Hz / 2.2 Hz
+  rotC: 19.9, rotD: 10.3,   // pitch pair — 3.2 Hz / 1.6 Hz
+  posA: 27.7, posB: 22.3,   // 4.4 Hz / 3.5 Hz
+  rumRot: 0.009,            // rad per unit rumble (was 0.016)
+  rumPos: 0.018,            // m   per unit rumble (was 0.035)
+};
 
 /* ============================================================
    CameraRig
@@ -283,7 +310,7 @@ export class CameraRig {
     const lz = look ? (look.zoom || 0) : 0;
     const s = 0.0022 * this.sens;
     if (this.mode !== CAM.ORBIT) {
-      // Sign matches REGOLITH: positive lookX swings the view right.
+      // Sign convention: positive lookX swings the view right.
       this.lookYaw -= lx * s;
       this.lookPitch = clamp(this.lookPitch + ly * s * (this.invertY ? -1 : 1), -1.2, 1.2);
     }
@@ -295,8 +322,14 @@ export class CameraRig {
     const vHoriz = Math.hypot(vehicle.vel.x, vehicle.vel.z);
     this._autoCentre(dt, vHoriz);
 
-    /* ---- airborne blend ------------------------------------- */
-    const airWant = vehicle.airborne ? 1 : 0;
+    /* ---- airborne blend -------------------------------------
+       Gated on how long the car has actually been off the ground, not on the
+       raw flag: see CH.airLo. A vehicle-like without airTime keeps the old
+       all-or-nothing behaviour. */
+    const airWant = vehicle.airborne
+      ? (typeof vehicle.airTime === 'number'
+        ? sstep(CH.airLo, CH.airHi, vehicle.airTime) : 1)
+      : 0;
     this._air += (airWant - this._air) * (1 - Math.exp(-dt * CH.airBlend));
 
     /* ---- per-mode pose -------------------------------------- */
@@ -332,8 +365,8 @@ export class CameraRig {
   }
 
   /* ------------------------------------------------------------
-     Auto-centre. Ported from REGOLITH: an idle timer, then a ramp, so the view
-     is never dragged back while the player is still looking around. Rate is
+     Auto-centre: an idle timer, then a ramp, so the view is never dragged
+     back while the player is still looking around. Rate is
      gated on speed so a parked car recentres gently instead of yanking.
      ------------------------------------------------------------ */
   _autoCentre(dt, vHoriz) {
@@ -570,7 +603,7 @@ export class CameraRig {
   }
 
   /* ------------------------------------------------------------
-     Shake, applied AFTER the pose is final (REGOLITH pattern). Rotational
+     Shake, applied AFTER the pose is final. Rotational
      offsets only for the impulse channel — translating the eye is how a shake
      ends up inside a wall. The continuous channel adds a capped few centimetres
      of camera-local translation, which is small enough that the 0.55 m ground
@@ -583,13 +616,13 @@ export class CameraRig {
     const t = this._t;
     // Impulse energy falls off as the square so a big hit is loud and the tail
     // is short; a linear decay leaves a long mushy wobble.
-    let rot = this.shake * this.shake * 0.075 + this._rumbleS * 0.016;
+    let rot = this.shake * this.shake * 0.075 + this._rumbleS * RS.rumRot;
     if (rot > ROT_CAP) rot = ROT_CAP;
 
     let ry = 0, rx = 0;
     if (rot > 1e-5) {
-      ry = (Math.sin(t * 47.3) + 0.6 * Math.sin(t * 23.7)) * rot * 0.625;
-      rx = (Math.cos(t * 39.1) + 0.6 * Math.cos(t * 17.3)) * rot * 0.5;
+      ry = (Math.sin(t * RS.rotA) + 0.6 * Math.sin(t * RS.rotB)) * rot * 0.625;
+      rx = (Math.cos(t * RS.rotC) + 0.6 * Math.cos(t * RS.rotD)) * rot * 0.5;
     }
     ry += this.kickYaw;
     rx += this.kickPitch;
@@ -605,9 +638,9 @@ export class CameraRig {
 
     let px = 0, py = 0;
     if (this._rumbleS > 1e-4) {
-      const a = this._rumbleS * 0.035;
-      px = Math.sin(t * 61.7) * a;
-      py = Math.cos(t * 53.9) * a * 0.8;
+      const a = this._rumbleS * RS.rumPos;
+      px = Math.sin(t * RS.posA) * a;
+      py = Math.cos(t * RS.posB) * a * 0.8;
     }
     if (this.sway > 1e-4) {
       // Low-frequency lateral sway from the slip channel. Positional, never

@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — EVERY SOUND IS SYNTHESISED
+   RALLY ROAD RASH — EVERY SOUND IS SYNTHESISED
    ------------------------------------------------------------
    No sample files, no network. A rally car is mostly three
    noises stacked: a firing engine, four contact patches, and
@@ -786,7 +786,7 @@ export class Audio {
     this._grain(true, t + 0.01, 0.09 * f, 3400, 4, 0.05, 1.4, clamp(pan * 0.6, -1, 1));
   }
 
-  /** Generic heavy landing body — kept from REGOLITH, race flow still uses it. */
+  /** Generic heavy landing body — the race flow still uses it. */
   thud(force = 1) {
     if (!this.ready) return;
     const ctx = this.ctx, t = this.now(), f = Math.min(force, 2);

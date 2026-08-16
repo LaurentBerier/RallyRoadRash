@@ -257,7 +257,7 @@ function rockMaterial(color, dustCol) {
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor *= 0.84 + 0.24*rkTri(vRkW, normalize(vRkN), 3.0);`);
   };
-  m.customProgramCacheKey = () => 'rallye-rock-' + color.toString(16);
+  m.customProgramCacheKey = () => 'rrr-rock-' + color.toString(16);
   return m;
 }
 
@@ -282,9 +282,11 @@ function gantryTex(accent) {
       g.lineTo(x + 44, h - 14); g.lineTo(x + 22, h - 14); g.closePath(); g.fill();
     }
     g.fillStyle = '#0e1014'; g.fillRect(w * 0.26, 16, w * 0.48, h - 32);
-    g.font = '800 96px ui-monospace, Menlo, monospace';
+    // 72px, not 96: "ROAD RASH" is nine glyphs and has to sit inside the
+    // w*0.48 plate carved out above.
+    g.font = '800 72px ui-monospace, Menlo, monospace';
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillStyle = '#f2efe6'; g.fillText('RALLYE', w * 0.5, h * 0.5 + 4);
+    g.fillStyle = '#f2efe6'; g.fillText('ROAD RASH', w * 0.5, h * 0.5 + 4);
     g.font = '600 22px ui-monospace, monospace';
     g.fillStyle = accent; g.fillText('START / FINISH', w * 0.5, h - 26);
   });

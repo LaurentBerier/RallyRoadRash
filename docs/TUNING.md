@@ -1,4 +1,4 @@
-# RALLYE — Vehicle & AI tuning guide
+# RALLY ROAD RASH — Vehicle & AI tuning guide
 
 Everything gameplay-feel lives in **two data files** and one AI header. You
 should never need to touch solver code to change how the game feels.
@@ -15,9 +15,13 @@ should never need to touch solver code to change how the game feels.
 
 ## The five numbers that matter most
 
-1. **`G` (config.js, 12.8)** — gravity. The whole game is tuned around it:
-   jump arcs (a 20° kicker at 30 m/s flies ~56 m), suspension sag, grip
-   levels. Change it last, and only with a full retune.
+1. **`G` (config.js, 12.8)** -- gravity. The whole game is tuned around it:
+   jump arcs, suspension sag, grip levels. Ground physics always uses the
+   full 12.8 -- change it last, and only with a full retune. Airtime itself
+   is a separate knob: once a jump has been airborne past `hangHi` (0.35 s),
+   `TUNE.air.hangGravity` (0.58) scales gravity back and a kicker flies
+   roughly 1.7x further without the ground getting any softer -- see
+   Airborne below.
 2. **`comHeight` (per spec)** — the anti-flip lever. Rollover threshold is
    `(track / comHeight) · G`; every car keeps ≥1.2× margin over its peak
    road-grip lateral acceleration. Raise it and cars roll in fast corners.
@@ -27,18 +31,18 @@ should never need to touch solver code to change how the game feels.
    low rear = throttle-rotates (redline).
 4. **`topSpeed` (per spec)** — honest terminal velocity; drive force fades to
    a tail at exactly this speed. AI reads it directly for its targets.
-5. **`TUNE.steer.speedTaper` (0.24)** — fraction of full lock available at
-   top speed. This is why keyboard steering stays civilised at 130 km/h.
+5. **`TUNE.steer.speedTaper` (0.24)** -- fraction of full lock available at
+   top speed. This is why keyboard steering stays civilised at 140 km/h.
 
 ## Car-by-car intent
 
-- **DUNE HOPPER** (1120 kg, 36 m/s) — learns you the game. Front grip bias,
+- **DUNE HOPPER** (1120 kg, 39 m/s) -- learns you the game. Front grip bias,
   AWD 45 % front, softest assists exposure. Mild turn-in push; lift and it
   tucks back in. The slide is lazy and catchable.
-- **RIDGEBACK** (1680 kg, 32 m/s) — momentum truck. Rear-biased grip so it
+- **RIDGEBACK** (1680 kg, 34 m/s) -- momentum truck. Rear-biased grip so it
   will not swap ends, 1.35× anti-roll, 12 % less lock. Strongest pull below
   20 m/s: it wins by exiting corners hard and shrugging off ruts.
-- **REDLINE** (1010 kg, 41 m/s) — the reward. 28 % front drive, sharpest
+- **REDLINE** (1010 kg, 45 m/s) -- the reward. 28 % front drive, sharpest
   rack, rear grip deliberately below front: it rotates on throttle. Demands
   discipline over crests; fastest everywhere if you give it that.
 
@@ -53,6 +57,27 @@ should never need to touch solver code to change how the game feels.
   for the player AND the AI.
 - `drift.spinGuard` — stability walks back in between 31° and 66° of slip:
   the difference between a drift and a pirouette.
+
+## Airborne (config.js `TUNE.air`)
+
+Two independent systems share this block: control authority (how the car
+rotates once it leaves the ground) and hang time (how far it flies).
+
+- `pitchAuthority` / `yawAuthority` / `rollAuthority` (1.85 / 2.10 / 1.25
+  rad/s^2 at full stick) -- yaw is the most generous because it is how you
+  square a landing to the road; roll is the smallest because it is the
+  axis that ruins one. `alignAssist` (2.3) + `alignDelay` (0.45 s) tidy up
+  a landing you nearly had and then fade out past `alignGiveUp`, so a
+  committed flip is never rescued for you. `spinCap` stays at 5.0 rad/s --
+  airborne rates never get near it in normal play, and raising it lets
+  crash-bounce chaos carry enough spin to make the flip watchdog
+  non-deterministic.
+- `hangGravity` (0.58) / `hangLo` (0.12 s) / `hangHi` (0.35 s) -- the
+  arcade hang. Gravity scales back to 58% of `G` once a jump has been
+  continuously airborne past `hangHi`, so kickers fly roughly 1.7x
+  further; anything shorter than `hangLo` (a rut blip, a kerb) still
+  falls at full weight. Ground handling never sees this -- `G` above
+  stays 12.8 either way.
 
 ## Surfaces
 
@@ -85,14 +110,20 @@ braking and later yielding; consistency trades corner-entry noise.
 
 ## Race rules (config.js `TUNE.reset`)
 
-flip 2.5 s · stuck 4 s under throttle · off-course 25 m for 2.5 s · lava
-loiter 1.2 s · manual hold 0.8 s · respawn ghost 1.5 s. Respawns place you a
-few metres past the last gate you actually cleared, facing the right way.
+flip 2.5 s / stuck 4 s under throttle below 1.6 m/s / no-progress 4 m in
+6 s (ground only -- airborne time never counts against it) / off-course
+30 m for 2.5 s / lava loiter 1.2 s / manual hold 0.8 s / respawn ghost
+1.5 s. Respawns place you a few metres past the last gate you actually
+cleared, facing the right way, and are pushed clear of any gap-jump void
+that spot would otherwise drop them into.
 
 ## Camera & feel (game/camera.js, game/feel.js)
 
-`rig.yawHz` (1.91) — how hard the camera chases the car's travel direction;
+`rig.yawHz` (1.91) -- how hard the camera chases the car's travel direction;
 lower shows more slide, higher squares the car to frame. `CH.pivotYAir`
-(4.5) — vertical softness while airborne; this is the whole jump read.
-`feel.js` `shakeLo/shakeHi` (18/40 m/s) — where speed rumble starts and
-saturates. All three carry symptom notes in-file.
+(3.4) -- vertical softness while airborne, the whole jump read; `CH.airDist`
+(1.22) and `CH.airFov` (8 deg) boom the shot out and widen it further while
+airborne, so a big jump visibly climbs out of frame instead of just hanging
+there. `feel.js` `shakeLo/shakeHi` (26/48 m/s) -- where speed rumble starts
+and saturates, raised so it reads as speed and not as a loose camera. All
+carry symptom notes in-file.

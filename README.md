@@ -1,6 +1,6 @@
 <div align="center">
 
-# RALLYE
+# RALLY ROAD RASH
 
 ### Off-Road Championship
 
@@ -19,7 +19,7 @@ One vendored library: three.js.
 > Six cars, four stages, one championship. Pick a machine, learn the dirt,
 > jump the gap everyone else drives around — and take the caldera.
 
-RALLYE is a complete small racing game: a physics-driven player car and five
+RALLY ROAD RASH is a complete small racing game: a physics-driven player car and five
 AI rivals on procedurally-built stages with laps, checkpoints, live positions,
 podium results, medals, and an unlock chain from the training ground to a
 volcano. Desktop (keyboard + gamepad) and mobile (touch) in the same page.
@@ -143,23 +143,13 @@ node server.js 5490   # dev server
 
 `dev/firstlight.html?track=canyon&veh=hopper&orbit=1` is a standalone harness
 that drives any car around any stage without the game shell — useful for
-terrain and vehicle work. `window.RALLYE` exposes the running app;
-`RALLYE.tick(dt)` advances a frame by hand.
+terrain and vehicle work. `window.ROADRASH` exposes the running app;
+`ROADRASH.tick(dt)` advances a frame by hand.
 
 Docs worth reading before changing things: `docs/ARCHITECTURE.md` (module
 contracts), `docs/INTEGRATION-NOTES.md` (as-built APIs),
 `docs/TUNING.md` (how to make the cars feel different),
 `docs/QA-REPORT.md` (what was tested, what is known-rough).
-
-## Heritage
-
-RALLYE is built on the bones of
-[REGOLITH](https://github.com/winchxyz/moon-rover) (MIT), a lunar rover survey
-game — it inherits (heavily adapted) the CPU/GPU-agreed heightfield pipeline,
-the clipmap renderer, the deformable-ground and trail systems, the quality
-tiers and adaptive resolution governor, the wheel-solver architecture, and
-the procedural-everything discipline. The racing game — tracks, vehicles,
-AI, race logic, progression, UI, audio and environments — is new.
 
 ## Licence
 

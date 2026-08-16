@@ -5,6 +5,11 @@
      rallye.v1       the progression profile (see game/progression.js)
      rallye.v1.set   settings (see the settings-keys contract)
 
+   The `rallye.` prefix predates the RALLY ROAD RASH name and is deliberately
+   kept: renaming it would orphan every existing profile (medals, records,
+   unlocks) with no migration. Change it only alongside a read-old/write-new
+   migration in read() below.
+
    Every path is wrapped: private browsing throws on setItem, a corrupt value
    throws on parse, and neither may take the game down. A failed read reads as
    "new player", a failed write is simply lost.

@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — RACE SESSION
+   RALLY ROAD RASH — RACE SESSION
    ------------------------------------------------------------
    One race, from the grid to the results board. main.js builds the world
    (terrain, sky, props, dust) during the loading screen and hands it over;
@@ -55,7 +55,9 @@ const RIVAL_SWAP = 1.0;             // s minimum before the rival voice moves
 const POS_STINGER_GAP = 1.0;        // s between position up/down stingers
 const LAVA_WARN_GAP = 3.5;          // s between lava banners
 const TOUCHDOWN_AIR = 0.25;         // s of air before a landing is an event
-const AIRTIME_BRAG = 0.8;           // s of air worth a HUD flourish
+const AIRTIME_BRAG = 1.3;           // s of air worth a HUD flourish. Hang-time
+                                    //   gravity makes 1 s airs routine; the brag
+                                    //   has to stay something you earn.
 const CLUNK_VEL = 1.9;              // m/s of compression velocity that thumps
 const IMPACT_MIN = 2.0;             // m/s of closing speed worth hearing
 
@@ -202,6 +204,7 @@ export class Race {
         slot: i,
         wasAir: false, airPeak: 0,
         ghostT: 0, flipT: 0, stuckT: 0, offT: 0,
+        bestS: null, noProgT: 0,
         finished: false, pos: i + 1,
         lastGround: [],
         clunkT: new Float32Array(4),
@@ -227,6 +230,8 @@ export class Race {
       r.vehicle.ghost = false;
       r.wasAir = false; r.airPeak = 0;
       r.ghostT = 0; r.flipT = 0; r.stuckT = 0; r.offT = 0;
+      r.bestS = null; r.noProgT = 0;   // stale baselines from the last race
+                                       // would instant-trigger the watchdog
       r.finished = false; r.pos = r.slot + 1;
       for (let w = 0; w < 4; w++) { r.lastGround[w].has = false; r.clunkT[w] = 0; r.bottomT[w] = 0; }
       if (r.ai && r.ai.notifyReset) r.ai.notifyReset();
@@ -238,6 +243,15 @@ export class Race {
     this.resetHold = 0; this._resultsShown = false;
     this._wrongWay = false; this._offCourse = 0; this._playerPos = PLAYER_SLOT + 1;
 
+    /* The rig outlives the race, and _showResults leaves it in ORBIT — a race
+       must never START there (the podium spin chasing a moving car is the
+       "camera keeps orbiting" bug). raceMode is the stash _showResults makes
+       of the mode the player actually drove with; ORBIT itself is never a
+       grid mode, so it sanitises to CHASE. */
+    if (this.rig.mode === CAM.ORBIT) {
+      const m = this.rig.raceMode;
+      this.rig.setMode(m == null || m === CAM.ORBIT ? CAM.CHASE : m, this.player.vehicle);
+    }
     this.rig.snapBehind(this.player.vehicle);
     if (this.feel && this.feel.reset) this.feel.reset();
     this.input.lock();
@@ -342,6 +356,14 @@ export class Race {
       this._wheelEffects(dt);
       this._resetSystem(dt, raw);
     }
+
+    /* ---- visuals ----
+       AFTER every pass that can still move a body this frame (physics, the
+       car↔car pairs, the prop resolve, the reset system), and unconditionally:
+       in RESULTS the cars are parked but the orbit camera still looks at them,
+       and a wheel frozen at the chassis origin is visible from every angle.
+       Headless vehicles no-op on the root check. */
+    for (const r of this.racers) r.vehicle.updateVisuals(dt);
 
     /* ---- camera, then the world it looks at ---- */
     this._look.lookX = raw.lookX || 0;
@@ -533,7 +555,7 @@ export class Race {
   }
 
   /* ---------------- 7: ground effects from the wheels ----------------
-     Ported from the REGOLITH wheel loop: one pass per contact wheel doing
+     One pass per contact wheel doing
      tyre marks, ruts and the rooster tail, driven off the surface table so a
      mud bog and a tarmac apron behave completely differently for free. */
   _wheelEffects(dt) {
@@ -716,8 +738,25 @@ export class Race {
          must not be dragged back onto it. */
       let d = this.spline.nearest(v.pos.x, v.pos.z, _near).d;
       if (this.shortcut) d = Math.min(d, this.shortcut.nearest(v.pos.x, v.pos.z, _near2).d);
-      r.offT = d > T.offCourseDist ? r.offT + dt : 0;
+      /* Air never counts as lost: a set-piece jump may legally clear the
+         corridor at apex, and being yanked out of the sky mid-flight is the
+         worst reset the game can do. The clock resumes on touchdown. */
+      r.offT = d > T.offCourseDist ? r.offT + (v.airborne ? 0 : dt) : 0;
       if (r.isPlayer) this._offCourse = d > T.offCourseDist ? d : 0;
+
+      /* No-progress watchdog — the net under every gate above. QA found a car
+         beached on a canyon-wall slope at up.y 0.71, sliding backwards through
+         the stuck gate's speed window, 18 m off-centre: under every threshold,
+         stranded forever. Race-line progress is the one signal a beached car
+         cannot fake. Airborne time never counts against it (set-piece flights
+         are progress by definition). */
+      const progS = this.tracker.progress(r.id).raceS;
+      if (r.bestS == null || progS > r.bestS + (T.noProgressDist ?? 4)) {
+        r.bestS = progS; r.noProgT = 0;
+      } else if (!v.airborne) {
+        r.noProgT = (r.noProgT || 0) + dt;
+        if (r.noProgT > (T.noProgressTime ?? 6)) { this._respawn(r, 'RECOVERED'); continue; }
+      }
 
       if (r.flipT > T.flipTime) { this._respawn(r, 'RECOVERED'); continue; }
       if (r.stuckT > T.stuckTime) { this._respawn(r, 'RECOVERED'); continue; }
@@ -732,7 +771,20 @@ export class Race {
     const slot = this.tracker.lastSlotOf(r.id);
     // A few metres past the gate: dropping exactly on it spawns you in the
     // middle of a gantry and, on the line, facing a stationary grid.
-    const s = slot.s + 3;
+    let s = slot.s + 3;
+    /* Gates sit ON jump lips, so slot.s + 3 can land inside a gap jump's
+       carved void. QA watched a car clear the Caldera Leap's lip gate, fall
+       short, and then respawn INTO the lava floor at zero speed — scorched,
+       respawned there again, forever. Any respawn that falls in a void's
+       span goes to the landing side of the gap instead. */
+    const jumps = this.trackDef.jumps;
+    if (jumps) {
+      for (const j of jumps) {
+        const gap = j.gap || 0;
+        if (gap && s > j.s - 4 && s < j.s + gap + 6) { s = j.s + gap + 8; break; }
+      }
+    }
+    if (this.spline.length > 0) s %= this.spline.length;
     this.spline.posAt(s, _sp);
     this.spline.dirAt(s, _sd);
     const yaw = Math.atan2(_sd.x, _sd.z);
@@ -741,6 +793,9 @@ export class Race {
     v.ghost = true;
     r.ghostT = TUNE.reset.ghostTime;
     r.flipT = 0; r.stuckT = 0; r.offT = 0;
+    /* The respawn teleports BACKWARD along the race line, so the watchdog
+       baseline must re-arm from here or it fires again on arrival. */
+    r.bestS = null; r.noProgT = 0;
     r.wasAir = false; r.airPeak = 0;
     for (let w = 0; w < 4; w++) r.lastGround[w].has = false;
     this.tracker.notifyTeleport(r.id, _sp.x, _sp.z);
@@ -908,7 +963,13 @@ export class Race {
     this.input.unlock();
     this.input.showTouch(false);
     this.hud.hideRace();
-    if (this.rig.setMode) this.rig.setMode(CAM.ORBIT, this.player.vehicle);
+    /* Stash the driving mode on the rig (it survives this Race instance) so
+       the next _enterGrid — next track, restart, or a race after the menu —
+       can put the player back in the camera they actually raced with. */
+    if (this.rig.setMode) {
+      this.rig.raceMode = this.rig.mode;
+      this.rig.setMode(CAM.ORBIT, this.player.vehicle);
+    }
 
     const next = TRACK_ORDER[TRACK_ORDER.indexOf(this.trackDef.id) + 1];
 

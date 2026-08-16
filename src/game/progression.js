@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — PROGRESSION
+   RALLY ROAD RASH — PROGRESSION
    ------------------------------------------------------------
    Unlocks, medals and records. PURE: zero imports, no localStorage, no DOM.
    It takes a plain profile object in and hands a new one back; core/save.js

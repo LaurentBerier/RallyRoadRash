@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLYE — terrain
+   RALLY ROAD RASH — terrain
    ------------------------------------------------------------
    • Height is BAKED on the CPU into Float textures; the GPU only ever
      samples them. Physics and pixels therefore agree exactly, which is
@@ -36,11 +36,11 @@ export const DENT_EXT = 1200;                         // rut field extent
 export const SUNMASK_EXT = 1500;
 export const SURF_EXT = 1240, SURF_RES = 1024;        // 1.21 m / texel
 
-/* Detail noise is deliberately small. REGOLITH could afford half a metre of
-   grain because it faded the detail out with camera distance in the shader —
-   a term the CPU could not see, and therefore a lie the moment a car is more
-   than 95 m away. Here the amplitude is low enough to need no fade at all, so
-   the two sides evaluate the identical expression everywhere. */
+/* Detail noise is deliberately small. Coarser grain only works if the shader
+   fades detail out with camera distance — a term the CPU cannot see, and
+   therefore a lie the moment a car is more than 95 m away. Here the amplitude
+   is low enough to need no fade at all, so the two sides evaluate the
+   identical expression everywhere. */
 const DET_AMP = 0.135, DET_AMP2 = 0.052, DET_SCALE2 = 3.71;
 export const FADE0 = 600, FADE1 = 668;   // macro -> far crossfade radius
 
@@ -1205,8 +1205,8 @@ export class Terrain {
         }
 
         /* ---- freshly churned ground is DARKER and wetter, not brighter ----
-           (the moon got this the other way round: unweathered regolith is
-           bright. Dirt is the opposite — you are turning up damp subsoil.) */
+           (the instinct to brighten a fresh cut is wrong for dirt: what a
+           wheel turns up is damp subsoil.) */
         float churn = smoothstep(0.02, 0.35, abs(vDent));
         albedo *= 1.0 - 0.30 * churn;
         rough = mix(rough, rough*0.72, churn);

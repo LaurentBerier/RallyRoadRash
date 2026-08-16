@@ -55,7 +55,9 @@ export default {
   /* Wooden ramps: props.js drops a plank deck and side rails on each lip, the
      terrain carves the earth bank under it. */
   jumps: [
-    { s: 525, len: 13, h: 2.0 },
+    { s: 500, len: 14, h: 2.6 },                 // rhythm double 1/2 (was the lone s~525 kicker)
+    { s: 570, len: 14, h: 2.6 },                 // rhythm double 2/2, 70 m on
+    { s: 815, len: 18, h: 3.8, gap: 18 },        // Gully Gap - dry ridge line, ~21.7 m/s to clear
     { s: 1100, len: 12, h: 1.8 },
     { s: 1650, len: 13, h: 2.1 }
   ],
