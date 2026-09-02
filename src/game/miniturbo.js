@@ -188,6 +188,39 @@ export function driftStep(st, dt, v, ctl) {
   }
 }
 
+/**
+ * Fire a boost this state did not earn by drifting.
+ *
+ * The air owns the other half of this game's economy: a landed trick pays a
+ * mini-turbo tier (game/tricks.js), and it pays it THROUGH here rather than
+ * through a boost path of its own. That is deliberate — one boost, one set
+ * of multipliers, one set of audio and particle cues, and a chained
+ * drift-into-jump-into-drift that cannot stack into something the handling
+ * model has never been driven at.
+ *
+ * Same rule as a chained release: BETTER OF, NEVER THE SUM. Landing a
+ * backflip into a running tier-3 does not extend the tier 3, and does not
+ * add a tier 2 on top of it.
+ *
+ * `fired` is taken as the max rather than overwritten, because driftStep()
+ * may already have set it this frame from a genuine release and the cue for
+ * that release must not be swallowed.
+ *
+ * @param st    state from makeDrift(), MUTATED — no new fields (boost-check A8)
+ * @param tier  1..3; anything below 1 is a no-op, so callers can pass a raw
+ *              trick tier without checking it first
+ */
+export function driftFire(st, tier) {
+  const t = tier | 0;
+  if (t < 1) return;
+  const i = (t > 3 ? 3 : t) - 1;
+  if (t > st.fired) st.fired = t;
+  const wantT = B.fireT[i];
+  if (wantT > st.fireT) { st.fireT = wantT; st.fireTier = i + 1; }
+  st.mul = Math.max(st.mul, B.fireMul[st.fireTier - 1]);
+  st.top = Math.max(st.top, B.fireTop[st.fireTier - 1]);
+}
+
 /** 0..1 progress toward the next tier, for the HUD. Cheap, allocation-free. */
 export function driftProgress(st) {
   const t = st.tier;

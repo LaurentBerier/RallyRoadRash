@@ -26,12 +26,13 @@ import * as THREE from 'three';
 import { clamp, sstep, lerp } from '../core/rng.js';
 import { SURFACES, SURF } from '../world/surfaces.js';
 import { G, TUNE } from './config.js';
-import { makeDrift, driftStep, driftReset } from './miniturbo.js';
+import { makeDrift, driftStep, driftReset, driftFire } from './miniturbo.js';
+import { makeTrick, trickReset, trickStep } from './tricks.js';
 import {
   buildVehicleVisuals, updateVehicleVisuals, disposeVehicleVisuals,
 } from './vehicle-art.js';
 
-const ZERO_CTL = { throttle: 0, steer: 0, brake: 0, handbrake: 0 };
+const ZERO_CTL = { throttle: 0, steer: 0, brake: 0, handbrake: 0, roll: 0 };
 
 /* ============================================================
    Vehicle
@@ -174,6 +175,23 @@ export class Vehicle {
     this._leanRoll = 0; this._leanPitch = 0; this._bikeLean = 0;
     this._lastSpeed = 0;
 
+    /* ---- air / tricks (wave 6) ----
+       `_trick` belongs to tricks.js exactly the way `_drift` belongs to
+       miniturbo.js: this class publishes the three facts a trick is scored
+       from and hands the resulting tier straight to driftFire, and knows
+       nothing else about scoring. */
+    this._trick = makeTrick();
+    this.landEdge = false;     // ONE frame, on a real touchdown (see TUNE.trick.minAir)
+    this.landQ = 0;            // 0..1 quality of that landing — flat AND soft
+    this.airPeak = 0;          // m of peak height over the launch point, this flight
+    /* Which TUNE.air.assistScale entry the landing assist uses — the
+       `trickAssist` setting (0 PRO / 1 default / 2 ARCADE). race.js writes it
+       on the player; the AI and every harness leave it at the default. */
+    this.trickAssist = 1;
+    this._launchY = 0;         // world y at the moment the wheels left
+    this._airVy = 0;           // vel.y on the last airborne substep — the touchdown speed
+    this._airLast = 0;         // airTime on that same substep, for the landEdge debounce
+
     /* ---- visuals ---- */
     this.root = null; this.chassis = null; this.wheelRoot = null;
     this.mats = null; this.tex = null; this.geos = null;
@@ -231,6 +249,13 @@ export class Vehicle {
     this.extDriveMul = 1; this.extTopMul = 1;
     this.driveMul = 1; this.driveTopMul = 1;
     driftReset(this._drift);
+    /* The FLIGHT is wiped, the score is not: a respawn must not bank the
+       tumble that caused it, and must not cost you the points you already
+       earned. trickClear() (race.js, at the grid) is the one that takes
+       those. */
+    this.landEdge = false; this.landQ = 0; this.airPeak = 0;
+    this._launchY = this.pos.y; this._airVy = 0; this._airLast = 0;
+    trickReset(this._trick);
 
     // One tiny zero-input substep so wheel world positions, normals and surface
     // ids are valid before anything reads them (first visual frame, AI, HUD).
@@ -255,6 +280,10 @@ export class Vehicle {
     _ctl.steer = clamp(c.steer || 0, -1, 1);
     _ctl.brake = clamp(c.brake || 0, 0, 1);
     _ctl.handbrake = c.handbrake ? 1 : 0;
+    /* `|| 0` rather than a required field: every ctl in the game is supposed
+       to carry `roll` (ARCHITECTURE.md §6.4 lists the copy sites), but a dev
+       harness or an older caller that does not must fly straight, not NaN. */
+    _ctl.roll = clamp(c.roll || 0, -1, 1);
     /* ---- a spin-out IS a handbrake slide you did not ask for ----
        Routing it through ctl means rearGripMul, the ABS-bypassed rear brake,
        the stability cut and the spinGuard walk-back all fire unmodified. That
@@ -266,7 +295,7 @@ export class Vehicle {
     if (this.spinT > 0 && !this.airborne) {
       this.spinT -= dt;
       if (this.spinT < 0) this.spinT = 0;
-      _ctl.handbrake = 1; _ctl.throttle = 0; _ctl.steer = 0;
+      _ctl.handbrake = 1; _ctl.throttle = 0; _ctl.steer = 0; _ctl.roll = 0;
     }
     // Captured AFTER the spin override, or the brake lights and the audio
     // would report the input the player gave rather than the one that ran.
@@ -275,17 +304,69 @@ export class Vehicle {
     /* Charge/burn the mini-turbo once per frame, not per substep: `charge` is
        measured in seconds of drift and stepping it six times would run its
        clock at 6x. */
-    driftStep(this._drift, Math.min(dt, TUNE.sim.dtCap), this, _ctl);
+    const fdt = Math.min(dt, TUNE.sim.dtCap);
+    driftStep(this._drift, fdt, this, _ctl);
+
+    /* Tricks, immediately after the drift and for the same reason: `air` is
+       measured in seconds and running its clock six times a frame would make
+       every jump six times longer.
+
+       It reads LAST frame's `landEdge` — the edge is published at the bottom
+       of this method, after the substeps that actually put the wheels back
+       down, so a classification here is a classification of a landing whose
+       `landQ` has already been measured. Same one-frame lag boost-check
+       documents for `airborne`, and load-bearing rather than sloppy. */
+    trickStep(this._trick, fdt, this, _ctl);
+    /* A trick pays a mini-turbo — the drift and the jump feed the same pot,
+       so the air needs no boost economy of its own. driftFire takes the
+       better of the two, never the sum, exactly like a chained drift. */
+    if (this._trick.fired) driftFire(this._drift, this._trick.fired);
+
     this.driveMul = this._drift.mul * this.extDriveMul;
     this.driveTopMul = this._drift.top * this.extTopMul;
 
     // hardHit is a per-frame peak: whoever consumes it (feel/audio/damage)
     // reads it after step() and after resolveVehiclePair().
     this.hardHit = 0;
+    this.landEdge = false;
+    const wasAir = this.airborne;
 
     const SUB = TUNE.sim.substeps;
-    const h = Math.min(dt, TUNE.sim.dtCap) / SUB;
+    const h = fdt / SUB;
     for (let s = 0; s < SUB; s++) this._substep(h, _ctl, s === 0);
+
+    /* ---- the landing edge ----
+       One frame, on a REAL touchdown. `_airLast` is the airTime on the last
+       substep that was actually off the ground, so the whole thing is gated
+       on TUNE.trick.minAir: without that, a whoops section fires a landing
+       event every third frame and the HUD strobes.
+
+       `landQ` asks the two questions that decide whether a landing hurt:
+       did you come down flat (up · groundNormal) and did you come down
+       softly (the descent speed fade). It is the number tricks.js pays on. */
+    if (wasAir && !this.airborne && this._airLast > TUNE.trick.minAir) {
+      this.landEdge = true;
+      this.terrain.normalAt(this.pos.x, this.pos.z, 1.0, _n2);
+      const up = _up.set(0, 1, 0).applyQuaternion(this.quat);
+      const fwd = _fw.set(0, 0, 1).applyQuaternion(this.quat);
+      const flat = clamp(up.dot(_n2), 0, 1);
+      const sv = TUNE.trick.softV;
+      this.landQ = flat * (1 - sstep(sv[0], sv[1], -this._airVy));
+
+      /* ---- the crash ----
+         Landing on the roof, or nose-first into the face of something, at a
+         speed where it matters. Routed through spinT because that is the
+         handbrake-recovery path race.js, miniturbo and the camera are all
+         already tuned around — a bespoke "crashed" state would have to
+         re-earn every one of them. hardHit gets a floor so feel.js shakes
+         and audio bangs even when the suspension found a soft way down. */
+      const K = TUNE.trick;
+      if ((flat < K.crashUp || fwd.dot(_n2) < K.crashNose) &&
+          this.groundSpeed > K.crashSpeed) {
+        this.spinT = Math.max(this.spinT, K.crashSpin);
+        this.hardHit = Math.max(this.hardHit, K.crashHit);
+      }
+    }
 
     // Road mask under the body, once per frame. Physics does not use it (the
     // surface map already says ROAD where it matters); it is here so AI, dust
@@ -672,33 +753,66 @@ export class Vehicle {
       torque.addScaledVector(rgt, -this.omega.dot(rgt) * 0.8 * this.Ibody.x);
 
     } else {
-      /* ---- AIRBORNE ----
-         Throttle lifts the nose, brake drops it, steer yaws (and rolls a
-         little). This is how you line a landing up with the road, and it is
-         also how you loop it if you hold throttle off a big kicker. */
-      this.airTime += dt;
-      const pitchIn = clamp(ctl.throttle - ctl.brake, -1, 1);
-      torque.addScaledVector(rgt, T.air.pitchAuthority * pitchIn * this.Ibody.x);
-      torque.addScaledVector(up, -this.steerNorm * T.air.yawAuthority * this.Ibody.y);
-      torque.addScaledVector(fwd, this.steerNorm * T.air.rollAuthority * this.Ibody.z);
+      /* ============================================================
+         AIRBORNE — free rotation, plus a predictive landing assist
+         ------------------------------------------------------------
+         Two halves, and they only work together (see the block comment over
+         TUNE.air in config.js).
 
-      /* Align assist. Late, weighted by sin(error), and — the important part —
-         faded back OUT once the error is large. It saves the landing you nearly
-         had and abandons the one you botched, which is the only shape of assist
-         that leaves jumps worth taking seriously. */
-      const aa = sstep(T.air.alignDelay, T.air.alignDelay + T.air.alignRamp, this.airTime);
-      if (aa > 0) {
-        this.terrain.normalAt(this.pos.x, this.pos.z, 1.0, _n1);
-        _p1.crossVectors(up, _n1);
-        const m = _p1.length();
-        if (m > 1e-5) {
-          const err = Math.atan2(m, up.dot(_n1));            // true 0..π, not folded
-          const give = 1 - sstep(T.air.alignGiveUp[0], T.air.alignGiveUp[1], err);
-          torque.addScaledVector(_p1.divideScalar(m),
-            T.air.alignAssist * aa * m * give * this.Imean);
-        }
+         THE AUTHORITIES are big enough that a flip, a spin and a barrel roll
+         all fit inside an ordinary jump, and `spinCap` rather than damping is
+         what limits them. Throttle/brake still pitch, with the sign
+         unchanged from wave 5, because that is the one air control every
+         player already has muscle memory for.
+
+         THE MODIFIER IS THE HANDBRAKE. Held in the air, steer stops yawing
+         and starts rolling — so a keyboard with no dedicated roll keys can
+         still barrel roll, and a pad has it on the button it already uses
+         for drift. Q/E (and the bumpers) are the explicit axis on top.
+
+         THE ASSIST is the reason all of that is safe. It does NOT level the
+         car toward the ground underneath it — that ground is 40 m behind
+         where the car is going to land. It predicts the touchdown point,
+         takes the normal there, and aims the car down its own velocity on
+         that surface. And it switches OFF the instant the player holds
+         anything: an assist that argues with a deliberate input is what
+         makes air control feel like mush, and it is what keeps holding the
+         throttle off a lip an actual mistake. Do nothing and you land flat.
+         ============================================================ */
+      this.airTime += dt;
+
+      if (this.airTime <= dt * 1.5) {      // first substep of this flight
+        this._launchY = this.pos.y;
+        this.airPeak = 0;
       }
-      torque.addScaledVector(this.omega, -T.air.damp * this.Imean);
+      const rise = this.pos.y - this._launchY;
+      if (rise > this.airPeak) this.airPeak = rise;
+      // The touchdown numbers, sampled every airborne substep so the last
+      // one written is the state the wheels actually arrived with.
+      this._airVy = this.vel.y;
+      this._airLast = this.airTime;
+
+      const pitchIn = clamp(ctl.throttle - ctl.brake, -1, 1);
+      const rollIn = clamp((ctl.roll || 0) + (hand ? this.steerNorm : 0), -1, 1);
+      const yawIn = hand ? 0 : this.steerNorm;
+      torque.addScaledVector(rgt, T.air.pitchAuthority * pitchIn * this.Ibody.x);
+      torque.addScaledVector(up, -yawIn * T.air.yawAuthority * this.Ibody.y);
+      torque.addScaledVector(fwd, rollIn * T.air.rollAuthority * this.Ibody.z);
+
+      /* Any air input at all suspends BOTH the assist and the damping. The
+         deadband is small on purpose: a pad stick resting at 0.02 must not
+         quietly switch the landing help off for the whole flight. */
+      const inputHeld = Math.abs(pitchIn) > 0.05 || Math.abs(rollIn) > 0.05 ||
+        Math.abs(yawIn) > 0.05;
+
+      if (!inputHeld) {
+        const scale = T.air.assistScale[this.trickAssist | 0] ?? 1;
+        const aw = T.air.assistWindow;
+        const tG = this._timeToGround(gMul * G);
+        const gain = T.air.alignAssist * (1 - sstep(aw[0], aw[1], tG)) * scale;
+        if (gain > 1e-4) this._landAssist(torque, gain, tG, fwd);
+        torque.addScaledVector(this.omega, -T.air.damp * this.Imean);
+      }
     }
 
     /* ---- aero drag: always, contact or not ---- */
@@ -749,6 +863,124 @@ export class Vehicle {
     /* ---- flip watchdog ---- */
     if (up.y < T.sim.flipUp) this.flipTimer += dt; else this.flipTimer = 0;
     this.odo += Math.abs(vFwd) * dt;
+  }
+
+  /* ============================================================
+     WHERE, AND WHEN, THIS FLIGHT ENDS
+     ------------------------------------------------------------
+     Time to ground, by Newton on
+
+         f(t) = y + vy·t − ½·g·t² − heightAt(x + vx·t, z + vz·t)
+
+     seeded with the closed-form answer against the ground directly below.
+     The seed matters more than the iterations: it is already exact over flat
+     ground, which is most of every track, so the three refinements are only
+     ever correcting for the fact that the car is going to land somewhere
+     ELSE — down a drop, up the far side of a gap, into the next roller.
+
+     The derivative drops the terrain-slope term (dh/dt). That term is
+     genuinely second-order at the gradients a driveable track carries, and
+     carrying it would cost two more heightAt lookups per iteration in the
+     hottest loop in the game to move the answer by a few milliseconds.
+
+     `g` is the CURRENT gravity, hang-time scaling included — predicting a
+     jump against full weight would have the assist believe every landing is
+     0.6 s sooner than it is, which is precisely the error that makes an
+     assist feel like it is grabbing the wheel.
+     ============================================================ */
+  _timeToGround(g) {
+    const px = this.pos.x, py = this.pos.y, pz = this.pos.z;
+    const vx = this.vel.x, vy = this.vel.y, vz = this.vel.z;
+    if (!(g > 1e-6)) return 4;
+
+    const drop = py - this.terrain.heightAt(px, pz);
+    const disc = vy * vy + 2 * g * drop;
+    let t = disc > 0 ? (vy + Math.sqrt(disc)) / g : 0.05;
+    if (!(t > 0)) t = 0.05;
+
+    for (let i = 0; i < TUNE.air.predictSteps; i++) {
+      const df = vy - g * t;
+      // Only refine on the way DOWN. At the apex f' is zero and Newton throws
+      // the estimate into the next county; the seed is the better answer.
+      if (df > -1e-3) break;
+      const f = py + vy * t - 0.5 * g * t * t -
+        this.terrain.heightAt(px + vx * t, pz + vz * t);
+      t -= f / df;
+      if (!(t > 0.05)) { t = 0.05; break; }
+      if (t > 4) { t = 4; break; }
+    }
+    return t < 0.05 ? 0.05 : t > 4 ? 4 : t;
+  }
+
+  /* ============================================================
+     THE PREDICTIVE LANDING ASSIST
+     ------------------------------------------------------------
+     Aim the car at the attitude it wants to ARRIVE in: up along the normal
+     at the predicted touchdown point, nose along where the car is actually
+     travelling. Both halves matter. Levelling to the ground under the car
+     is wrong on any jump that covers ground, and levelling without squaring
+     the nose to the velocity leaves you landing flat but sideways, which in
+     this handling model is a spin.
+
+     SNAP-THROUGH is the rest of it. Past `snapFrom` of accumulated pitch or
+     roll, still turning faster than `snapRate`, the shortest way to level is
+     BEHIND you — and an assist that takes it yanks a backflip that is 300°
+     round back through 60° it has already paid for. So when the shortest
+     correction fights the rotation, we take the long way instead and finish
+     what the player started. This is the single thing that makes a big flip
+     feel like an opportunity rather than a coin toss.
+     ============================================================ */
+  _landAssist(torque, gain, tG, fwd) {
+    /* Where the wheels are going to be. Same ballistic model the estimate
+       came from — this is a lookup at a point, not a second prediction. */
+    const lx = this.pos.x + this.vel.x * tG;
+    const lz = this.pos.z + this.vel.z * tG;
+    this.terrain.normalAt(lx, lz, 1.0, _a1);                       // target up
+
+    /* Target nose: horizontal velocity, flattened onto that surface. Below
+       walking pace the velocity direction is noise, so keep the nose where
+       it is and only fix the attitude. */
+    if (Math.abs(this.vel.x) + Math.abs(this.vel.z) > 1.0) _a2.set(this.vel.x, 0, this.vel.z);
+    else _a2.copy(fwd);
+    _a2.addScaledVector(_a1, -_a2.dot(_a1));
+    if (_a2.lengthSq() < 1e-6) {
+      _a2.copy(fwd).addScaledVector(_a1, -fwd.dot(_a1));
+      if (_a2.lengthSq() < 1e-6) return;      // nose exactly along the normal: no answer
+    }
+    _a2.normalize();
+
+    // Local +X is the car's LEFT (right is −X), so x = up × forward.
+    _a3.crossVectors(_a1, _a2);
+    _m1.makeBasis(_a3, _a1, _a2);
+    _q3.setFromRotationMatrix(_m1);
+
+    // World-frame error: qe · qNow = qTarget.
+    _q4.copy(_q3).multiply(_q5.copy(this.quat).invert());
+    if (_q4.w < 0) { _q4.x = -_q4.x; _q4.y = -_q4.y; _q4.z = -_q4.z; _q4.w = -_q4.w; }
+    let s = Math.sqrt(_q4.x * _q4.x + _q4.y * _q4.y + _q4.z * _q4.z);
+    if (s < 1e-6) return;                     // already there
+    let ang = 2 * Math.atan2(s, _q4.w);       // 0..π — the SHORT way
+    _a3.set(_q4.x / s, _q4.y / s, _q4.z / s);
+
+    /* How far into the CURRENT turn, not how far in total — and that modulo
+       is the whole safety of this. A flip 66° PAST a full rotation has 7.4
+       rad on the clock and is nowhere near "nearly finished": the shortest
+       way to level is 66° back, and taking the long way instead would send
+       it round another 294° it has no air left for. Only a rotation that is
+       genuinely close to closing gets pushed through. */
+    const st = this._trick;
+    const ap = Math.abs(st.pitch) % (2 * Math.PI);
+    const ar = Math.abs(st.roll) % (2 * Math.PI);
+    if ((ap > TUNE.air.snapFrom || ar > TUNE.air.snapFrom) &&
+        this.omega.length() > TUNE.air.snapRate && _a3.dot(this.omega) < 0) {
+      _a3.negate();
+      ang = 2 * Math.PI - ang;
+    }
+
+    /* Linear in the error out to 1 rad and then flat. sin(error) — the wave-5
+       weighting — dies at π, which is exactly the attitude that needs the
+       most help, and snap-through can hand this a 5 rad target. */
+    torque.addScaledVector(_a3, gain * (ang < 1 ? ang : 1) * this.Imean);
   }
 
   /* ============================================================
@@ -902,7 +1134,7 @@ export function resolveVehiclePair(a, b) {
 /* ============================================================
    scratch — module level, zero allocation in step()/updateVisuals()
    ============================================================ */
-const _ctl = { throttle: 0, steer: 0, brake: 0, handbrake: 0 };
+const _ctl = { throttle: 0, steer: 0, brake: 0, handbrake: 0, roll: 0 };
 const _wup = new THREE.Vector3(0, 1, 0);
 const _gf = new THREE.Vector3(), _gr = new THREE.Vector3(), _gu = new THREE.Vector3();
 const _up = new THREE.Vector3(), _fw = new THREE.Vector3(), _rt = new THREE.Vector3();
@@ -911,8 +1143,14 @@ const _p1 = new THREE.Vector3(), _p2 = new THREE.Vector3(), _p3 = new THREE.Vect
 const _p4 = new THREE.Vector3(), _p5 = new THREE.Vector3(), _p6 = new THREE.Vector3();
 const _p7 = new THREE.Vector3(), _p8 = new THREE.Vector3(), _p9 = new THREE.Vector3();
 const _p10 = new THREE.Vector3(), _p11 = new THREE.Vector3(), _p12 = new THREE.Vector3();
-const _n1 = new THREE.Vector3();
+const _n1 = new THREE.Vector3(), _n2 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+/* Air-assist scratch, kept separate from the _p and _q sets because
+   _landAssist runs INSIDE the airborne branch of _substep, and _p1.._p5 plus
+   _q1/_q2 are still needed by the angular integration below it. */
+const _a1 = new THREE.Vector3(), _a2 = new THREE.Vector3(), _a3 = new THREE.Vector3();
+const _q3 = new THREE.Quaternion(), _q4 = new THREE.Quaternion(), _q5 = new THREE.Quaternion();
+const _m1 = new THREE.Matrix4();
 /* collision scratch, kept separate so a resolve() call can never stomp on a
    step() that is mid-flight in some future threaded world */
 const _ca = new THREE.Vector3(), _cb = new THREE.Vector3(), _cn = new THREE.Vector3();

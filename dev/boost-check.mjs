@@ -24,7 +24,7 @@
    ============================================================ */
 import { Vehicle } from '../src/game/vehicle.js';
 import { VEHICLES, VEHICLE_BY_ID } from '../src/game/vehicles.js';
-import { makeDrift, driftStep, driftReset, driftProgress } from '../src/game/miniturbo.js';
+import { makeDrift, driftStep, driftReset, driftProgress, driftFire } from '../src/game/miniturbo.js';
 import { TUNE } from '../src/game/config.js';
 import { SURF } from '../src/world/surfaces.js';
 
@@ -207,6 +207,57 @@ head('A. STATE MACHINE — charge, tiers, grace, gates');
   const keys = Object.keys(makeDrift()).length;
   ok('the state object has a fixed shape', Object.keys(st).length === keys,
     `${Object.keys(st).length} fields`);
+}
+
+/* A9. driftFire — the door the air knocks on.
+   A landed trick pays a mini-turbo tier through this rather than through a
+   boost path of its own (ARCHITECTURE §6.5), which means every rule the
+   drift release already obeys has to survive the second caller. */
+{
+  const st = makeDrift();
+  driftFire(st, 2);
+  info(`driftFire(2) on a cold state: mul ${f(st.mul)} top ${f(st.top)} for ${f(st.fireT)} s`);
+  ok('driftFire fires the tier it is handed',
+    st.fireTier === 2 && st.mul === B.fireMul[1] && st.top === B.fireTop[1] &&
+    st.fireT === B.fireT[1]);
+  ok('…and publishes the one-shot RaceFX.boost reads', st.fired === 2, `${st.fired}`);
+
+  /* Better of, never the sum — the same rule a chained release obeys. A
+     tier-1 trick landed into a running tier-3 must not extend it. */
+  const big = makeDrift();
+  driftFire(big, 3);
+  const wasT = big.fireT;
+  driftFire(big, 1);
+  ok('a smaller tier does not shorten or weaken a running boost',
+    big.fireTier === 3 && big.fireT === wasT && big.mul === B.fireMul[2],
+    `tier ${big.fireTier} mul ${f(big.mul)}`);
+  const small = makeDrift();
+  driftFire(small, 1);
+  driftFire(small, 3);
+  ok('…and a bigger one upgrades it rather than adding to it',
+    small.fireTier === 3 && small.fireT === B.fireT[2] && small.mul === B.fireMul[2],
+    `${f(small.fireT)} s at ×${f(small.mul)}`);
+
+  /* Tier 0 is the common case: BIG AIR scores points and no boost, and a
+     CRASH scores neither. Callers must be able to pass a raw trick tier. */
+  const none = makeDrift();
+  driftFire(none, 0); driftFire(none, -1);
+  ok('tier 0 (BIG AIR) and a negative are no-ops',
+    none.mul === 1 && none.top === 1 && none.fireT === 0 && none.fired === 0);
+
+  /* A release this same frame must not be swallowed: driftStep sets `fired`
+     for its own cue, and vehicle.js calls driftFire immediately after it. */
+  const both = makeDrift();
+  both.fired = 3;
+  driftFire(both, 1);
+  ok('a trick tier never overwrites a bigger release cue in the same frame',
+    both.fired === 3, `${both.fired}`);
+
+  const keys = Object.keys(makeDrift()).length;
+  const probe = makeDrift();
+  driftFire(probe, 3);
+  ok('driftFire adds no fields to the state', Object.keys(probe).length === keys,
+    `${Object.keys(probe).length} of ${keys}`);
 }
 
 /* ============================================================
