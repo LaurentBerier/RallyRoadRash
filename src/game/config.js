@@ -514,6 +514,20 @@ export const TUNE = {
                             //       under every other gate: beached cars can dodge
                             //       stuck/wedge/off-course thresholds indefinitely,
                             //       but they cannot fake forward progress.
+    noProgressSpeed: 10,    // m/s — above this, ON the road, the watchdog is OFF.
+                            //       The tracker's progress estimate is only valid
+                            //       while a car is on the gate sequence it expects.
+                            //       Cross the line without completing that set and
+                            //       liveS starts DECREASING as you drive forward:
+                            //       QA caught training/moto reporting liveS 754 ->
+                            //       746 while physically travelling s=61 -> 116 at
+                            //       24 m/s, on the road, upright. The net then
+                            //       fired every 6 s and threw it back to the gate
+                            //       at s=643, forever — 48 resets and a DNF on a
+                            //       one-lap tutorial. A car doing 10 m/s down the
+                            //       middle of the road is making progress by the
+                            //       only measure that cannot lie, whatever the
+                            //       gate bookkeeping believes.
     offCourseDist: 30,      // m from the centreline before you count as lost.
                             //       Raised from 25 alongside the longer arcade
                             //       hang (TUNE.air.hangGravity) — bigger air can

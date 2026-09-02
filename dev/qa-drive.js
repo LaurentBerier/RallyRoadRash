@@ -208,7 +208,7 @@ export async function one(trackId, vehId, opts = {}) {
                the same feature catches a car at slightly different s every
                lap, and a list of raw arc lengths hides that they are one
                place. */
-            race.trackData.spline.nearest(v.pos.x, v.pos.z, near);
+            race.trackData.spline.nearest(r.vehicle.pos.x, r.vehicle.pos.z, near);
             const b = Math.round(near.s / 25) * 25;
             out.resetAt[b] = (out.resetAt[b] || 0) + 1;
           }

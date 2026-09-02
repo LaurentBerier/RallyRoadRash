@@ -820,9 +820,21 @@ export class Race {
          146 m back, and could not cover that in the 6 s window because the
          only signal being measured was pinned — so it reset, and reset, 112
          times, and DNF'd. liveS is the same estimate un-ratcheted. */
+      /* …but liveS is only meaningful while the car is on the gate sequence
+         the tracker expects. Cross the line without completing that set and
+         the projection starts running BACKWARDS as the car drives forward.
+         So the net gets a floor no bookkeeping can argue with: a car doing
+         real speed down the middle of the road is racing. `d` is the
+         off-course distance measured just above. */
       const progS = this.tracker.progress(r.id).liveS;
+      const clearlyRacing = Math.abs(v.speed) > (T.noProgressSpeed ?? 10) &&
+        d < T.offCourseDist && !v.airborne;
       if (r.bestS == null || progS > r.bestS + (T.noProgressDist ?? 4)) {
         r.bestS = progS; r.noProgT = 0;
+      } else if (clearlyRacing) {
+        // Clear it, do not merely skip it: a car that recovers must not be
+        // left holding a primed timer for the next slow corner.
+        r.noProgT = 0;
       } else if (!v.airborne) {
         r.noProgT = (r.noProgT || 0) + dt;
         if (r.noProgT > (T.noProgressTime ?? 6)) { this._respawn(r, 'RECOVERED'); continue; }
