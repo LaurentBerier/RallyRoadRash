@@ -51,11 +51,18 @@ function tint(g, hex) {
   if (!g.attributes.normal) g.computeVertexNormals();
   const n = g.attributes.position.count;
   const c = new Float32Array(n * 3);
-  /* Colours are authored as sRGB hex, and three assumes a `color` ATTRIBUTE
-     is already in the working (linear) space — unlike `material.color`, which
-     it converts for you. Skipping this leaves every prop in the game a stop
-     and a half too bright beside anything textured. */
-  _col.set(hex).convertSRGBToLinear();
+  /* Colours are authored as sRGB hex and three's `color` ATTRIBUTE is read as
+     already being in the working (linear) space — so exactly one conversion
+     is owed here, and Color.set(hex) IS that conversion: with
+     ColorManagement enabled (the default since r152) setHex decodes sRGB into
+     the working space for you.
+     This used to chain .convertSRGBToLinear() on top of it, which decoded a
+     second time — mid grey 0x808080 landed at 0.038 instead of 0.216, five
+     and a half times too dark. Every vertex-coloured thing in the game was
+     wearing it: every plant, every building, every spectator, the item boxes
+     and the boost pads. If props ever look a stop hot after a three upgrade,
+     check whether ColorManagement is still on before adding a convert back. */
+  _col.set(hex);
   for (let i = 0; i < n; i++) { c[i * 3] = _col.r; c[i * 3 + 1] = _col.g; c[i * 3 + 2] = _col.b; }
   g.setAttribute('color', new THREE.BufferAttribute(c, 3));
   return g;
@@ -166,6 +173,17 @@ export const KIT_PALETTE = {
     paint: 0xa8a49e, paintAlt: 0xff5a2c, canvas: 0xa89a90, canvasAlt: 0xff8a3a,
     foliage: 0x4a4230, foliageAlt: 0x5c5238, bark: 0x342a22, dead: 0x54483c,
     concrete: 0x8a847e, dirt: 0x4a3c33, glass: 0x241c1a, hazard: 0xf0b21a,
+  },
+  /* THUNDER MESA. The canyon's rock and timber, but this is the built-up
+     stage — floodlights, sponsor boards, tyre walls — so the paint and the
+     canvas are a stop hotter than anywhere else. Under a nine-degree sun
+     every one of those is either rim-lit or a silhouette, and a muted accent
+     would simply disappear. */
+  thunder: {
+    wood: 0x9a7448, timber: 0x74522e, metal: 0x9a9088, rust: 0xa85a24,
+    paint: 0xe4d2b0, paintAlt: 0xff5edc, canvas: 0xf0dcb4, canvasAlt: 0x2ad2ff,
+    foliage: 0x5a6c3a, foliageAlt: 0x84904a, bark: 0x66502e, dead: 0xb09a68,
+    concrete: 0xa89478, dirt: 0xba9660, glass: 0x2e2420, hazard: 0xf0b21a,
   },
 };
 
@@ -807,6 +825,233 @@ export function boostPadGeo(P, seed) {
   return b.done();
 }
 
+/* ---------------- the event layer ----------------
+   Everything below exists because a rally stage that is only rocks and trees
+   reads as a wilderness, and this is a RACE. Floodlights, sponsor boards,
+   tyre walls and bunting are what say somebody set this up on purpose and
+   people came to watch. They cluster around the start, the hero jumps and
+   the big corners, and they are the whole visual identity of THUNDER MESA. */
+
+/**
+ * Stadium floodlight. A tapered mast, a rack of six heads, and guy braces.
+ *
+ * The lamp faces are near-white on purpose: they carry no emissive of their
+ * own (this whole file is one vertex-coloured material), so all they can do
+ * is be the brightest thing in the frame and let the bloom find them. Under
+ * a low sun that is enough — a floodlight reads by its silhouette and by
+ * six hot rectangles, not by casting light.
+ */
+export function floodlightGeo(P, seed, h = 12) {
+  const rng = makeRNG((seed * 386117) | 1);
+  const b = builder();
+  const steel = shade(P.metal, -0.10 + rng() * 0.2);
+  b.slab(P.concrete, 1.3, 0.34, 1.3, 0, 0, 0);
+  b.cyl(steel, 0.13, 0.26, h, 8, 0, h * 0.5 + 0.30, 0);
+  // three guys down to the pad: without them the mast reads as a lamppost
+  for (let i = 0; i < 3; i++) {
+    const a = i / 3 * Math.PI * 2 + 0.4;
+    b.tube(shade(steel, -0.18), Math.cos(a) * 0.55, h * 0.62, Math.sin(a) * 0.55,
+      Math.cos(a) * 1.9, 0.30, Math.sin(a) * 1.9, 0.035, 4);
+  }
+  // the rack: a spine, a back brace, and the heads hung off the front
+  const top = h + 0.30, W = 3.0;
+  b.box(steel, W, 0.16, 0.16, 0, top, 0);
+  b.box(steel, W * 0.86, 0.12, 0.12, 0, top - 0.62, 0.30);
+  for (const s of [-1, 1]) b.tube(steel, s * W * 0.42, top, 0, s * W * 0.34, top - 0.62, 0.30, 0.05, 4);
+  for (let i = 0; i < 6; i++) {
+    const x = (i - 2.5) * W * 0.175;
+    const y = top + (i & 1 ? 0.34 : 0.10);
+    b.box(shade(steel, -0.24), 0.44, 0.34, 0.30, x, y, 0.16, -0.34, 0, 0);   // housing
+    b.plane(0xfff6e0, 0.40, 0.30, x, y - 0.09, 0.33, -0.34, 0, 0);           // the lens
+    b.box(shade(steel, 0.14), 0.48, 0.05, 0.05, x, y + 0.18, 0.26);          // hood
+  }
+  return b.done();
+}
+
+/**
+ * Sponsor board. Legs, a lattice back, and a dark face panel.
+ *
+ * The face is deliberately BLANK here — props.js lays a canvas sponsor
+ * texture over it the same way it does the start gantry, because this file
+ * has no UVs by design and a texture needs them. What kit owns is the
+ * structure; what props owns is what the structure is advertising.
+ */
+export function billboardGeo(P, seed, w = 9, h = 4.6) {
+  const rng = makeRNG((seed * 402653) | 1);
+  const b = builder();
+  const steel = shade(P.metal, -0.14 + rng() * 0.22);
+  const stand = 3.2;
+  for (const s of [-1, 1]) {
+    b.post(steel, 0.15, stand + h * 0.5, s * w * 0.34, 0, 0, 8);
+    b.slab(P.concrete, 0.7, 0.22, 0.7, s * w * 0.34, 0, 0);
+    // raking prop behind, which is what stops a board this size taking off
+    b.tube(shade(steel, -0.2), s * w * 0.34, stand + h * 0.4, 0,
+      s * w * 0.34, 0.2, -1.9, 0.07, 5);
+  }
+  const cy = stand + h * 0.5;
+  b.box(shade(P.paint, -0.55), w, h, 0.16, 0, cy, -0.10);      // backing
+  for (let i = 0; i < 5; i++) {                                 // lattice
+    b.box(steel, 0.10, h * 1.02, 0.10, (i - 2) * w * 0.22, cy, -0.22);
+  }
+  b.box(steel, w * 1.03, 0.14, 0.26, 0, cy + h * 0.5, -0.10);
+  b.box(steel, w * 1.03, 0.14, 0.26, 0, cy - h * 0.5, -0.10);
+  // the face props.js will paper over, and a valance of lamps above it
+  b.plane(shade(P.glass, 0.10), w * 0.96, h * 0.94, 0, cy, 0.02);
+  for (let i = 0; i < 4; i++) {
+    const x = (i - 1.5) * w * 0.26;
+    b.tube(steel, x, cy + h * 0.5, 0.0, x, cy + h * 0.5 + 0.34, 0.42, 0.04, 4);
+    b.box(0xfff2d8, 0.30, 0.10, 0.16, x, cy + h * 0.5 + 0.34, 0.44);
+  }
+  return b.done();
+}
+
+/**
+ * Tyre wall. Three courses of scrap tyres strapped to a rail — the standard
+ * answer to "what goes on the outside of this corner" at every circuit in
+ * the world, and the friendliest thing in the game to hit at 40 m/s.
+ */
+export function tyreWallGeo(P, seed, len = 6) {
+  const rng = makeRNG((seed * 419431) | 1);
+  const b = builder();
+  const R = 0.34, across = Math.max(2, Math.round(len / (R * 1.9)));
+  for (let row = 0; row < 3; row++) {
+    const y = R + row * R * 1.62;
+    for (let i = 0; i < across; i++) {
+      const x = (i - (across - 1) * 0.5) * R * 1.9 + (row & 1 ? R * 0.5 : 0);
+      // open cylinders, not tori: from a moving car a stack of dark rings is
+      // a stack of dark rings either way, at a sixth of the triangles. The
+      // inner ring — the bit that makes it read as a HOLE — is skipped on
+      // the bottom course, which is the one usually half in the dirt.
+      b.cyl(shade(0x1c1c1e, rng() * 0.22), R, R, 0.26, 9, x, y, 0, Math.PI / 2, 0, 0, true);
+      if (row > 0) b.cyl(shade(0x141416, 0.1), R * 0.62, R * 0.62, 0.24, 7, x, y, 0, Math.PI / 2, 0, 0, true);
+    }
+  }
+  // conveyor strap across the face, and a painted capping rail
+  b.box(shade(P.rust, -0.2), len * 1.02, 0.10, 0.06, 0, R * 2.4, 0.30);
+  b.box(P.hazard, len * 1.04, 0.14, 0.34, 0, R * 4.05, 0);
+  for (const s of [-1, 1]) b.post(P.metal, 0.07, R * 4.1, s * len * 0.5, 0, -0.18, 6);
+  return b.done();
+}
+
+/**
+ * A natural rock arch you drive THROUGH. The legs are colliders on the
+ * props side; everything between them is clear air, which is the entire
+ * point — the one landmark in the game that is also a gate.
+ *
+ * Built as a chain of short tapered cylinders following the arch line with
+ * a jittered radius, rather than as a swept tube: the facets are what make
+ * it read as fractured rock instead of as a pipe.
+ */
+export function rockArchGeo(P, seed, span = 26, h = 13) {
+  const rng = makeRNG((seed * 434293) | 1);
+  const b = builder();
+  const base = shade(P.dirt, -0.30);
+  const SEG = 15;
+  const hx = span * 0.5;
+  /* The arch line: a flattened half-ellipse, so the crown is broad. It
+     springs from 0.35 rather than from 0 because the first segment is a
+     three-metre cylinder whose end cap is tilted with the arch — starting
+     at zero puts a quarter of a metre of that cap underground, and the
+     buttress below hides the 0.35 completely. */
+  const at = (t) => {
+    const a = Math.PI * t;
+    return [-Math.cos(a) * hx, Math.pow(Math.sin(a), 0.72) * h + 0.35, (rng() - 0.5) * 1.1];
+  };
+  let p = at(0);
+  for (let i = 1; i <= SEG; i++) {
+    const q = at(i / SEG);
+    const t = i / SEG;
+    // thick at the springing, thinnest a third of the way up, solid at the crown
+    const r = 1.5 + 2.6 * Math.pow(Math.abs(0.5 - t) * 2, 1.8) + rng() * 0.5;
+    b.tube(shade(base, -0.12 + rng() * 0.26), p[0], p[1], p[2], q[0], q[1], q[2], r, 7);
+    p = q;
+  }
+  // buttresses at the feet: an arch with no shoulders looks like a croquet hoop.
+  // No z-tilt on the cones — the arch is already sunk to the ankles by its own
+  // springing tubes, and a tilted 5 m cone puts a corner half a metre under.
+  for (const s of [-1, 1]) {
+    b.cone(shade(base, -0.06 + rng() * 0.2), 4.2 + rng() * 1.2, h * 0.42, 7,
+      s * (hx + 0.7), h * 0.23, (rng() - 0.5) * 1.4, 0, rng() * 6.283, 0);
+    b.cyl(shade(base, -0.20), 2.6, 4.4, h * 0.30, 7, s * (hx + 0.2), h * 0.15, 0);
+  }
+  // a few cap blocks for the silhouette against the sky
+  for (let i = 0; i < 5; i++) {
+    const t = 0.30 + rng() * 0.40;
+    const q = at(t);
+    b.box(shade(base, 0.10 + rng() * 0.2), 2.0 + rng() * 1.6, 1.0 + rng(), 2.2 + rng(),
+      q[0], q[1] + 1.6 + rng() * 0.8, q[2], (rng() - 0.5) * 0.4, rng() * 6.283, (rng() - 0.5) * 0.4);
+  }
+  return b.done();
+}
+
+/**
+ * The falling sheet of a waterfall, standing on its plunge pool.
+ *
+ * NO UVs, like everything else here — props.js gives this one its own
+ * scrolling additive material, which derives its texture coordinate from
+ * OBJECT-SPACE POSITION instead. That is what lets a sheet with the same
+ * attribute set as a hay bale still scroll. The vertex colour carries the
+ * vertical ramp: glassy and dark at the lip where the water is still one
+ * body, white and broken at the bottom where it is mostly air.
+ */
+export function waterfallSheetGeo(P, seed, w = 7, h = 16) {
+  const rng = makeRNG((seed * 452930) | 1);
+  const b = builder();
+  const ROWS = 10, COLS = 3;
+  const rowH = h / ROWS;
+  for (let r = 0; r < ROWS; r++) {
+        // 0 at the lip, 1 at the pool
+    const t = 1 - (r + 0.5) / ROWS;
+    const y = h - (r + 0.5) * rowH;
+    // the sheet spreads and bows outward as it falls
+    const wide = w * (0.72 + 0.42 * t);
+    const bow = 0.9 * t * t;
+    const col = shade(0x9fc4d8, -0.22 + 0.50 * t + (rng() - 0.5) * 0.10);
+    for (let c = 0; c < COLS; c++) {
+      const x = (c - (COLS - 1) * 0.5) * wide / COLS;
+      b.plane(col, wide / COLS * 1.06, rowH * 1.10, x, y, bow + (rng() - 0.5) * 0.12,
+        0, (c - 1) * -0.16, 0);
+    }
+  }
+  // the lip, and the boil at the bottom. The boil sits ON the pool surface:
+  // a sphere centred at its own radius has its underside at y = 0, which is
+  // where the water is.
+  b.box(shade(P.concrete, -0.3), w * 0.82, 0.5, 1.2, 0, h - 0.18, -0.1);
+  for (let i = 0; i < 5; i++) {
+    const r = 0.7 + rng() * 0.8;
+    b.sphere(shade(0xdfeef4, -0.10 + rng() * 0.18), r,
+      (rng() - 0.5) * w * 0.9, r * 0.94, 0.6 + rng() * 1.2, 7);
+  }
+  return b.done();
+}
+
+/**
+ * A geyser vent: a mineral cone built up out of its own deposits, open at
+ * the top. props.js fires dust and VFX up through it on a timer; all this
+ * has to do is look like something that could.
+ */
+export function geyserVentGeo(P, seed) {
+  const rng = makeRNG((seed * 471011) | 1);
+  const b = builder();
+  const R = 1.3 + rng() * 0.7, h = 0.55 + rng() * 0.55;
+  const crust = shade(P.concrete, -0.06 + rng() * 0.22);
+  // terraces: each flood leaves a rim slightly inside the last one
+  for (let i = 0; i < 3; i++) {
+    const t = i / 3;
+    b.cyl(shade(crust, -0.10 + t * 0.24), R * (0.78 - t * 0.22), R * (1.0 - t * 0.20),
+      h * 0.42, 11, 0, h * t + h * 0.21, 0);
+  }
+  b.cyl(shade(crust, 0.20), R * 0.56, R * 0.60, 0.10, 11, 0, h + 0.05, 0);   // rim
+  b.plane(0x120c0a, R * 1.0, R * 1.0, 0, h + 0.02, 0, -Math.PI / 2, 0, 0);   // the throat
+  // spatter, so the ground around it does not stop dead at the cone
+  for (let i = 0; i < 6; i++) {
+    const a = rng() * 6.283, d = R * (1.05 + rng() * 0.5), r = 0.10 + rng() * 0.16;
+    b.sphere(shade(crust, -0.2 + rng() * 0.2), r,
+      Math.cos(a) * d, r * 0.80, Math.sin(a) * d, 5);
+  }
+  return b.done();
+}
+
 /**
  * Catenary wire between two points, as a thin swept tube.
  * `sag` is the drop at midspan in metres. Built as one polyline of short
@@ -822,5 +1067,38 @@ export function wireGeo(color, ax, ay, az, bx, by, bz, sag = 1.2, steps = 8, r =
     b.tube(color, px, py, pz, x, y, z, r, 4);
     px = x; py = y; pz = z;
   }
+  return b.done();
+}
+
+/**
+ * Bunting: the same catenary as a wire, with pennants hanging off it.
+ *
+ * Free-standing like wireGeo rather than palette-driven, and for the same
+ * reason — a run has to know where BOTH ends are, and only the caller does.
+ * Two alternating flag colours, because one is a decoration and two is an
+ * event. The pennants hang from the cord, so this geometry does NOT stand
+ * on y = 0; it belongs strung between two things that do.
+ */
+export function buntingGeo(cord, flagA, flagB, ax, ay, az, bx, by, bz, sag = 1.4, n = 14) {
+  const b = builder();
+  const at = (t) => [ax + (bx - ax) * t, ay + (by - ay) * t - sag * 4 * t * (1 - t),
+    az + (bz - az) * t];
+  let p = at(0);
+  for (let i = 1; i <= n; i++) {
+    const q = at(i / n);
+    b.tube(cord, p[0], p[1], p[2], q[0], q[1], q[2], 0.022, 4);
+    p = q;
+  }
+  const len = Math.hypot(bx - ax, bz - az) || 1;
+  // yaw so every pennant hangs square to the run
+  const yaw = Math.atan2(bx - ax, bz - az) + Math.PI / 2;
+  for (let i = 0; i < n; i++) {
+    const c = at((i + 0.5) / n);
+    // a triangle would need a shape; a narrow tapered cone hung point-down
+    // is two dozen triangles cheaper and reads identically at 30 m
+    b.cone(i & 1 ? flagA : flagB, 0.17, 0.42, 3,
+      c[0], c[1] - 0.23, c[2], Math.PI, yaw, 0);
+  }
+  void len;
   return b.done();
 }

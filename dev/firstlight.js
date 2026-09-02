@@ -1,6 +1,12 @@
 /* Integrator first-light harness: Wave-1 systems only (no main/ui/camera/ai —
    those are being written in parallel). Drives a vehicle down the track on a
-   scripted line with a hand-rolled chase cam. ?track=canyon|forest|volcano|training */
+   scripted line with a hand-rolled chase cam.
+     ?track=canyon|forest|volcano|training|thunder
+     ?veh=hopper|ridgeback|redline   ?q=low|medium|high|ultra
+     ?orbit=1   slow circle around the car instead of driving
+     ?fx=1      run every world/vfx.js effect at once, around the car
+   Console: FL.at(s) teleports, FL.census() counts the dressing,
+   FL.frameMs() is the rolling mean frame time. */
 import * as THREE from 'three';
 import { Engine } from '../src/core/engine.js';
 import { bakeTrack, Terrain } from '../src/world/terrain.js';
@@ -8,6 +14,7 @@ import { TRACKS } from '../src/world/tracks/index.js';
 import { Props } from '../src/world/props.js';
 import { Sky, SKY_THEMES } from '../src/world/sky.js';
 import { Dust } from '../src/world/dust.js';
+import { VFX } from '../src/world/vfx.js';
 import { Vehicle } from '../src/game/vehicle.js';
 import { VEHICLE_BY_ID } from '../src/game/vehicles.js';
 import { SURFACES } from '../src/world/surfaces.js';
@@ -47,11 +54,17 @@ async function boot() {
 
   const terrain = new Terrain(engine.renderer, baked, engine.quality, engine.caps, def);
   engine.scene.add(terrain.group);
+  // The terrain samples the real shadow map; without this the cars hover.
+  engine.attachTerrain(terrain);
   const sky = new Sky(engine.renderer, engine.scene, engine.quality, def.theme);
   engine.setLightTheme(SKY_THEMES[def.theme]);
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData);
   const dust = new Dust(engine.scene, terrain, terrain.uniforms.uSunDir, engine.quality.dust, def.theme);
-  dust.setViewport(engine.renderer.getDrawingBufferSize(new THREE.Vector2()).y);
+  const vfx = new VFX(engine.scene, dust, engine.quality, def.theme);
+  props.setVfx(vfx, dust);
+  const viewH = engine.renderer.getDrawingBufferSize(new THREE.Vector2()).y;
+  dust.setViewport(viewH);
+  vfx.setViewport(viewH);
 
   const veh = new Vehicle(engine.scene, terrain, VEHICLE_BY_ID[vehId]);
   const spline = terrain.spline, line = terrain.trackData.racingLine;
@@ -62,7 +75,7 @@ async function boot() {
      automation tool that cannot wait out a lap) can teleport the car to a
      set piece: FL.at(575) drops it on the caldera leap. */
   window.FL = {
-    engine, terrain, props, sky, dust, veh, def, spline,
+    engine, terrain, props, sky, dust, vfx, veh, def, spline,
     at(s, lat = 0) {
       const p = spline.offsetPoint(spline.wrapS(s), lat, {});
       const d = spline.dirAt(spline.wrapS(s), {});
@@ -82,10 +95,57 @@ async function boot() {
       });
       return { draws: props.group.children.length, ...out };
     },
+    /* Rolling mean frame time in ms. `fps` on the overlay is a half-second
+       bucket and it bounces around; this is the number to read when you are
+       deciding whether a change cost anything. */
+    frameMs() { return ftMean * 1000; },
   };
 
   const _out = {}, _v = new THREE.Vector3();
   let elapsed = 0, last = performance.now(), frames = 0, ft = 0, fps = 0;
+  let ftMean = 1 / 60;
+
+  /* ---------------- ?fx=1 : the VFX exerciser ----------------
+     Everything world/vfx.js can do, on a loop, around the car: two ribbons
+     chasing it, a flame on every racer slot, sparks off the wheels, a shock
+     ring and a pad flash on a timer, and confetti every few seconds. The
+     point is to see all three draw calls under load at once — sparks alone
+     always look fine, and it is the ribbon-plus-ring-plus-pool frame that
+     tells you whether the budget holds. */
+  const fxOn = q.get('fx') === '1';
+  let fxT = 0, fxSeq = 0;
+  function exerciseVfx(dt) {
+    fxT += dt;
+    const p = veh.pos, f = veh.forward, r = veh.right;
+    // two projectile trails orbiting the car
+    for (let i = 0; i < 2; i++) {
+      const a = fxT * (2.4 + i * 0.7) + i * Math.PI;
+      vfx.ribbon(i).push(
+        p.x + Math.cos(a) * 5.5, p.y + 1.4 + Math.sin(fxT * 3 + i) * 0.8, p.z + Math.sin(a) * 5.5,
+        i ? 1.7 : 0.5, i ? 0.5 : 1.2, i ? 0.4 : 1.8);
+    }
+    // six flames, cycling tier so all three colours are on screen
+    for (let ri = 0; ri < 6; ri++) {
+      const a = fxT * 0.8 + ri * 1.047;
+      vfx.flame(ri, 0.5 + 0.5 * Math.sin(fxT * 2 + ri),
+        p.x + Math.cos(a) * (3 + ri), p.y + 0.6, p.z + Math.sin(a) * (3 + ri),
+        -Math.cos(a), 0.2, -Math.sin(a), (ri % 3) + 1);
+    }
+    // sparks off whichever wheels are on the ground
+    for (const w of veh.wheels) {
+      if (!w.contact || Math.random() > 0.30) continue;
+      vfx.sparks(2, w.worldPos.x, w.worldPos.y, w.worldPos.z,
+        -f.x, 0.5, -f.z, 7, 0.7, 1.7, 1.1, 0.45, 0.35);
+    }
+    if (fxT > 0.9) {
+      fxT = 0;
+      const k = fxSeq++ % 3;
+      if (k === 0) vfx.shock(p.x + r.x * 4, p.y, p.z + r.z * 4, 3.4, 1.5, 0.7, 0.25);
+      else if (k === 1) vfx.padFlash(p.x + f.x * 8, terrain.heightAt(p.x + f.x * 8, p.z + f.z * 8),
+        p.z + f.z * 8, f.x, f.z);
+      else vfx.confetti(30, p.x, p.y + 2.5, p.z, 3.5);
+    }
+  }
 
   function drive() {
     // steer toward the racing-line point ~14 m ahead, throttle to its speed
@@ -148,18 +208,23 @@ async function boot() {
       engine.camera.lookAt(veh.pos.x + veh.forward.x * 6, veh.pos.y + 1, veh.pos.z + veh.forward.z * 6);
     }
 
+    if (fxOn) exerciseVfx(dt);
+
     terrain.update(dt, engine.camera, sky.sunDir);
     sky.update(dt, engine.camera, elapsed);
     props.update(dt, elapsed, engine.camera);
     dust.update(dt);
+    vfx.update(dt, engine.camera);
+    sky.projectSun(engine.camera, engine.final.uniforms.uSunUV.value);
     engine.aimShadow(veh.pos, sky.sunDir);
     engine.render(dt);
 
     frames++; ft += dt;
+    ftMean = ftMean * 0.92 + dt * 0.08;
     if (ft > 0.5) { fps = frames / ft; frames = 0; ft = 0; }
     const n = spline.nearest(veh.pos.x, veh.pos.z, _out);
     stats.textContent =
-      `track ${def.id}  veh ${vehId}  fps ${fps.toFixed(0)}\n` +
+      `track ${def.id}  veh ${vehId}  fps ${fps.toFixed(0)}  ${(ftMean * 1000).toFixed(1)} ms\n` +
       `speed ${(veh.speed * 3.6).toFixed(0)} km/h  gear ${veh.gear ?? '-'}  rpm ${(veh.rpmNorm ?? 0).toFixed(2)}\n` +
       `s ${n.s.toFixed(0)}/${spline.length.toFixed(0)}  d ${n.d.toFixed(1)}  surf ${SURFACES[veh.surfaceId]?.name}\n` +
       `air ${veh.airborne} ${veh.airTime.toFixed(1)}s  hardHit ${veh.hardHit.toFixed(1)}\n` +

@@ -86,6 +86,19 @@ export const THEMES = {
     haze: [0.36, 0.20, 0.17], hazeDensity: 0.00115, hazeStart: 70,
     tint: [1.02, 0.90, 0.86],
     surf: { 4: [0.25, 0.23, 0.23], 1: [0.31, 0.24, 0.19] }
+  },
+  thunder: {
+    // The canyon family an hour later. Sun nine degrees off the deck, so the
+    // ground reads almost entirely by its own ambient — which is why the
+    // hemisphere is violet and lifted rather than the usual desert blue.
+    // sun MUST equal SKY_THEMES.thunder.sunDir: the occlusion mask is baked
+    // against exactly this vector.
+    name: 'THUNDER MESA',
+    sun: [-0.463692, 0.156434, -0.872076], sunCol: [1.56, 1.10, 0.76],
+    sky: [0.30, 0.28, 0.46], ground: [0.40, 0.26, 0.18], ambient: 0.60,
+    haze: [0.86, 0.55, 0.32], hazeDensity: 0.00042, hazeStart: 110,
+    tint: [1.10, 0.94, 0.82],
+    surf: { 4: [0.50, 0.28, 0.20], 1: [0.48, 0.33, 0.22] }
   }
 };
 
@@ -214,6 +227,10 @@ float terrainH(vec2 p){
 export function buildTerrainMaterial(t) {
   const T = THEMES[t.theme] || THEMES.training;
   const pal = themePalette(t.theme).map(c => new THREE.Vector3(c[0], c[1], c[2]));
+  /* Whoever builds the Terrain may hand it `assets.get('ground')` on the way
+     in; nothing here requires it, and the procedural grain below is the
+     look the stages were tuned against. */
+  const ground = t.ground || null;
 
   const U = t.uniforms = {
     uMacro: { value: t.texMacro }, uFar: { value: t.texFar },
@@ -246,7 +263,13 @@ export function buildTerrainMaterial(t) {
     uRShadow: { value: null },
     uRShadowMat: { value: new THREE.Matrix4() },
     uRShadowOn: { value: 0 },
-    uRShadowTexel: { value: 1 / 2048 }
+    uRShadowTexel: { value: 1 / 2048 },
+    /* Optional photographic ground detail, a DataArrayTexture in
+       GROUND_LAYERS order. Absent is the normal case — see core/assets.js and
+       setGroundTexture() below. The sampler is behind a #define so a null
+       binding never reaches a driver. */
+    uGround: { value: ground },
+    uGroundOn: { value: ground ? 1 : 0 }
   };
 
   const vert = /* glsl */`
@@ -271,9 +294,18 @@ export function buildTerrainMaterial(t) {
 
   const frag = /* glsl */`
     precision highp float;
+    /* ESSL 3.00 defaults samplers to LOWP in both stages, and three only ever
+       declares float and int precision for us. Two things break without this
+       line. uLat is now declared in the vertex shader (highp, from
+       TERRAIN_GLSL) and here, and a precision mismatch on a shared uniform is
+       a LINK error, not a warning. And uRShadow carries depth packed across
+       four 8-bit channels — unpackRGBAToDepth on a lowp fetch throws away
+       most of the range, which on a driver that honours lowp is a shadow map
+       with about six usable steps. */
+    precision highp sampler2D;
     #include <packing>
     varying vec3 vW; varying vec3 vN; varying float vDent; varying float vRoad;
-    uniform sampler2D uSunMask, uTrail, uSurf;
+    uniform sampler2D uSunMask, uTrail, uSurf, uLat;
     uniform sampler2D uRShadow; uniform mat4 uRShadowMat;
     uniform float uRShadowOn, uRShadowTexel;
     uniform vec3 uSunDir, uSunCol, uSkyCol, uGroundCol, uHazeCol;
@@ -281,6 +313,11 @@ export function buildTerrainMaterial(t) {
     uniform float uSunMaskExt, uTime, uFogK, uAmbient;
     uniform vec2 uHaze;
     uniform vec4 uConst2, uConst3;
+    #ifdef GROUND
+    precision highp sampler2DArray;
+    uniform sampler2DArray uGround;
+    uniform float uGroundOn;
+    #endif
 
     float h1(vec2 p){ p = fract(p*vec2(0.1031,0.1030)); p += dot(p,p.yx+33.33); return fract((p.x+p.y)*p.x); }
     float n2(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
@@ -289,11 +326,26 @@ export function buildTerrainMaterial(t) {
     const mat2 RB = mat2(0.3090,0.9511,-0.9511,0.3090);
     float fb(vec2 p){ return n2(p)*0.55 + n2(RA*p*2.17+7.7)*0.30 + n2(RB*p*4.01+19.3)*0.15; }
 
+    /* The same signed-lateral helper the vertex shader has, sampled per PIXEL
+       here on purpose: a wheel track is about a metre and a half across and
+       the clipmap's outer rings put their vertices four metres apart, so a
+       varying would smear every lane into a wash. Reads 0 off the carved
+       corridor — hence every use below is gated on vRoad. */
+    float latF(vec2 p){
+      return (texture2D(uLat, clamp(p / uConst3.x + 0.5, 0.0005, 0.9995)).r * 255.0 - 128.0) / 90.0;
+    }
+
     void main(){
       vec3 N = normalize(vN);
       vec3 V = normalize(cameraPosition - vW);
       float dist = distance(vW.xz, cameraPosition.xz);
       float near = 1.0 - smoothstep(26.0, 190.0, dist);
+      /* Two tighter fades for the things that are only worth computing under
+         the wheels. dnear must reach zero BEFORE the innermost FAR clipmap
+         ring starts (87 m at the tightest tier), or the perf guard below
+         would draw a visible ring on the ground where the effects stop. */
+      float dnear = 1.0 - smoothstep(30.0, 82.0, dist);
+      float gnear = 1.0 - smoothstep(24.0, 60.0, dist);
 
       /* ---- which surface are we standing on ----
          The map is NEAREST because an id has no meaning halfway between two
@@ -319,32 +371,41 @@ export function buildTerrainMaterial(t) {
 
       /* ---- micro relief: the grain has to CATCH the light, not be painted on ---- */
       #define GRIT(P) (n2((P)*4.1)*0.58 + n2((P)*16.0)*0.42)
-      float g0 = GRIT(vW.xz);
+      #ifdef FAR
+        float g0 = 0.5;                    // neutral: nothing this far out has grain
+      #else
+        float g0 = GRIT(vW.xz);
+      #endif
       float varN = fb(vW.xz*0.31);
       float speck = n2(vW.xz*9.3);
       float gritK = 0.55;
 
       if (sid == 0) {
-        /* ROAD — hardpack. Two-tone along the direction of travel: the
-           centre crown stays pale and dusty, the wheel tracks either side
-           are polished darker by everything that has driven them. */
-        float polish = smoothstep(0.35, 0.95, vRoad);
+        // ROAD — hardpack. The wheel tracks come from latF() below, which
+        // knows where the road EDGE is; all this branch does is the base.
         albedo *= 0.86 + 0.30*fb(vW.xz*0.22);
-        albedo *= mix(1.0, 0.80, polish * (0.45 + 0.55*n2(vW.xz*0.9)));
         rough = 0.82; gritK = 0.22;
       } else if (sid == 1) {
         albedo *= 0.84 + 0.34*varN + 0.16*g0;              // DIRT: clods
         albedo *= 0.92 + 0.20*speck;
+        // pebbles: hard little highlights that only exist close enough to see
+        albedo *= 1.0 + 0.38*near*smoothstep(0.66, 0.88, n2(vW.xz*7.3));
       } else if (sid == 2) {
         // SAND: bright, and rippled at a wavelength you can see from the car
         float rip = 0.5 + 0.5*sin(vW.x*1.7 + vW.z*0.9 + fb(vW.xz*0.12)*9.0);
         albedo *= 0.92 + 0.14*rip + 0.10*varN;
+        albedo *= 1.0 + 0.26*near*smoothstep(0.72, 0.92, n2(vW.xz*11.0));
         gritK = 0.38;
       } else if (sid == 3) {
-        // MUD: dark, wet, and the only surface here with a real highlight
+        /* MUD: dark, wet, and the only surface here with a real highlight.
+           The wet PATCHES are the point — an evenly glossy field reads as
+           plastic, and what sells mud is that the shine is in the ruts and
+           the hollows and nowhere else. */
         albedo *= 0.80 + 0.34*varN;
-        albedo = mix(albedo, albedo*0.62, smoothstep(0.4, 0.8, fb(vW.xz*0.6)));
-        rough = 0.28; gritK = 0.30;
+        float wet = smoothstep(0.40, 0.74, fb(vW.xz*0.55));
+        albedo = mix(albedo, albedo*0.54, wet);
+        rough = mix(0.40, 0.09, wet);
+        gritK = 0.30 * (1.0 - 0.7*wet);                    // standing water is flat
       } else if (sid == 4) {
         albedo *= 0.74 + 0.42*fb(vW.xz*0.55) + 0.18*g0;    // ROCK: mottled, hard
         rough = 0.72; gritK = 0.85;
@@ -358,14 +419,51 @@ export function buildTerrainMaterial(t) {
       } else if (sid == 6) {
         /* LAVA: black crust cracked over something moving. The pulse is slow
            and out of phase across the field, so a channel breathes rather
-           than blinking. */
+           than blinking. The crack WALLS are rim-lit: what you actually see
+           of a lava channel from a car is the glow catching the lip of the
+           crust at a grazing angle, not the floor of the crack. */
         float crack = fb(vW.xz*0.85 + vec2(0.0, uTime*0.035));
-        float glow = smoothstep(0.46, 0.80, crack);
-        float pulse = 0.62 + 0.38*sin(uTime*0.9 + vW.x*0.05 + vW.z*0.031);
-        albedo *= 0.55 + 0.30*crack;
-        emis = vec3(2.6, 0.72, 0.14) * glow * pulse;
+        float glow = smoothstep(0.44, 0.78, crack);
+        float pulse = 0.58 + 0.52*sin(uTime*0.9 + vW.x*0.05 + vW.z*0.031)
+                           + 0.16*sin(uTime*2.7 + vW.z*0.11);
+        float rim = pow(1.0 - max(dot(N, V), 0.0), 2.6);
+        albedo *= 0.50 + 0.30*crack;
+        emis = vec3(3.4, 0.92, 0.16) * glow * pulse * (1.0 + 1.3*rim);
+        emis += vec3(1.9, 0.36, 0.05) * rim * 0.40 * smoothstep(0.28, 0.60, crack);
         rough = 0.55; gritK = 0.45;
       }
+
+      /* ---- macro colour variation ----
+         Real ground is not one colour over a kilometre: iron staining, old
+         watercourses, where the wind drops what it is carrying. A 55 m
+         wavelength at plus or minus 12 % is enough to stop a stage reading
+         as one flat swatch, and small enough never to be mistaken for a
+         feature you could drive to. */
+      albedo *= 0.88 + 0.24*fb(vW.xz*0.018);
+
+      /* ---- the road surface itself ----
+         latF() is 0 on the crown and +-1 at the edge of the roadbed, so it
+         is the only thing in the shader that knows which part of the road it
+         is standing on. Two wheel tracks polished darker and smoother, a
+         paler shoulder where the loose stuff gets swept, and a dusted verge
+         beyond the edge. Everything is gated on vRoad, because latF reads 0
+         off the corridor and 0 is the CROWN — an ungated lane term would
+         paint a stripe across the whole map. */
+      #ifndef FAR
+      if (vRoad > 0.02 && sid != 6) {
+        float onRoad = smoothstep(0.02, 0.30, vRoad) * dnear;
+        float al = abs(latF(vW.xz));
+        float lane = smoothstep(0.24, 0.32, al) * (1.0 - smoothstep(0.48, 0.58, al));
+        float shoulder = smoothstep(0.70, 0.98, al) * (1.0 - smoothstep(1.02, 1.22, al));
+        float verge = smoothstep(1.00, 1.28, al);
+        // wear is uneven along the lane: nobody drives exactly the same line
+        lane *= 0.55 + 0.45*n2(vW.xz*0.55);
+        albedo *= mix(1.0, 0.70, lane*onRoad);
+        albedo *= 1.0 + 0.20*shoulder*onRoad;
+        albedo = mix(albedo, uSurfCol[1]*1.15, verge*onRoad*0.55);
+        rough = mix(rough, rough*0.66, lane*onRoad);
+      }
+      #endif
 
       /* ---- past the edge of the world, everything is bedrock ----
          The surface map only covers ±620 m. Outside it the uv clamps, so the
@@ -400,13 +498,32 @@ export function buildTerrainMaterial(t) {
         rough = mix(rough, 0.8, steep);
       }
 
+      /* ---- optional photographic ground detail ----
+         A DataArrayTexture in GROUND_LAYERS order, picked by surface id and
+         gone by 60 m. It MODULATES, never replaces: the theme palette is
+         what makes a stage that stage, and a photo dropped straight on top
+         would make all five look like the same quarry. Everything below runs
+         identically with no assets at all — that is the contract. */
+      #ifdef GROUND
+      if (gnear > 0.004 && sid != 6) {
+        float lay = sid == 0 ? 5.0 : sid == 1 ? 0.0 : sid == 2 ? 1.0
+                  : sid == 3 ? 3.0 : sid == 4 ? 2.0 : 4.0;
+        // 0.2158 is 50 % sRGB grey in linear: dividing by it keeps a normally
+        // exposed tile centred on 1.0, so a missing layer changes nothing.
+        vec3 gt = texture(uGround, vec3(vW.xz * 0.31, lay)).rgb * (1.0 / 0.2158);
+        albedo *= mix(vec3(1.0), gt, gnear * uGroundOn * 0.70);
+      }
+      #endif
+
       vec3 Nr = N;
-      if (near > 0.002 && gritK > 0.01){
+      #ifndef FAR
+      if (dnear > 0.002 && gritK > 0.01){
         float e = 0.05;
         float gx = GRIT(vW.xz + vec2(e, 0.0));
         float gz = GRIT(vW.xz + vec2(0.0, e));
-        Nr = normalize(N + vec3(-(gx-g0), 0.0, -(gz-g0)) * gritK * near);
+        Nr = normalize(N + vec3(-(gx-g0), 0.0, -(gz-g0)) * gritK * dnear);
       }
+      #endif
 
       /* ---- freshly churned ground is DARKER and wetter, not brighter ----
          (the instinct to brighten a fresh cut is wrong for dirt: what a
@@ -485,14 +602,59 @@ export function buildTerrainMaterial(t) {
       gl_FragColor = vec4(col, 1.0);
     }`;
 
+  const defines = {};
+  if (t.manualBilinear) defines.MANUAL_BILINEAR = 1;
+  if (ground) defines.GROUND = 1;
   t.material = new THREE.ShaderMaterial({
-    uniforms: U, vertexShader: vert, fragmentShader: frag, fog: false,
-    defines: t.manualBilinear ? { MANUAL_BILINEAR: 1 } : {}
+    uniforms: U, vertexShader: vert, fragmentShader: frag, fog: false, defines
   });
+}
+
+/**
+ * Swap the optional ground-detail array in after the fact — the assets load
+ * asynchronously and a stage is usually already on screen by the time they
+ * arrive. Pass null to go back to the procedural grain.
+ *
+ * The clip levels at or beyond FAR are deliberately left alone: their inner
+ * edge starts at 87 m and the detail is faded out by 60, so recompiling them
+ * would cost a hitch to change nothing.
+ */
+export function setGroundTexture(t, tex) {
+  if (!t || !t.material) return;
+  t.ground = tex || null;
+  const u = t.uniforms;
+  u.uGround.value = t.ground;
+  u.uGroundOn.value = t.ground ? 1 : 0;
+
+  const want = !!t.ground;
+  const D = t.material.defines;
+  if (!!D.GROUND === want) return;
+  if (want) D.GROUND = 1; else delete D.GROUND;
+  /* The near rings SHARE this defines object — makeLevelMaterial passes the
+     reference straight through — so flipping the flag above has already
+     changed theirs. What they still need, every one of them, is to be told
+     to relink; testing their defines here would find the flag already set
+     and skip them all. */
+  t.material.needsUpdate = true;
+  for (const L of t.levels || []) {
+    const m = L.mesh.material;
+    if (m && m.defines && !m.defines.FAR) m.needsUpdate = true;
+  }
 }
 
 /** One clipmap ring's material: the same programme, its own cell/sag/lod. */
 export function makeLevelMaterial(t, cell, i) {
+  /* PERF GUARD. Ring 4 begins about 87 m from the camera and the outermost
+     reaches the horizon, and between them they are most of the pixels in a
+     frame — every one of them at a grazing angle where the ground is four
+     pixels tall and nobody can tell what it is made of. The near-field
+     detail (grit albedo, the grit normal, the road lanes, the photographic
+     ground layer) is switched off there by define rather than by a branch:
+     it is not a saved instruction, it is a shorter programme. Everything it
+     drops has already faded to zero by 82 m, so there is no seam. */
+  const far = i >= 4;
+  const defines = far ? Object.assign({ FAR: 1 }, t.material.defines) : t.material.defines;
+  if (far) delete defines.GROUND;
   // Built directly rather than cloned: ShaderMaterial.clone() deep-copies the
   // uniforms, which warns on every render-target texture in the set and then
   // has its work thrown away by the three assignments below.
@@ -500,7 +662,7 @@ export function makeLevelMaterial(t, cell, i) {
     uniforms: Object.assign({}, t.uniforms),      // share the value objects
     vertexShader: t.material.vertexShader,
     fragmentShader: t.material.fragmentShader,
-    defines: t.material.defines,
+    defines,
     fog: false
   });
   mat.uniforms.uCell = { value: cell };

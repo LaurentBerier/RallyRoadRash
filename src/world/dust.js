@@ -32,11 +32,15 @@ const K_BUOY = [1.60, 0.00, 3.40];
    not import sky.js (it would drag three's PMREM into the particle module), so
    the numbers live twice. If a sky theme's sun colour changes, change it here.
    sunCol/amb/sky are LINEAR radiance, already multiplied by intensity. */
-const DUST_THEMES = {
+export const DUST_THEMES = {
   training: { wind: [1.10, 0.40], sunCol: [2.55, 2.32, 2.02], amb: [0.16, 0.15, 0.13], sky: [0.18, 0.25, 0.40] },
   canyon:   { wind: [1.80, -0.80], sunCol: [2.55, 1.72, 1.02], amb: [0.22, 0.16, 0.10], sky: [0.14, 0.20, 0.34] },
   forest:   { wind: [0.60, 0.50], sunCol: [2.05, 1.60, 1.05], amb: [0.14, 0.17, 0.11], sky: [0.20, 0.26, 0.34] },
-  volcano:  { wind: [2.40, -1.10], sunCol: [1.65, 0.62, 0.24], amb: [0.20, 0.09, 0.07], sky: [0.14, 0.09, 0.10] }
+  volcano:  { wind: [2.40, -1.10], sunCol: [1.65, 0.62, 0.24], amb: [0.20, 0.09, 0.07], sky: [0.14, 0.09, 0.10] },
+  // THUNDER MESA: the canyon's air an hour later. Same wind off the same
+  // mesa, but the key has swung orange and the sky fill has gone violet —
+  // which is what makes a dust plume read as backlit at nine degrees.
+  thunder:  { wind: [2.10, -0.60], sunCol: [2.30, 1.24, 0.52], amb: [0.22, 0.14, 0.12], sky: [0.16, 0.15, 0.32] }
 };
 
 const DEFAULT_COL = [0.58, 0.46, 0.32];      // DIRT, for callers that pass nothing
@@ -47,7 +51,7 @@ export class Dust {
    * @param terrain    needs heightAt(x,z); may be null (particles then never land)
    * @param sunDirRef  a uniform object {value:Vector3} or a bare Vector3 (sky.sunDir)
    * @param max        pool size — pass quality.dust
-   * @param theme      'training' | 'canyon' | 'forest' | 'volcano'
+   * @param theme      a DUST_THEMES key
    */
   constructor(scene, terrain, sunDirRef, max = 1200, theme = 'training') {
     this.scene = scene;

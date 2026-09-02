@@ -253,3 +253,150 @@ export function makeDustAtlas(T = 128, seed = 7) {
   // the particle shader indexes tiles arithmetically from `kind`
   return toTexture(c, { mipmaps: false, flipY: false });
 }
+
+/* ---------------- impact VFX ----------------
+   The dust atlas is for things made of ground. This one is for things made
+   of energy: the shower off a scraped panel, the burst at the line, the
+   pressure ring of a hit, the smear behind a projectile. Same rules — white
+   on alpha, tinted per particle in the shader, one sheet, one draw call. */
+
+/** Tile indices in the VFX atlas. Same (k%2, k/2) layout as DUST_TILE. */
+export const VFX_TILE = { SPARK: 0, CONFETTI: 1, RING: 2, STREAK: 3 };
+
+function drawVfx(d, sheet, T, tx, ty, kind, seed) {
+  const inv = 1 / T;
+  for (let j = 0; j < T; j++) {
+    const v = j * inv * 2 - 1;
+    for (let i = 0; i < T; i++) {
+      const u = i * inv * 2 - 1;
+      const r = Math.sqrt(u * u + v * v);
+      let a = 0, lum = 1;
+      if (kind === 0) {
+        // SPARK: a hot pinpoint inside a small halo. The core has to be
+        // small enough to survive the bloom without turning into a blob.
+        a = Math.exp(-r * r * 42.0) + Math.exp(-r * r * 6.0) * 0.34;
+        a *= 1 - sstep(0.78, 1.0, r);
+        lum = 1;
+      } else if (kind === 1) {
+        // CONFETTI: a hard-edged slip of paper with a crease down it, so a
+        // tumbling one flashes bright/dark instead of reading as a dot
+        const c = 0.9239, s = 0.3827;                    // 22.5 degrees
+        const px = u * c - v * s, py = u * s + v * c;
+        a = (Math.abs(px) < 0.62 && Math.abs(py) < 0.30) ? 1 : 0;
+        a *= 1 - sstep(0.52, 0.62, Math.abs(px));
+        a *= 1 - sstep(0.22, 0.30, Math.abs(py));
+        lum = 0.72 + 0.55 * clamp(1 - Math.abs(py + 0.06) * 5, 0, 1);
+      } else if (kind === 2) {
+        // RING: an expanding pressure front. Thin, hard on the outside,
+        // trailing inward — the asymmetry is what gives it a direction.
+        const w = 1 - sstep(0.74, 0.94, r);
+        a = w * sstep(0.34, 0.86, r);
+        a = a * a;
+        lum = 0.85 + 0.5 * sstep(0.70, 0.90, r);
+        a *= 1 - sstep(0.94, 1.0, r);
+      } else {
+        // STREAK: a long soft smear along X, for anything moving fast enough
+        // that a round sprite would look like a bead
+        const stretch = Math.abs(u) * 0.42;
+        a = Math.exp(-(stretch * stretch + v * v * 5.5) * 3.4);
+        a *= 1 - sstep(0.90, 1.0, Math.max(Math.abs(u), Math.abs(v)));
+        const n = erode(i * inv * 6.0 + 3, j * inv * 6.0 - 2, seed + 71);
+        lum = 0.80 + 0.40 * n;
+      }
+      a *= sstep(0, 0.05, Math.min(Math.min(i, T - 1 - i), Math.min(j, T - 1 - j)) * inv * 2);
+      const o = ((ty * T + j) * sheet + (tx * T + i)) * 4;
+      const L = Math.min(255, clamp(lum, 0, 1.6) * 255);
+      d[o] = L; d[o + 1] = L; d[o + 2] = L;
+      d[o + 3] = clamp(a, 0, 1) * 255;
+    }
+  }
+}
+
+/**
+ * 2x2 sheet: spark | confetti
+ *            ring  | streak
+ * Authored white-on-alpha exactly like the dust sheet, so world/vfx.js tints
+ * every one of them per particle and the whole impact layer is one material.
+ */
+export function makeVfxAtlas(T = 128, seed = 23) {
+  const S = T * 2;
+  const c = canvas2d(S, S);
+  const g = c.getContext('2d');
+  const img = g.createImageData(S, S);
+  drawVfx(img.data, S, T, 0, 0, 0, seed);
+  drawVfx(img.data, S, T, 1, 0, 1, seed + 113);
+  drawVfx(img.data, S, T, 0, 1, 2, seed + 227);
+  drawVfx(img.data, S, T, 1, 1, 3, seed + 331);
+  g.putImageData(img, 0, 0);
+  return toTexture(c, { mipmaps: false, flipY: false });
+}
+
+/**
+ * Falling water, as a tile that repeats in BOTH axes.
+ *
+ * Everything periodic here is periodic in v by construction — the threads
+ * are sine waves with an integer number of cycles across the canvas — so a
+ * sheet can scroll forever with no seam. Which is the whole trick: a
+ * waterfall is not a shape, it is one texture moving downward faster than
+ * the eye can follow.
+ */
+export function makeStreakSprite(S = 256, opts = {}) {
+  const { seed = 29, threads = 26 } = opts;
+  const c = canvas2d(S, S);
+  const g = c.getContext('2d');
+  const img = g.createImageData(S, S);
+  const d = img.data;
+  const inv = 1 / S;
+  for (let i = 0; i < S; i++) {
+    const fx = i * inv;
+    // one thread's centre, width and speed are fixed per column band
+    const band = Math.floor(fx * threads);
+    const jitter = vnoise(band * 3.1 + 0.5, seed * 0.31 + 1.5, seed + band);
+    const cyc = 1 + Math.floor(jitter * 3);            // integer cycles => tiles in v
+    const phase = vnoise(band * 7.7 + 2.5, seed * 0.17 + 4.5, seed + band * 5);
+    const wide = 0.35 + jitter * 0.55;
+    const local = Math.abs((fx * threads - band) * 2 - 1);
+    const across = (1 - sstep(wide * 0.55, wide, local));
+    for (let j = 0; j < S; j++) {
+      const fy = j * inv;
+      const flow = 0.5 + 0.5 * Math.sin((fy * cyc + phase) * Math.PI * 2);
+      // foam is brightest where the thread necks down and breaks up
+      const a = across * (0.30 + 0.70 * flow) * (0.55 + 0.45 * jitter);
+      const lum = 0.78 + 0.30 * flow;
+      const o = (j * S + i) * 4;
+      const L = Math.min(255, lum * 255);
+      d[o] = L; d[o + 1] = Math.min(255, L * 0.99); d[o + 2] = 255;
+      d[o + 3] = clamp(a, 0, 1) * 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return toTexture(c, { srgb: false, wrap: THREE.RepeatWrapping, mipmaps: false });
+}
+
+/**
+ * A run of chevrons pointing along +V, tiling in V. White on alpha, so it
+ * takes whatever colour the material multiplies it by — a boost pad, a
+ * direction arrow on a berm, a scrolling floor marker.
+ */
+export function makeChevronTex(S = 128, opts = {}) {
+  const { rows = 3, thickness = 0.16 } = opts;
+  const c = canvas2d(S, S);
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, S, S);
+  g.strokeStyle = '#ffffff';
+  g.lineCap = 'butt';
+  g.lineJoin = 'miter';
+  g.lineWidth = S * thickness;
+  const step = S / rows;
+  // one extra above and below so the chevron that straddles the seam is drawn
+  for (let i = -1; i <= rows; i++) {
+    const y = (i + 0.5) * step;
+    g.globalAlpha = 1;
+    g.beginPath();
+    g.moveTo(S * 0.06, y + step * 0.26);
+    g.lineTo(S * 0.5, y - step * 0.26);
+    g.lineTo(S * 0.94, y + step * 0.26);
+    g.stroke();
+  }
+  return toTexture(c, { srgb: false, wrapT: THREE.RepeatWrapping, mipmaps: false });
+}
