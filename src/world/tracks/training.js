@@ -7,11 +7,22 @@
    Design intent: a wide, flat, forgiving bowl with nothing on it that
    can end your run. Half-widths of 10.4-12.1 m are half again what
    the other tracks give you, the tightest corner is 66 m radius (flat
-   out in third). Two small kickers (1.15-1.35 m) teach that landings
-   compress the suspension; two bigger set pieces - First Air (s=318,
-   a 3 m tabletop) and the Finish Line Flyer (s=835, 4 m, landing
-   through the start gantry) - teach real air with nothing around to
-   bin it on.
+   out in third).
+
+   It is also the syllabus. Every feature type the campaign uses gets
+   introduced here once, in the order a driver needs them, with the
+   whole bowl as run-off:
+     s 150  a boost pad, on its own, on a straight
+     s 318  FIRST AIR - a TABLE. Land on the deck, land past it, or
+            case it: all three are survivable, which is the only way
+            to teach a lip
+     s 380  a 1.15 m kicker, no gate (the rhythm idea)
+     s 470  THE RIPPLE - whoops, 7 m apart, 0.4 m tall
+     s 560  80 m banked 12 deg: the first corner that is faster than
+            it looks
+     s 700  a second kicker, taken at speed off the banking
+     s 760  a pair of pads, one each side, so the line matters
+     s 835  FINISH FLYER, unchanged, through the start gantry
    One lap: this is a shakedown, not a race.
    ============================================================ */
 import { SURF } from '../surfaces.js';
@@ -23,6 +34,7 @@ export default {
   theme: 'training',
   seed: 4101,
   laps: 1,
+  difficulty: 0.25,
 
   /* Closed loop, racing direction = increasing index. Authored y is the ROAD
      height; terrain.js carves the bowl to meet it. */
@@ -48,10 +60,38 @@ export default {
   ],
 
   jumps: [
-    { s: 318, len: 18, h: 3.0, name: 'FIRST AIR' },   // First Air - tabletop, ~34 m/s on the open back straight
-    { s: 380, len: 11, h: 1.15 },
-    { s: 700, len: 11, h: 1.35 },
+    // FIRST AIR is a real table, not a kicker called one: 10 m of flat deck
+    // then 8 m of exit ramp, so a first-timer at any speed lands on something.
+    { s: 318, len: 18, h: 3.0, kind: 'table', top: 10, down: 8, name: 'FIRST AIR' },
+    // No gate: 62 m behind FIRST AIR, a checkpoint here would halve the spacing.
+    { s: 380, len: 11, h: 1.15, cp: false },
+    /* This was authored as an 18° HIP and is deliberately not one any more.
+       A hip biases the racing line 1.2 m sideways across its lip, and both
+       ai-check drivers answered that step by running 7.4 m wide through
+       s700-725 — 1.54 % of PRO's lap spent past the 7 m gate, against a 1 %
+       budget and a 0.50 % baseline. Dropping the yaw did nothing: the line's
+       hip aim reads sign(yaw), not its magnitude, so 10° and 18° are the
+       same line. Removing the hip took the stage to 0.00 %.
+
+       So the hip lesson moves to where it is allowed to bite: SUNSTRIKE
+       CANYON s250, TIMBERLINE s1650 and the ∓20/+20 pair on THUNDER PARK,
+       all of which hold the line inside the gate. This is the stage that
+       promises nothing here bites, and it keeps that promise with a plain
+       kicker off the banking. Do not re-add yaw here without re-running
+       ai-check. */
+    { s: 700, len: 11, h: 1.6, cp: false },
     { s: 835, len: 20, h: 4.0, name: 'FINISH FLYER' }    // Finish Line Flyer - lands through the start gantry, clear of the grid
+  ],
+
+  // THE RIPPLE. 7 m wavelength at 0.4 m is 10.5 texels a crest on the 0.664 m
+  // heightfield — the shortest roller this ground can hold and still be felt.
+  whoops: [{ s0: 470, s1: 530, wl: 7, amp: 0.4 }],
+  // A gentle right-hander; 12 deg of authored bank makes it flat-out.
+  banks: [{ s0: 560, s1: 640, deg: 12 }],
+
+  pads: [
+    { s: 150 },                                  // the introduction: one pad, straight ahead
+    { s: 760, lat: 3 }, { s: 760, lat: -3 }      // now pick a side
   ],
 
   walls: [{ s0: 820, s1: 140, side: 0 }],

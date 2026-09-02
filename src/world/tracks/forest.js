@@ -7,16 +7,36 @@
    one where the ground fights you: mud in the valley bottom and again
    through the hairpin, grass everywhere you leave the ruts.
 
-     s    0- 260  wet valley floor, MUD, third gear and patience
-     s  350- 750  the climb: 55 m over 400 m, three wooden ramps cut
-                  into the switchback shelves
-     s  750-1000  the ridge line, dry and fast
-     s 1020-1200  the hairpin on the shelf, mud, walls on both sides
-     s 1200-1500  the descent — and the ALTERNATE HIGH ROUTE, which
-                  stays on the shelf for 275 m against the main line's
-                  300 m and pays for it with a 26 % plunge at the end
+     s    0- 260  wet valley floor, MUD, third gear and patience —
+                  with THE CORDUROY (whoops, 120-190) in the worst of
+                  it, where the ruts have set hard
+     s  350- 750  the climb: 55 m over 400 m, a table cut into a
+                  switchback shelf and 60 m of 14 deg bank
+     s  750-1000  the ridge line, dry and fast: GULLY GAP at 815, then
+                  THE STEP — a 25 m deck you can sit on
+     s 1020-1200  the hairpin on the shelf, mud, walls both sides and a
+                  2 m berm round the outside of each half of it
+     s 1200-1500  the descent — THE PLUNGE at 1280 and the ALTERNATE
+                  HIGH ROUTE, which stays on the shelf for 275 m
+                  against the main line's 300 m and pays for it with a
+                  2.5 m ledge at the end
    ============================================================ */
 import { SURF } from '../surfaces.js';
+
+/* The high route. 275 m of shelf against 300 m of main line, and it holds its
+   altitude to the last moment — so it is faster only if you can take the drop
+   back onto the road without landing on the nose. Its jump is in the ROUTE's
+   own arc length, and route jumps are always cp:false. */
+const HIGH_ROUTE = {
+  id: 'highroute', name: 'HIGH ROUTE', s0: 1200, s1: 1500, aiBias: 0.35,
+  path: [
+    { x: -103.6, z: -188.6, y: 47.8, w: 6.5 }, { x: -72.6, z: -197.3, y: 47.1, w: 6.5 }, { x: -44.9, z: -210, y: 47.3, w: 6.5 },
+    { x: -22.3, z: -215.8, y: 47.8, w: 6.5 }, { x: -0.1, z: -221.4, y: 47.5, w: 6.5 }, { x: 19.9, z: -226.8, y: 45.7, w: 6.5 },
+    { x: 38.6, z: -233.3, y: 41.9, w: 6.5 }, { x: 57.1, z: -241, y: 36.2, w: 6.5 }, { x: 76.8, z: -249.7, y: 29.2, w: 6.5 },
+    { x: 98.9, z: -257.8, y: 21.8, w: 6.5 }, { x: 125.3, z: -263.3, y: 15.3, w: 6.5 }, { x: 154.7, z: -264.1, y: 10.5, w: 6.5 }
+  ],
+  jumps: [{ s: 240, len: 6, h: 2.5, kind: 'drop', name: 'SHELF END' }]
+};
 
 export default {
   id: 'forest',
@@ -25,6 +45,7 @@ export default {
   theme: 'forest',
   seed: 8823,
   laps: 3,
+  difficulty: 0.65,
 
   path: [
     { x: 275.4, z: 0, y: 2.5, w: 8 }, { x: 273.1, z: 52.7, y: 4.1, w: 7.9 }, { x: 266.1, z: 105, y: 4.8, w: 7.7 },
@@ -55,25 +76,43 @@ export default {
   /* Wooden ramps: props.js drops a plank deck and side rails on each lip, the
      terrain carves the earth bank under it. */
   jumps: [
-    { s: 500, len: 14, h: 2.6 },                 // rhythm double 1/2 (was the lone s~525 kicker)
-    { s: 570, len: 14, h: 2.6 },                 // rhythm double 2/2, 70 m on
-    { s: 815, len: 18, h: 3.8, gap: 18, name: 'GULLY GAP' },  // Gully Gap - dry ridge line, ~21.7 m/s to clear
-    { s: 1100, len: 12, h: 1.8 },
-    { s: 1650, len: 13, h: 2.1 }
+    // A table on the steepest part of the climb — 8 m of deck so a car that
+    // arrives slow in the mud still gets over it. No gate: GULLY GAP has one.
+    { s: 570, len: 14, h: 2.8, kind: 'table', top: 8, down: 7, cp: false },
+    { s: 815, len: 18, h: 4.2, gap: 20, name: 'GULLY GAP' },  // Gully Gap - dry ridge line, ~22.5 m/s to clear
+    // THE STEP: 14 m of ramp, 25 m of deck, 30 m of exit ramp. Not a jump so
+    // much as a ridge you drive over — and land on, if you got the gap wrong.
+    { s: 940, len: 14, h: 1.6, kind: 'table', top: 25, down: 30, name: 'THE STEP' },
+    // THE PLUNGE. The descent is already falling at 11 %; the ledge just takes
+    // the last 3 m of it away. No gate — the landing is nowhere near the road.
+    { s: 1280, len: 10, h: 3.0, kind: 'drop', cp: false, name: 'THE PLUNGE' },
+    { s: 1650, len: 13, h: 2.4, kind: 'hip', yaw: 14 }
   ],
 
-  /* The high route. 275 m of shelf against 300 m of main line, and it holds its
-     altitude to the last moment — so it is faster only if you can take the drop
-     back onto the road without landing on the nose. */
-  shortcut: {
-    s0: 1200, s1: 1500,
-    path: [
-      { x: -103.6, z: -188.6, y: 47.8, w: 6.5 }, { x: -72.6, z: -197.3, y: 47.1, w: 6.5 }, { x: -44.9, z: -210, y: 47.3, w: 6.5 },
-      { x: -22.3, z: -215.8, y: 47.8, w: 6.5 }, { x: -0.1, z: -221.4, y: 47.5, w: 6.5 }, { x: 19.9, z: -226.8, y: 45.7, w: 6.5 },
-      { x: 38.6, z: -233.3, y: 41.9, w: 6.5 }, { x: 57.1, z: -241, y: 36.2, w: 6.5 }, { x: 76.8, z: -249.7, y: 29.2, w: 6.5 },
-      { x: 98.9, z: -257.8, y: 21.8, w: 6.5 }, { x: 125.3, z: -263.3, y: 15.3, w: 6.5 }, { x: 154.7, z: -264.1, y: 10.5, w: 6.5 }
-    ]
-  },
+  // THE CORDUROY: set ruts in the valley mud, 6.5 m apart.
+  whoops: [{ s0: 120, s1: 190, wl: 6.5, amp: 0.35 }],
+  // A canted shelf on the climb. The corner is nearly straight here; the camber
+  // is the mountain's, not a racing line's.
+  banks: [{ s0: 640, s1: 700, deg: 14 }],
+  /* The hairpin berm, in two pieces because the corner reverses at s~1135: one
+     wall on the outside of the right-hand sweeper, one on the outside of the
+     left-hand hairpin. A single 1030-1180 span would have put 2 m of earth on
+     the INSIDE of half of it. */
+  berms: [
+    { s0: 1030, s1: 1125, side: 1, h: 2.0 },
+    { s0: 1140, s1: 1180, side: -1, h: 2.0 }
+  ],
+
+  pads: [
+    { s: 260 },                                  // out of the valley mud
+    { s: 760 },                                  // 30 m before GULLY GAP's ramp
+    { s: 1560, lat: 2.5 }, { s: 1560, lat: -2.5 } // the run home
+  ],
+
+  routes: [HIGH_ROUTE],
+  /* Alias for the fourteen consumers that still read `def.shortcut`
+     (docs/ARCHITECTURE.md §6.1). Same object, not a copy. */
+  shortcut: HIGH_ROUTE,
 
   walls: [
     { s0: 1000, s1: 1210, side: 0 },             // the shelf hairpin

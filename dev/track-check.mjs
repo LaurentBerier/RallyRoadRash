@@ -8,10 +8,18 @@
 
    FAIL conditions
      - checkpoint spacing outside [40, 200] m, or s not monotonic
+     - a jump that asked for a lip checkpoint did not get one (cp:false opts out)
      - any racing-line advisory speed below 9 m/s
      - the loop passes within 0.8*(w_i+w_j) of itself with |ds| > 60 m
-       (this engine has no bridges: a crossover is a car crash)
+       (this engine has no bridges: a crossover is a car crash), or a route
+       passes that close to unrelated road, or to another route
      - spline.nearest() disagrees with the generating s by > 2 m
+     - a gap (main line OR route) that needs more than 34 m/s to clear
+     - whoops with wl < 5 m or amp > 0.7 m; a bank steeper than 28 deg
+     - a boost pad off the roadbed, or inside a jump window
+     - a gap or drop whose landing runway climbs, or whose flight is bent:
+       the siting rule volcano.js states in prose for CALDERA LEAP, enforced
+     - a track with no finite `difficulty`, or THUNDER PARK not flagged bonus
    ============================================================ */
 import { buildTrackData } from '../src/world/track.js';
 import { TRACKS } from '../src/world/tracks/index.js';
@@ -22,8 +30,19 @@ const MIN_RL_SPEED = 9;
 const NEAREST_SAMPLES = 200, NEAREST_TOL = 2.0;
 const CROSS_MIN_DS = 60;
 const PLAYABLE = 600;
+const MAX_GAP_NEED = 34;               // m/s; nothing in the game goes faster
+const MIN_WHOOP_WL = 5, MAX_WHOOP_AMP = 0.7;
+const MAX_BANK_DEG = 28;
+/* Landing runway. A jump that lands on rising ground cases every time, and a
+   flight over a bend puts the car in the scenery: 40 m of runout at no more
+   than +2 %, and a radius of at least 80 m for the length of the flight.
+   A gap's flight window is the gap. A drop's is its own freefall range at
+   racing speed — h metres of fall is sqrt(2h/G) seconds of it. */
+const RUNWAY_M = 40, RUNWAY_GRADE = 0.02, FLIGHT_K = 1 / 80;
+const DROP_V = 25, G_ARCADE = 12.8;
 
 let failures = 0;
+const _sc = { x: 0, y: 0, z: 0 }, _sc2 = { x: 0, y: 0, z: 0 };
 const fail = (t, msg) => { failures++; console.log(`  FAIL [${t}] ${msg}`); };
 const warn = (t, msg) => console.log(`  warn [${t}] ${msg}`);
 const f1 = (v) => v.toFixed(1);
@@ -39,12 +58,30 @@ function rngFrom(seed) {
   };
 }
 
+/** Max |curvature| and the runway grade for one jump, on whichever spline it
+    belongs to. Shared by the main line and every route. */
+function sitingOf(sp, j) {
+  const flight = j.gap > 0 ? j.gap : DROP_V * Math.sqrt((2 * j.h) / G_ARCADE);
+  let k = 0;
+  for (let t = 0; t <= flight; t += 1) k = Math.max(k, Math.abs(sp.curvatureAt(j.s + t)));
+  const land = j.s + (j.gap > 0 ? j.gap : 0);
+  const grade = (sp.heightAt(land + RUNWAY_M) - sp.heightAt(land)) / RUNWAY_M;
+  return { k, grade, land };
+}
+
 for (const def of TRACKS) {
-  console.log(`\n=== ${def.id}  "${def.name}"  theme=${def.theme}  laps=${def.laps}`);
+  console.log(`\n=== ${def.id}  "${def.name}"  theme=${def.theme}  laps=${def.laps}` +
+    `  difficulty=${def.difficulty}${def.bonus ? '  BONUS' : ''}`);
   const td = buildTrackData(def);
   const sp = td.spline;
   const L = sp.length;
   const id = def.id;
+
+  /* ---------- 0. stage metadata ---------- */
+  if (!Number.isFinite(def.difficulty)) fail(id, 'no finite difficulty — the UI sorts on it');
+  if (def.id === 'thunder' && def.bonus !== true) {
+    fail(id, 'THUNDER PARK must be bonus:true — it is not part of TRACK_ORDER');
+  }
 
   /* ---------- 1. spline ---------- */
   let ext = 0, minR = 1e9, maxGrade = 0, minW = 1e9, maxW = 0;
@@ -85,16 +122,23 @@ for (const def of TRACKS) {
   }
   const bigN = cps.filter(c => c.big).length;
   const jumpN = cps.filter(c => c.jump).length;
-  console.log(`  checkpoints ${main.length} main + ${alts.length} shortcut alternates   ` +
-    `spacing ${f1(gmin)}..${f1(gmax)} m   gates=${bigN}   onJumpLip=${jumpN}`);
+  // cp:false lips are rhythm features and carry no gate, so only the ones that
+  // asked for a checkpoint are counted.
+  const wantCp = td.jumps.filter(j => j.cp !== false).length;
+  console.log(`  checkpoints ${main.length} main + ${alts.length} route alternates   ` +
+    `spacing ${f1(gmin)}..${f1(gmax)} m   gates=${bigN}   onJumpLip=${jumpN}/${wantCp}`);
   if (!mono) fail(id, 'checkpoint s / idx are not monotonic');
   if (gmin < MIN_CP_GAP) fail(id, `checkpoint spacing ${f1(gmin)} m < ${MIN_CP_GAP} m`);
   if (gmax > MAX_CP_GAP) fail(id, `checkpoint spacing ${f1(gmax)} m > ${MAX_CP_GAP} m`);
-  if (jumpN !== td.jumps.length) fail(id, `${td.jumps.length} jumps but ${jumpN} lip checkpoints`);
+  if (jumpN !== wantCp) fail(id, `${wantCp} jumps want a lip checkpoint but ${jumpN} got one`);
   for (const a of alts) {
     if (!main.some(m => m.idx === a.idx)) fail(id, `alternate checkpoint idx ${a.idx} has no main twin`);
   }
-  if (def.shortcut && alts.length === 0) fail(id, 'shortcut bypasses no checkpoint — it would be free');
+  for (const rt of td.routes) {
+    if (!alts.some(a => a.route === rt.idx)) {
+      fail(id, `route ${rt.id} bypasses no checkpoint — it would be free`);
+    }
+  }
 
   /* ---------- 3. grid slots ---------- */
   const gs = td.gridSlots;
@@ -128,15 +172,86 @@ for (const def of TRACKS) {
   /* ---------- 5. jumps ---------- */
   for (const j of td.jumps) {
     const deg = (j.angle * 57.2958).toFixed(0);
-    const G = 12.8, s2 = Math.sin(2 * j.angle);
-    const need = j.gap > 0 ? Math.sqrt((j.gap + 7) * G / s2) : 0;
+    const G = 12.8, s2 = Math.sin(2 * j.angle) || 0;
     const at30 = 30 * 30 * s2 / G;
     const air30 = Math.pow(30 * Math.sin(j.angle), 2) / (2 * G);
-    console.log(`  jump @s=${String(Math.round(j.s)).padStart(4)}  len=${j.len} h=${j.h}` +
-      (j.gap ? ` GAP=${j.gap}m` : '        ') +
+    console.log(`  ${j.kind.padEnd(6)} @s=${String(Math.round(j.s)).padStart(4)}  len=${j.len} h=${j.h}` +
+      (j.gap ? ` GAP=${j.gap}m` : '        ') + (j.cp ? '' : ' [no cp]') +
+      (j.kind === 'table' ? ` top=${j.top} down=${j.down}` : '') +
+      (j.yaw ? ` yaw=${(j.yaw * 57.2958).toFixed(0)}deg` : '') +
       `  lip=${deg}deg  @30m/s: ${at30.toFixed(0)} m long, ${air30.toFixed(1)} m high` +
-      (need ? `  (needs >=${need.toFixed(1)} m/s)` : ''));
-    if (j.gap > 0 && need > 34) fail(id, `gap at s=${Math.round(j.s)} needs ${need.toFixed(1)} m/s — unclearable`);
+      (j.need ? `  (needs >=${j.need.toFixed(1)} m/s)` : ''));
+    if (j.gap > 0 && j.need > MAX_GAP_NEED) {
+      fail(id, `gap at s=${Math.round(j.s)} needs ${j.need.toFixed(1)} m/s — unclearable`);
+    }
+    /* Landing runway. This is the rule volcano.js writes out in prose for
+       CALDERA LEAP ("the ground drops with the arc") — every gap and every drop
+       is held to it, because a jump that lands uphill or round a bend is a
+       reset, and resets are the one thing that make a stage feel broken. */
+    if (j.gap > 0 || j.kind === 'drop') {
+      const st = sitingOf(sp, j);
+      console.log(`         siting: |k|max=${st.k.toFixed(4)} (R=${st.k > 1e-5 ? (1 / st.k).toFixed(0) : 'inf'} m)` +
+        `  runway grade=${(st.grade * 100).toFixed(1)}%`);
+      if (st.grade > RUNWAY_GRADE) {
+        fail(id, `${j.kind} at s=${Math.round(j.s)} lands on ground rising ${(st.grade * 100).toFixed(1)}%`);
+      }
+      if (st.k >= FLIGHT_K) {
+        fail(id, `${j.kind} at s=${Math.round(j.s)} flies over a ${(1 / st.k).toFixed(0)} m radius bend`);
+      }
+    }
+  }
+
+  /* ---------- 5b. authored cross-section features ---------- */
+  for (const b of td.banks) {
+    if (Math.abs(b.deg) > MAX_BANK_DEG) {
+      fail(id, `bank ${b.s0}..${b.s1} is ${b.deg} deg — over the ${MAX_BANK_DEG} deg limit`);
+    }
+  }
+  for (const q of td.whoops) {
+    if (!(q.wl >= MIN_WHOOP_WL)) {
+      fail(id, `whoops ${q.s0}..${q.s1} wavelength ${q.wl} m — under ${MIN_WHOOP_WL} m the heightfield cannot hold it`);
+    }
+    if (!(q.amp <= MAX_WHOOP_AMP)) fail(id, `whoops ${q.s0}..${q.s1} amplitude ${q.amp} m > ${MAX_WHOOP_AMP} m`);
+  }
+  if (td.banks.length || td.whoops.length || td.berms.length) {
+    console.log(`  profile    ${td.banks.length} bank(s) ` +
+      td.banks.map(b => `${b.s0}-${b.s1}@${b.deg}deg`).join(' ') +
+      `   ${td.whoops.length} whoops ` + td.whoops.map(q => `${q.s0}-${q.s1} wl${q.wl}/${q.amp}`).join(' ') +
+      `   ${td.berms.length} berm(s) ` + td.berms.map(b => `${b.s0}-${b.s1} side${b.side} h${b.h}`).join(' '));
+  }
+
+  /* ---------- 5c. boost pads ---------- */
+  if (td.pads.length) {
+    let worstPad = 1e9;
+    for (const pd of td.pads) {
+      // A pad has to be ON the roadbed: its whole strip inside the half-width.
+      const room = sp.widthAt(pd.s) - (Math.abs(pd.lat) + pd.hw);
+      worstPad = Math.min(worstPad, room);
+      if (room < 0) fail(id, `pad at s=${Math.round(pd.s)} lat=${pd.lat} hangs ${f1(-room)} m off the roadbed`);
+      /* …and OUTSIDE every jump window. A pad on a ramp fires the car at an
+         angle nothing in the ballistics accounts for, and a pad in a gap's
+         landing zone is a boost applied while airborne. */
+      for (const j of td.jumps) {
+        const before = j.s - j.len - (j.kind === 'drop' ? 8 : 0) - 6;
+        const after = j.s + j.gap + j.top + j.down + 8;
+        let d = pd.s - before; if (d < -L / 2) d += L; else if (d > L / 2) d -= L;
+        let span = after - before;
+        if (d >= 0 && d <= span) {
+          fail(id, `pad at s=${Math.round(pd.s)} sits inside the ${j.kind} window at s=${Math.round(j.s)}`);
+        }
+      }
+    }
+    console.log(`  pads        ${td.pads.length} at s=${td.pads.map(p => Math.round(p.s)).join(',')}   ` +
+      `tightest roadbed margin ${f1(worstPad)} m`);
+  }
+
+  /* ---------- 5d. voids + elevation strip (contract shape) ---------- */
+  if (td.elev.length !== 64) fail(id, `elev strip is ${td.elev.length} samples, contract says 64`);
+  for (let i = 0; i < td.elev.length; i++) {
+    if (!Number.isFinite(td.elev[i])) fail(id, 'elev strip has a non-finite sample');
+  }
+  if (td.voids.length) {
+    console.log(`  voids       ${td.voids.map(v => `${v.kind} ${Math.round(v.s0)}..${Math.round(v.s1)}`).join('  ')}`);
   }
 
   /* ---------- 6. surfaces actually used ---------- */
@@ -162,10 +277,10 @@ for (const def of TRACKS) {
     (worstAt ? ` (s=${worstAt[0]} vs s=${worstAt[1]}, ${f1(worstAt[2])} m apart)` : ''));
   if (worst < 0) fail(id, `loop crosses itself at road width near s=${worstAt[0]} / s=${worstAt[1]}`);
 
-  /* shortcut vs main line, same rule */
-  if (td.shortcutSpline) {
-    const ss = td.shortcutSpline, SL = ss.length;
-    const s0 = sp.wrapS(def.shortcut.s0), s1 = sp.wrapS(def.shortcut.s1);
+  /* every route vs the main line, same rule */
+  for (const rt of td.routes) {
+    const ss = rt.spline, SL = ss.length;
+    const s0 = rt.s0, s1 = rt.s1;
     let sworst = Infinity;
     for (let t = 0; t <= SL; t += STEP) {
       ss.posAt(t, pi); const wi = ss.widthAt(t);
@@ -179,14 +294,55 @@ for (const def of TRACKS) {
         sworst = Math.min(sworst, d - 0.8 * (wi + sp.widthAt(b)));
       }
     }
-    console.log(`  shortcut    ${f1(SL)} m detour vs ${f1(bypassLen(sp, s0, s1))} m of main line   ` +
-      `clearance to unrelated road ${f1(sworst)} m`);
-    if (sworst < 0) fail(id, 'shortcut overlaps an unrelated part of the main loop');
+    console.log(`  route ${rt.id.padEnd(9)} ${f1(SL)} m detour vs ${f1(bypassLen(sp, s0, s1))} m of main line   ` +
+      `clearance to unrelated road ${f1(sworst)} m   ${rt.jumps.length} jump(s)`);
+    if (sworst < 0) fail(id, `route ${rt.id} overlaps an unrelated part of the main loop`);
     const e0 = ss.posAt(0, { x: 0, y: 0, z: 0 });
     const eN = ss.posAt(SL, { x: 0, y: 0, z: 0 });
     const d0 = sp.nearest(e0.x, e0.z, { s: 0, d: 0, side: 1, lat: 0, x: 0, z: 0 }).d;
     const dN = sp.nearest(eN.x, eN.z, { s: 0, d: 0, side: 1, lat: 0, x: 0, z: 0 }).d;
-    if (d0 > 3 || dN > 3) fail(id, `shortcut endpoints are ${f1(d0)}/${f1(dN)} m off the main line`);
+    if (d0 > 3 || dN > 3) fail(id, `route ${rt.id} endpoints are ${f1(d0)}/${f1(dN)} m off the main line`);
+    /* Route jumps answer to the same ballistics and the same siting rule as
+       main-line ones — measured on the ROUTE's arc length, which is what the
+       carve walks. */
+    for (const j of rt.jumps) {
+      if (j.gap > 0 && j.need > MAX_GAP_NEED) {
+        fail(id, `route ${rt.id} gap at s=${Math.round(j.s)} needs ${j.need.toFixed(1)} m/s — unclearable`);
+      }
+      if (j.gap > 0 || j.kind === 'drop') {
+        const st = sitingOf(ss, j);
+        console.log(`         ${rt.id} ${j.kind} @${Math.round(j.s)}: |k|max=${st.k.toFixed(4)}` +
+          `  runway grade=${(st.grade * 100).toFixed(1)}%`);
+        if (st.grade > RUNWAY_GRADE) {
+          fail(id, `route ${rt.id} ${j.kind} at s=${Math.round(j.s)} lands on ground rising ${(st.grade * 100).toFixed(1)}%`);
+        }
+        if (st.k >= FLIGHT_K) {
+          fail(id, `route ${rt.id} ${j.kind} at s=${Math.round(j.s)} flies over a ${(1 / st.k).toFixed(0)} m radius bend`);
+        }
+      }
+    }
+  }
+
+  /* route vs route: two detours over the same span must not merge into one */
+  for (let a = 0; a < td.routes.length; a++) {
+    for (let b = a + 1; b < td.routes.length; b++) {
+      const ra = td.routes[a].spline, rb = td.routes[b].spline;
+      let rworst = Infinity;
+      for (let t = 0; t <= ra.length; t += STEP) {
+        ra.posAt(t, pi); const wi = ra.widthAt(t);
+        for (let u = 0; u <= rb.length; u += STEP) {
+          rb.posAt(u, pj);
+          /* The ends of two routes may legitimately converge — they both meet
+             the main line. Only the middles have to stay apart. */
+          const endish = Math.min(t, ra.length - t) < 40 && Math.min(u, rb.length - u) < 40;
+          if (endish) continue;
+          const d = Math.hypot(pj.x - pi.x, pj.z - pi.z);
+          rworst = Math.min(rworst, d - 0.8 * (wi + rb.widthAt(u)));
+        }
+      }
+      console.log(`  routes      ${td.routes[a].id} vs ${td.routes[b].id}: ${f1(rworst)} m of margin`);
+      if (rworst < 0) fail(id, `routes ${td.routes[a].id} and ${td.routes[b].id} overlap`);
+    }
   }
 
   /* ---------- 8. nearest() round-trip ---------- */
@@ -203,7 +359,12 @@ for (const def of TRACKS) {
        The point round-trip below is asserted at EVERY probe, including the
        folded ones, because that is the property the race and AI code use. */
     const k = Math.abs(sp.curvatureAt(s));
-    const reach = Math.min(55, k > 1e-5 ? 0.7 / k : 55);
+    /* …and the same argument applies across the map, not just around a corner.
+       Where two legs of the loop run 80 m apart — THUNDER PARK's bowl — a probe
+       46 m off one of them is nearer the other, and the generating s is again
+       simply not the answer. Cap the reach at 45 % of the local self-clearance
+       so every probe stays inside its own leg's Voronoi cell. */
+    const reach = Math.min(55, k > 1e-5 ? 0.7 / k : 55, 0.45 * selfClear(sp, s, L));
     const lat = (rng() * 2 - 1) * reach;
     const q = sp.offsetPoint(s, lat, { x: 0, y: 0, z: 0 });
     sp.nearest(q.x, q.z, nout);
@@ -250,6 +411,22 @@ for (const def of TRACKS) {
 }
 
 function bypassLen(sp, s0, s1) { let d = s1 - s0; if (d <= 0) d += sp.length; return d; }
+
+/** Distance from the point at s to the nearest NON-ADJACENT part of the loop.
+    Adjacent means within CROSS_MIN_DS of s along the curve — that is the same
+    road, not a neighbour. */
+function selfClear(sp, s, L) {
+  sp.posAt(s, _sc);
+  let best = Infinity;
+  for (let t = 0; t < L; t += 3) {
+    let ds = t - s; if (ds < -L / 2) ds += L; else if (ds > L / 2) ds -= L;
+    if (Math.abs(ds) < CROSS_MIN_DS) continue;
+    sp.posAt(t, _sc2);
+    const d = Math.hypot(_sc2.x - _sc.x, _sc2.z - _sc.z);
+    if (d < best) best = d;
+  }
+  return best;
+}
 
 console.log(failures === 0
   ? '\nAll tracks pass.\n'
