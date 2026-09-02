@@ -68,6 +68,65 @@ export function boostFire(A, tier, gain = 1) {
 }
 
 /* ============================================================
+   TRICKS
+   ------------------------------------------------------------
+   A landed trick already fires boostFire() through the mini-turbo path, so
+   these sit ON TOP of that rather than replacing it, and they have to earn
+   their place next to it: the trick cue is the ARRIVAL — the moment the
+   wheels take the weight — and the boost is the shove that follows. Keep
+   them short and keep them high, or the two smear into one noise.
+   ============================================================ */
+
+/**
+ * A trick landed cleanly. An ascending three-note figure off the tier chime,
+ * so a combo is audibly further up the same scale a mini-turbo climbs —
+ * the air and the drift pay into one pot and they should sound like it.
+ *
+ * @param tier 1..3 from tricks.js. Tier 0 (BIG AIR) still gets the smallest
+ *             version: it scored, so it must make a sound.
+ */
+export function trickLand(A, tier) {
+  if (!A.ready) return;
+  const i = tier < 1 ? 0 : tier > 3 ? 2 : tier - 1;
+  const t = A.now();
+  const root = TIER_HZ[i];
+  // 1 – 5th – octave, 45 ms apart: fast enough to read as one gesture.
+  const g = A._note(A.busSfx, root, t, 0.20, 0.055 + i * 0.012, 'triangle', 0);
+  g.connect(A.verb);
+  A._note(A.busSfx, root * 1.5, t + 0.045, 0.20, 0.048 + i * 0.010, 'triangle', 0);
+  const g3 = A._note(A.busSfx, root * 2, t + 0.090, 0.34, 0.052 + i * 0.014, 'sine', 0);
+  g3.connect(A.verb);
+  // the touchdown itself, under the figure — this is the only low content
+  A._note(A.busSfx, 110.0, t, 0.16, 0.055 + i * 0.015, 'triangle', 0);
+  if (i >= 2) A._burst(t, 0.30, 'highpass', 3200, 6800, 1.6, 0.035, 0, A.busSfx);
+}
+
+/** A trick that arrived instead of landing. Down, dull, and over quickly —
+    it must read as the OPPOSITE of trickLand, not as a smaller version. */
+export function trickCrash(A) {
+  if (!A.ready) return;
+  const t = A.now();
+  A._burst(t, 0.34, 'lowpass', 1800, 240, 1.0, 0.135, 0, A.busSfx);
+  A._note(A.busSfx, 98.0, t, 0.28, 0.095, 'sawtooth', -14);
+  A._note(A.busSfx, 65.41, t + 0.03, 0.34, 0.075, 'triangle', 0);
+}
+
+/**
+ * Crossing a boost pad. The most repeated cue in the arcade layer — you take
+ * a dozen a lap — so it is the shortest and the quietest thing in this file.
+ * A pad is punctuation, not an event.
+ *
+ * @param gain 0..1, distance-gated by the caller like every rival cue.
+ */
+export function padHit(A, gain = 1) {
+  if (!A.ready) return;
+  const t = A.now();
+  A._burst(t, 0.14, 'bandpass', 1400, 4200, 2.0, 0.055 * gain, 0, A.busSfx);
+  A._note(A.busSfx, 1174.66, t, 0.10, 0.030 * gain, 'square', 0);
+  A._note(A.busSfx, 146.83, t, 0.12, 0.040 * gain, 'triangle', 0);
+}
+
+/* ============================================================
    ITEMS
    ============================================================ */
 

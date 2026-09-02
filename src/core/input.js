@@ -62,7 +62,7 @@ export class Input {
 
     // Reused so poll() allocates nothing (hard rule 4).
     this._out = {
-      throttle: 0, steer: 0, brake: 0, handbrake: 0,
+      throttle: 0, steer: 0, brake: 0, handbrake: 0, roll: 0,
       lookX: 0, lookY: 0, zoom: 0, looking: false
     };
 
@@ -309,6 +309,7 @@ export class Input {
     if (Math.abs(steer) > 0.02 || rt > 0.06 || lt > 0.06 ||
         Math.abs(lookX) > 0.05 || Math.abs(lookY) > 0.05 ||
         btnDown(bt, 0) || btnDown(bt, 1) || btnDown(bt, 3) || btnDown(bt, 9) ||
+        btnDown(bt, 4) || btnDown(bt, 5) ||
         btnDown(bt, 12) || btnDown(bt, 13) || btnDown(bt, 14) || btnDown(bt, 15)) this._method('pad');
 
     out.steer += steer;
@@ -347,6 +348,10 @@ export class Input {
       this._edge(bt, 1, 'Escape', true);
       this._edge(bt, 9, 'Escape', true);
     } else {
+      /* Air roll on the bumpers: RB right, LB left, matching Q/E and the sign
+         of `steer`. Only in the race branch — in a menu those two buttons are
+         page-left/page-right on every pad layout there has ever been. */
+      out.roll += btnVal(bt, 5) - btnVal(bt, 4);
       out.handbrake = out.handbrake || (btnDown(bt, 0) ? 1 : 0);
       this._edge(bt, 0, 'Space', false);   // handbrake also lands in keys, for uniformity
       this._edge(bt, 1, 'KeyR', false);    // reset is a HOLD — race.js reads down('KeyR')
@@ -387,7 +392,7 @@ export class Input {
      ============================================================ */
   poll() {
     const out = this._out;
-    out.throttle = 0; out.steer = 0; out.brake = 0; out.handbrake = 0;
+    out.throttle = 0; out.steer = 0; out.brake = 0; out.handbrake = 0; out.roll = 0;
     out.lookX = 0; out.lookY = 0; out.zoom = 0; out.looking = false;
     if (!this.enabled) return out;
 
@@ -397,6 +402,14 @@ export class Input {
     if (this.down('KeyA', 'ArrowLeft')) out.steer -= 1;
     if (this.down('KeyD', 'ArrowRight')) out.steer += 1;
     if (this.down('Space')) out.handbrake = 1;
+    /* ---- air roll ----
+       Q/E sit under the same two fingers that are already on W/A/S/D, which
+       is the only reason a roll axis is playable on a keyboard at all. The
+       sign follows `steer`: E (right) rolls the car's right side down, and
+       holding the handbrake in the air makes A/D do the same thing (see
+       vehicle.js) for anyone who never finds these keys. */
+    if (this.down('KeyQ')) out.roll -= 1;
+    if (this.down('KeyE')) out.roll += 1;
 
     /* ---- mouse look (right-drag only; no pointer lock) ---- */
     out.lookX += this.mouse.dx; out.lookY += this.mouse.dy;
@@ -416,6 +429,7 @@ export class Input {
     out.throttle = out.throttle < -1 ? -1 : out.throttle > 1 ? 1 : out.throttle;
     out.steer = out.steer < -1 ? -1 : out.steer > 1 ? 1 : out.steer;
     out.brake = out.brake < 0 ? 0 : out.brake > 1 ? 1 : out.brake;
+    out.roll = out.roll < -1 ? -1 : out.roll > 1 ? 1 : out.roll;
     out.handbrake = out.handbrake ? 1 : 0;
     return out;
   }

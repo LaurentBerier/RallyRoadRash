@@ -206,39 +206,82 @@ export const TUNE = {
      AIRBORNE
      Authorities are angular accelerations at full stick, so they read the
      same on every car regardless of mass.
+
+     WAVE 6 REWRITE — read this before retuning any of it. Air used to be a
+     fixed-authority tumble with a levelling assist that gave up once the
+     error got big, which made a big jump a hazard: the only correct play was
+     to do nothing and hope. It is now FREE ROTATION with a PREDICTIVE
+     landing assist, and the two halves are inseparable.
+
+       • The authorities are roughly doubled, so a flip, a spin and a barrel
+         roll are all reachable inside an ordinary jump. That is the whole
+         point — see game/tricks.js for what they pay.
+       • The assist no longer levels toward the ground under the car. It
+         predicts WHERE the car will land, takes the normal there, and aims
+         the car at the velocity heading on that surface. Aiming at the
+         ground you are currently over is wrong on every jump that travels,
+         which is all of them.
+       • It is OFF while the player is holding an air input. Holding an input
+         is the player saying "I am flying this"; an assist that argues with
+         that is the thing that makes air control feel like mush. It is also
+         what keeps dev/vehicle-check's held-throttle gate honest.
+       • It fades in on TIME TO GROUND, not on airtime, so it is late by
+         construction on a long jump and immediate on a short one.
      --------------------------------------------------------------- */
   air: {
-    /* Authorities are sized against HANG TIME, not against how they feel in a
-       vacuum. With `damp` below, holding full input for a typical 1.2 s jump
-       buys about 58° of pitch — enough to save a bad launch, not enough to
-       flip. A three-second volcano jump held flat out gets you most of the way
-       round, which is the correct punishment for holding throttle off a lip. */
-    pitchAuthority: 1.85,   // rad/s² at full (throttle − brake). Throttle lifts the
+    /* Authorities are sized against HANG TIME. With `damp` below, the
+       terminal rate at full stick is authority/damp: pitch 6.5, yaw 5.1,
+       roll 6.9 rad/s — all above `spinCap`, which is now what actually
+       limits them, and that is deliberate. A 1.2 s jump held flat out is a
+       backflip; a 2.5 s volcano jump is a double. Doing NOTHING is still a
+       clean landing, because the assist below is doing the work. */
+    pitchAuthority: 3.6,    // rad/s² at full (throttle − brake). Throttle lifts the
                             //       nose, brake drops it — the way every player expects.
-    yawAuthority: 2.10,     // rad/s² at full steer, about the body's up axis. This is
-                            //       how you line a landing up with the road, so it is
-                            //       the most generous of the three.
-    rollAuthority: 1.25,    // rad/s² at full steer, about the body's forward axis.
-                            //       Deliberately smallest: it is garnish, and roll is
-                            //       the axis that ruins a landing.
-    alignAssist: 2.3,       // rad/s² of levelling torque toward the ground normal, at
-                            //       90° of misalignment. Weighted by sin(error) and then
-                            //       faded OUT past alignGiveUp — the assist tidies up the
-                            //       landing you nearly had, and abandons you completely
-                            //       once you have committed to a flip. That fade is the
-                            //       whole design: without it, a stronger assist just
-                            //       means the game lands for you and jumps stop mattering.
-    alignGiveUp: [1.0, 2.2],// rad — assist fades from full to nothing between these.
-    alignDelay: 0.45,       // s of airtime before the assist starts fading in.
-    alignRamp: 0.9,         // s over which it fades to full once it starts.
-    damp: 0.75,             // 1/s — angular damping while airborne. Sets the terminal
-                            //       rotation rate at authority/damp, which is the number
-                            //       that actually decides whether you can flip.
+                            //       Sign is unchanged from wave 5 on purpose.
+    yawAuthority: 2.8,      // rad/s² at full steer, about the body's up axis. This is
+                            //       how you line a landing up with the road AND how you
+                            //       spin a 360; the smallest of the three because yaw
+                            //       is the one you use to aim rather than to show off.
+    rollAuthority: 3.8,     // rad/s² at full roll (Q/E, or steer with the handbrake
+                            //       held). The biggest, because a barrel roll has to
+                            //       fit inside a jump the pitch axis can already flip.
+    alignAssist: 2.3,       // rad/s² of levelling torque toward the PREDICTED landing
+                            //       attitude, at ≥ 1 rad of error. Gated by time to
+                            //       ground and switched off entirely while the player
+                            //       holds an air input — see the block comment above.
+    damp: 0.55,             // 1/s — angular damping while airborne, and only while no
+                            //       air input is held. Lower than wave 5's 0.75 so a
+                            //       rotation you started keeps going; damping a flip
+                            //       you deliberately commanded is just latency.
+
+    /* SNAP-THROUGH. Past `snapFrom` of accumulated pitch or roll, and still
+       turning faster than `snapRate`, the assist stops taking the shortest
+       path to level and COMPLETES the rotation instead. Without this, a
+       backflip that is 300° round gets yanked 60° BACKWARDS by an assist
+       that is technically correct and completely infuriating — the shortest
+       way to upright is behind you, and you are nearly home. */
+    snapFrom: 5.2,          // rad of |pitch| or |roll| accumulated this flight (298°).
+    snapRate: 1.5,          // rad/s — below this you are not committed, you are drifting.
+
+    /* s of TIME TO GROUND over which the assist fades from nothing to full.
+       Time to ground and not airtime, which is the entire idea: on a 3 s
+       volcano jump the assist is asleep for the first two seconds and the
+       air is yours, and on a 0.4 s pop off a kerb it is on immediately. */
+    assistWindow: [0.2, 1.6],
+
+    /* Strength of the landing assist, indexed by the `trickAssist` setting
+       (0 = PRO / mostly on your own, 1 = default, 2 = ARCADE / lands for you).
+       Vehicle.trickAssist selects the entry; anything out of range reads 1. */
+    assistScale: [0.55, 1.0, 1.6],
+    predictSteps: 3,        // Newton iterations on the ballistic-vs-heightfield
+                            //       intersection. 3 converges to well under a frame on
+                            //       anything the tracks contain; more is wasted terrain
+                            //       lookups in the hottest loop in the game.
+
     spinCap: 5.0,           // rad/s — hard cap on airborne angular rate. Anti-explosion.
-                            //       Stays at 5.0: airborne rates are authority/damp
-                            //       limited far below it anyway, and a higher cap lets
-                            //       crash-bounce chaos carry enough spin to make the
-                            //       flip watchdog non-deterministic.
+                            //       Stays at 5.0, and it is now a REAL limit rather than
+                            //       a failsafe: it is what stops the doubled authorities
+                            //       turning a long jump into a blur nobody can read.
 
     /* Hang time. A different mechanic from the authorities above: instead of
        shaping how the car ROTATES in the air, this scales gravity itself once
@@ -252,6 +295,94 @@ export const TUNE = {
     hangLo: 0.12,           // s of continuous airTime below which gravity stays
                             //       full (rut blips get no float).
     hangHi: 0.35,           // s of airTime by which the float is fully in.
+  },
+
+  /* ---------------------------------------------------------------
+     TRICKS — what the air is FOR
+     ------------------------------------------------------------------
+     The state machine is src/game/tricks.js (pure); these are its numbers.
+     Vehicle publishes `landEdge`, `landQ`, `airPeak` and owns a `_trick`
+     state; a scored trick sets `fired = tier`, and vehicle.js hands that
+     straight to miniturbo's driftFire(). A trick is therefore a mini-turbo
+     you earned in the air, which is exactly the right economy: the drift
+     and the jump pay into the same pot and neither needs its own boost.
+
+     THE ANGLES ARE UNDER A FULL TURN ON PURPOSE. 300° rather than 360°,
+     because pitch/yaw/roll are integrated as three independent body-frame
+     scalars and a flip that wanders 20° off axis genuinely does bank less
+     than 360° about any one of them. Demanding a perfect 360 would mean the
+     trick you obviously did sometimes does not count, which is far worse
+     than the reverse. `spin2Deg` (660) is the same 60° of slack against 720.
+     --------------------------------------------------------------- */
+  trick: {
+    flipDeg: 300,           // deg of accumulated |pitch| for a BACKFLIP / FRONTFLIP.
+    rollDeg: 300,           // deg of accumulated |roll| for a BARREL ROLL.
+    spinDeg: 300,           // deg of accumulated |yaw| for a 360.
+    spin2Deg: 660,          // …and for a 720.
+    bigAir: 1.8,            // s of hang time that scores BIG AIR on its own. Long: a
+                            //       jump you merely survived is not a trick, and the
+                            //       tracks' hero jumps are the ones that reach it.
+    hopWindow: 0.25,        // s — tap the handbrake within this long of leaving the
+                            //       ground and the flight counts as a STYLE HOP. This
+                            //       is an INPUT window, not an airtime: it is the "pop
+                            //       the lip" timing every trick game is built on, and
+                            //       it is the one trick available on a kerb.
+    minAir: 0.10,           // s of airtime below which a touchdown is rut chatter and
+                            //       not a landing. Nothing scores, and `landEdge` does
+                            //       not fire — otherwise the HUD's landSeq would strobe
+                            //       all the way down a whoops section.
+
+    /* LANDING QUALITY gates the payout, and it is the only thing that makes
+       a trick a decision rather than a button. `landQ` is (up · groundNormal)
+       faded out by descent speed, so it asks both "did you come down flat"
+       and "did you come down softly". */
+    cleanQ: 0.80,           // landQ at or above which the trick pays in full.
+    sloppyQ: 0.55,          // …down to here it pays half and drops a tier. Below it
+                            //       the trick is a CRASH and pays nothing.
+    /* m/s of DESCENT over which the "softly" half of landQ fades from 1 to 0.
+       MEASURED, not guessed, and the measurement is the whole comment: with
+       G = 12.8 and hangGravity 0.58, an ordinary 20° kicker at 24–36 m/s
+       arrives at 12.0–13.6 m/s, and the biggest thing the tracks can throw
+       reaches about 16.5. A window that started at 6 m/s — which is what the
+       formula looked like it wanted before anyone measured a jump — scored
+       every landing in the game between 0.14 and 0.41, i.e. below sloppyQ,
+       i.e. every jump was a crash. Starting at 14 leaves the ordinary jump
+       clean and keeps the term honest for the genuine cliff drops. */
+    softV: [14, 28],
+    /* WHAT COUNTS AS CRASHING IT, on the frame the wheels arrive. Same kind
+       of definition as TUNE.sim.flipUp, and it lives here for the same
+       reason. Landing flatter than `crashUp` is landing on your side; a nose
+       steeper than `crashNose` into the surface is a nose-first stuff; and
+       below `crashSpeed` neither of them hurts, which is what stops a slow
+       tip-over on a berm being punished as a crash. */
+    crashUp: 0.50,          // up · groundNormal below this is a crash…
+    crashNose: -0.55,       // …as is forward · groundNormal below this…
+    crashSpeed: 6,          // …but only above this ground speed, m/s.
+    crashHit: 8,            // m/s floor written into hardHit, so feel.js shakes and
+                            //       audio bangs even when the springs found a soft way
+                            //       down. A crash you cannot hear did not happen.
+    crashSpin: 0.9,         // s of forced spin-out on a crashed landing. Routed through
+                            //       Vehicle.spinT, so it uses the handbrake recovery
+                            //       path that is already tuned to be catchable.
+
+    /* Points. Tuned against each other rather than against anything absolute:
+       a frontflip is worth more than a backflip because throttle is the
+       default input and brake is not, a 720 is worth more than two 360s, and
+       the combo multiplier is what makes "and a bit of roll on the way down"
+       the thing you reach for. */
+    pts: {
+      hop: 100, bigAir: 150, spin360: 300, spin720: 800,
+      backflip: 500, frontflip: 600, barrel: 450, double: 1200,
+      comboMul: 1.5,        // × the summed points when a flight lands two or more
+    },
+    /* Mini-turbo tier a clean trick fires. BIG AIR and CRASH are absent, and
+       that is the design: floating is not a skill and a crash is not a
+       reward. Anything missing here reads as tier 0 — points, no boost. */
+    tier: {
+      hop: 1, spin360: 1, backflip: 2, frontflip: 2, barrel: 2,
+      spin720: 3, double: 3, combo: 3,
+    },
+    sloppyTierDrop: 1,      // tiers lost when landQ is between sloppyQ and cleanQ.
   },
 
   /* ---------------------------------------------------------------
