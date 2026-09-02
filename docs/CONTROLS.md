@@ -12,6 +12,8 @@ debounce).
 | Brake / reverse | S or ↓ (brakes while rolling forward, reverses from rest) |
 | Steer | A / D or ← / → |
 | Handbrake (drift / charge mini-turbo) | Space |
+| Roll, airborne | Q / E |
+| Trick modifier | hold Space in the air — steer ROLLS instead of yawing |
 | Fire power-up | F (hold reverse to fire it backwards) |
 | Reset to track | R — HOLD for ~0.8 s (ring fills on the HUD) |
 | Camera (chase/hood) | C |
@@ -26,11 +28,31 @@ debounce).
 | Steer | Left stick X |
 | Throttle / brake | Right / left trigger |
 | Handbrake | A (button 0) |
+| Roll, airborne | LB / RB (buttons 4 / 5) |
+| Trick modifier | hold A in the air — steer ROLLS instead of yawing |
 | Fire power-up | X (button 2) |
 | Reset (hold) | B (button 1) |
 | Camera | Y (button 3) |
 | Pause | Start (button 9) |
 | Menus | D-pad or stick + A confirm, B back |
+
+## In the air
+
+Leaving a lip hands you full rotation on three axes, and what you do with
+it is scored. Throttle pitches the nose up, brake pitches it down, steer
+yaws — or ROLLS, if you are holding the handbrake. Q/E (LB/RB on a pad)
+roll without the handbrake.
+
+A full turn is a trick: BACKFLIP, FRONTFLIP, 360, 720, BARREL ROLL, or
+DOUBLE FLIP. Two in one flight is a COMBO and pays a multiplier. Landing
+is what banks it — come down sideways or nose-first and it is a CRASH
+instead, however clean the rotation was. A landed trick feeds the
+mini-turbo, so a big air pays you in speed as well as style.
+
+**You do not have to do any of this.** Touch nothing in the air and a
+predictive assist squares the car up to wherever it is actually going to
+land. It only ever runs while you are NOT giving an input, so it can
+never fight a flip you meant. SETTINGS → TRICK ASSIST scales it.
 
 ## Touch (phones / tablets, landscape recommended)
 

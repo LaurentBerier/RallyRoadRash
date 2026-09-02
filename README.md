@@ -5,8 +5,14 @@
 ### Off-Road Championship
 
 **A 3D arcade rally racer that runs in a browser tab.**
-No engine, no build step, no `npm install`, no asset files.
+No engine, no build step, no `npm install`.
 One vendored library: three.js.
+
+Every stage, car, sound and texture the game *needs* is generated at load
+from code. `assets/` holds 2.7 MB of optional imagery — skyline panoramas,
+ground detail, stage art — that makes it look better and that it runs without:
+delete the folder and the game still starts, still plays, and still looks
+deliberate. That is a test, not a boast.
 
 ![WebGL2](https://img.shields.io/badge/WebGL2-no_build_step-1a1d24)
 ![three.js](https://img.shields.io/badge/three.js-r160_(vendored)-1a1d24)
@@ -16,8 +22,9 @@ One vendored library: three.js.
 
 </div>
 
-> Four machines, four stages, one championship. Pick a ride, learn the dirt,
-> jump the gap everyone else drives around — and take the caldera.
+> Four machines, five stages, one championship. Pick a ride, learn the dirt,
+> jump the gap everyone else drives around, backflip it if you are feeling
+> brave — and take the caldera.
 
 RALLY ROAD RASH is a complete small racing game: a physics-driven player car and five
 AI rivals on procedurally-built stages with laps, checkpoints, live positions,
@@ -41,10 +48,20 @@ There is nothing to install: `npm start` runs the zero-dependency
 
 ## The game
 
-- **4 stages** — PROVING GROUNDS (tutorial, 1 lap), SUNSTRIKE CANYON (desert,
-  a 15 m gap jump and a slot-canyon shortcut), TIMBERLINE CLIMB (mud, pines,
-  a 58 m climb, wooden ramps, a high-route shortcut), CALDERA RUN (rock,
-  lava fissures, the biggest air in the game).
+- **5 stages** — PROVING GROUNDS (tutorial, 1 lap), SUNSTRIKE CANYON (desert,
+  a mesa launcher, a shelf drop, a 20° banked hairpin and a high route),
+  TIMBERLINE CLIMB (mud, pines, a 58 m climb, a gully gap, THE PLUNGE),
+  CALDERA RUN (rock, lava fissures, the biggest air in the campaign), and
+  THUNDER PARK — a bonus stunt park at sunset, unlocked by a podium at
+  SUNSTRIKE CANYON, built entirely out of things to jump off.
+- **Tricks** — a lip hands you free rotation on all three axes and scores
+  what you do with it. Flips, spins, barrel rolls, combos. The landing is
+  what banks it, and a landed trick pays you in boost as well as style.
+  Touch nothing and a predictive assist squares the car up for you; it only
+  runs while you are not giving an input, so it never fights a flip you
+  meant.
+- **Boost pads** — track furniture, not a power-up. They work with
+  power-ups switched off.
 - **4 machines** — DUNE HOPPER (sport side-by-side, friendly), RIDGEBACK
   (two-tonne truck, planted), REDLINE (cab-forward wedge, 45 m/s and lively)
   and the HORNET — a 245 kg motocross 450 that out-accelerates and out-jumps

@@ -94,7 +94,7 @@ export async function one(trackId, vehId, opts = {}) {
   let savedStorage = null;
   try { savedStorage = localStorage.getItem(SAVE_KEY); } catch { /* private mode */ }
   App.profile = Object.assign({}, App.profile, {
-    unlockedTracks: ['training', 'canyon', 'forest', 'volcano'],
+    unlockedTracks: ['training', 'canyon', 'forest', 'volcano', 'thunder'],
     unlockedVehicles: ['hopper', 'ridgeback', 'redline', 'moto'],
   });
 
@@ -157,7 +157,7 @@ export async function one(trackId, vehId, opts = {}) {
   const out = {
     track: trackId, veh: vehId, finished: false, dnf: false,
     position: null, total: null, bestLap: null, laps: 0,
-    resets: 0, contacts: 0, maxAir: 0, worstY: 0, nan: false,
+    resets: 0, resetAt: {}, contacts: 0, maxAir: 0, worstY: 0, nan: false,
     fieldStuck: 0, wallSeconds: 0, simSeconds: 0, ticks: 0, error: null,
     /* Power-ups. The QA driver never FIRES one — it only copies the four
        driving axes off the AI — so `fired` is the field's doing and `hits`
@@ -199,8 +199,20 @@ export async function one(trackId, vehId, opts = {}) {
       }
       for (let i = 0; i < race.racers.length; i++) {
         const r = race.racers[i];
-        if (r.ghostT > 0 && resetSeen[i] === 0) { resetSeen[i] = 1; if (r.isPlayer) out.resets++; }
-        else if (r.ghostT <= 0) resetSeen[i] = 0;
+        if (r.ghostT > 0 && resetSeen[i] === 0) {
+          resetSeen[i] = 1;
+          if (r.isPlayer) {
+            out.resets++;
+            /* WHERE, not just how many. A reset count on its own says a stage
+               is hard; a histogram says which 25 m of it is. Bucketed because
+               the same feature catches a car at slightly different s every
+               lap, and a list of raw arc lengths hides that they are one
+               place. */
+            race.trackData.spline.nearest(v.pos.x, v.pos.z, near);
+            const b = Math.round(near.s / 25) * 25;
+            out.resetAt[b] = (out.resetAt[b] || 0) + 1;
+          }
+        } else if (r.ghostT <= 0) resetSeen[i] = 0;
       }
       if (race.state >= 4 || me.finished) break;              // RS.RESULTS = 4
       /* NO yield inside a run, deliberately.

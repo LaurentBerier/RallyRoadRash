@@ -65,15 +65,25 @@ should never need to touch solver code to change how the game feels.
 Two independent systems share this block: control authority (how the car
 rotates once it leaves the ground) and hang time (how far it flies).
 
-- `pitchAuthority` / `yawAuthority` / `rollAuthority` (1.85 / 2.10 / 1.25
-  rad/s^2 at full stick) -- yaw is the most generous because it is how you
-  square a landing to the road; roll is the smallest because it is the
-  axis that ruins one. `alignAssist` (2.3) + `alignDelay` (0.45 s) tidy up
-  a landing you nearly had and then fade out past `alignGiveUp`, so a
-  committed flip is never rescued for you. `spinCap` stays at 5.0 rad/s --
-  airborne rates never get near it in normal play, and raising it lets
-  crash-bounce chaos carry enough spin to make the flip watchdog
-  non-deterministic.
+- `pitchAuthority` / `yawAuthority` / `rollAuthority` (3.6 / 2.8 / 3.8
+  rad/s^2 at full stick). Wave 6 roughly doubled all three: air is now a
+  place you do things on purpose, and roll went from the smallest to the
+  largest because it is the trick axis. `damp` fell to 0.55 to match.
+- `alignAssist` (2.3) is the LANDING ASSIST, and it is predictive now, not
+  a timer. It runs a Newton solve for time-to-ground against the real
+  height field, takes the ground normal AT the predicted landing point,
+  and aims the car at velocity-heading x that normal. `assistWindow`
+  ([0.2, 1.6] s) is how it fades in as the ground approaches;
+  `assistScale` ([0.55, 1.0, 1.6]) is the trickAssist setting. It is off
+  entirely while any input is held, so a committed flip is never rescued
+  for you -- that is what replaced `alignDelay` and `alignGiveUp`, both
+  retired. `snapFrom` (5.2 rad) / `snapRate` (1.5 rad/s) are the
+  snap-through: a rotation past that angle and still turning is COMPLETED
+  rather than unwound the short way, measured on |angle| mod 2*pi so a
+  flip 66 degrees past a full turn is not sent the long way round.
+- `spinCap` stays at 5.0 rad/s -- airborne rates never get near it in
+  normal play, and raising it lets crash-bounce chaos carry enough spin to
+  make the flip watchdog non-deterministic.
 - `hangGravity` (0.58) / `hangLo` (0.12 s) / `hangHi` (0.35 s) -- the
   arcade hang. Gravity scales back to 58% of `G` once a jump has been
   continuously airborne past `hangHi`, so kickers fly roughly 1.7x
