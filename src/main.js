@@ -21,6 +21,7 @@ import { Audio } from './core/audio.js';
 import { Save } from './core/save.js';
 import { clamp } from './core/rng.js';
 import { Assets, NO_ASSETS, loadAssets } from './core/assets.js';
+import { MenuScene } from './ui/menuscene.js';
 import { bakeTrack, Terrain } from './world/terrain.js';
 import { Sky, SKY_THEMES } from './world/sky.js';
 import { Props } from './world/props.js';
@@ -44,7 +45,11 @@ const AS = { BOOT: 0, MENU: 1, TRACKS: 2, GARAGE: 3, LOADING: 4, RACE: 5 };
 const DEFAULTS = {
   quality: 'high', fov: 58, sens: 1.0, invertY: false,
   volSfx: 0.8, volMusic: 0.6, music: true, items: true,
-  camMode: 0, hudScale: 1, grain: 0.35, autoCentre: 1, showTouch: 'auto'
+  camMode: 0, hudScale: 1, grain: 0.35, autoCentre: 1, showTouch: 'auto',
+  /* motionFx scales the optional camera-and-post flourishes (speed blur,
+     the live menu scene). Coarse pointers default to half: the effects
+     that cost the most are the ones a phone can least afford. */
+  motionFx: 1, tips: true, trickAssist: 1
 };
 
 const App = {
@@ -57,6 +62,7 @@ const App = {
      the handle itself — only for the texture, which is null most of the
      time. Replaced in place when the manifest resolves. */
   assets: NO_ASSETS,
+  menuScene: null,    // the live 3D menu backdrop; disposed before a bake
   race: null,
   elapsed: 0,
   muted: false,
@@ -86,7 +92,11 @@ function guessQuality() {
 }
 
 async function boot() {
-  App.settings = Object.assign({}, DEFAULTS, { quality: guessQuality() }, Save.settings());
+  App.settings = Object.assign({}, DEFAULTS,
+    { quality: guessQuality() },
+    (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+      ? { motionFx: 0.5 } : null),
+    Save.settings());
   App.profile = normalizeProfile(Save.readProfile());
   App.trackId = nextTrackFor(App.profile);
   App.vehicleId = App.profile.unlockedVehicles[App.profile.unlockedVehicles.length - 1] || 'hopper';
@@ -106,6 +116,9 @@ async function boot() {
      one per race in buildWorld(). Nothing may call rig.update() before then —
      the menu drives the camera itself in idle(). */
   App.rig = new CameraRig(App.engine.camera, null);
+  App.menuScene = new MenuScene(App.engine, {
+    assets: App.assets, motionFx: App.settings.motionFx,
+  });
   App.feel = new Feel(App.rig, App.engine);
 
   applySettings();
@@ -124,7 +137,12 @@ async function boot() {
      is the next card paint. */
   loadAssets('assets/manifest.json').then((map) => {
     App.assets = new Assets(map);
-    if (App.assets.any && App.ui.setAssets) App.ui.setAssets(App.assets);
+    App.ui.setAssets(App.assets);
+    App.menuScene.assets = App.assets;
+    // Repaint whatever is on screen so art that arrived late is used.
+    if (App.state === AS.MENU || App.state === AS.TRACKS || App.state === AS.GARAGE) {
+      showScreen(App.state === AS.TRACKS ? 'tracks' : App.state === AS.GARAGE ? 'garage' : 'main');
+    }
   }).catch(() => { /* stays NO_ASSETS; nothing downstream cares */ });
 
   App.tick = tick;
@@ -235,16 +253,19 @@ function showScreen(name) {
         progression: App.profile,
         records: recordTable()
       });
+      menuScene('main');
       break;
 
     case 'tracks':
       App.state = AS.TRACKS;
       App.ui.show('tracks', { tracks: trackList(), champion: !!App.profile.champion });
+      menuScene('tracks');
       break;
 
     case 'garage':
       App.state = AS.GARAGE;
       App.ui.show('garage', { vehicles: vehicleList(), trackId: App.trackId });
+      menuScene('garage');
       break;
 
     case 'settings':
@@ -286,6 +307,20 @@ function vehicleList() {
 /* ============================================================
    UI ACTIONS
    ============================================================ */
+/**
+ * Bring the menu backdrop up for a screen, or take it down for one that is
+ * not a menu. It is shown for exactly three screens; everything else (pause,
+ * settings, results, playbook) sits over whatever was already there.
+ */
+function menuScene(kind) {
+  if (!App.menuScene) return;
+  if (App.race) return;                    // a race owns the scene, not us
+  App.menuScene.show(kind, {
+    trackId: App.trackId, vehicleId: App.vehicleId,
+    profile: App.profile, motionFx: App.settings.motionFx,
+  });
+}
+
 function onAction(a) {
   if (!a || !a.type) return;
   App.audio.init();                    // no-op after the first call
@@ -316,6 +351,14 @@ function onAction(a) {
       break;
 
     case 'back': showScreen('main'); break;
+
+    /* A card was highlighted but not chosen. The backdrop follows the
+       selection so the sky and the machine you are looking at are the ones
+       you would race — no screen change, no reload. */
+    case 'preview':
+      if (a.trackId) { App.trackId = a.trackId; App.menuScene.setTrack(a.trackId); }
+      if (a.vehicleId) { App.vehicleId = a.vehicleId; App.menuScene.setVehicle(a.vehicleId); }
+      break;
 
     /* Anything else is a navigation request. The UI names the DESTINATION as
        the action type and repeats it in `to` (it has already moved itself off
@@ -349,8 +392,12 @@ function startRace(trackId, vehicleId) {
   // at once is 300 MB of textures on a phone.
   if (App.race) { App.race.dispose(); App.race = null; }
   App.world = null;
+  /* BEFORE the bake, not after. MenuScene.hide() disposes its Sky, and
+     Sky.dispose restores the scene's fog and environment — run it after
+     buildWorld and it tears down the race's lighting instead of its own. */
+  App.menuScene.hide();
 
-  App.ui.boot(0.01, `surveying ${def.name}`);
+  App.ui.boot(0.01, `surveying ${def.name}`, def.id);
 
   pumpBake(def).then((baked) => {
     buildWorld(def, baked);
@@ -526,6 +573,14 @@ function tick(dt) {
 function idle(dt) {
   App.elapsed += dt;
   const c = App.engine.camera;
+  /* The menu scene owns the camera while it is live — it has a composed
+     dolly aimed right-of-frame so the UI plate never covers the machine.
+     The orbit below is the fallback for LOW tier and motionFx 0. */
+  if (App.menuScene && App.menuScene.live) {
+    App.menuScene.update(dt, App.elapsed);
+    App.audio.musicTick(App.elapsed, 0);
+    return;
+  }
   const t = App.elapsed * 0.05;
   const r = App.world ? 90 : 26;
   const y = App.world ? App.world.terrain.heightAt(0, 0) + 34 : 8;

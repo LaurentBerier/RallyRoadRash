@@ -102,6 +102,14 @@ export class MenuScene {
      PUBLIC API
      ============================================================ */
 
+  /**
+   * True while the 3D half is built and this object is driving the camera.
+   * main.js's idle() reads it to decide whether to run its own orbit — the
+   * two must never both write the camera in a frame, and the answer changes
+   * with the quality tier and the motionFx setting, not just with the screen.
+   */
+  get live() { return this._live; }
+
   /** @param kind 'main' | 'tracks' | 'garage' */
   show(kind, o) {
     const d = o || {};

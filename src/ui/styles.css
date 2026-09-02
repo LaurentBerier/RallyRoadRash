@@ -222,8 +222,15 @@ canvas.logo.big{max-width:640px}
   background:
     radial-gradient(120% 90% at 12% 0%, rgba(255,122,26,.10), transparent 58%),
     linear-gradient(180deg,rgba(8,8,11,.93),rgba(6,6,9,.97));
-  backdrop-filter:blur(9px) saturate(.85);
-  -webkit-backdrop-filter:blur(9px) saturate(.85);
+  /* NO backdrop-filter here, and it is not an oversight. Chrome drops an
+     element's own background when backdrop-filter and mask-image are set on
+     the SAME element: the blur composites and the plate does not, so the
+     screens were painting as bare text over the live 3D menu. It hid on the
+     main screen only because that backdrop happens to be dark, and showed up
+     the moment the playbook put near-white heading text over a bright sky.
+     At .93 alpha the blur was contributing about 7 % of the pixel anyway —
+     an invisible effect is not worth an unreadable heading. The feather
+     stays, because the mask alone composites correctly. */
   -webkit-mask-image:linear-gradient(90deg,#000 0,#000 84%,transparent 100%);
   mask-image:linear-gradient(90deg,#000 0,#000 84%,transparent 100%);
 }
