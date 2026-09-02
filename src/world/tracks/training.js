@@ -48,10 +48,10 @@ export default {
   ],
 
   jumps: [
-    { s: 318, len: 18, h: 3.0 },   // First Air - tabletop, ~34 m/s on the open back straight
+    { s: 318, len: 18, h: 3.0, name: 'FIRST AIR' },   // First Air - tabletop, ~34 m/s on the open back straight
     { s: 380, len: 11, h: 1.15 },
     { s: 700, len: 11, h: 1.35 },
-    { s: 835, len: 20, h: 4.0 }    // Finish Line Flyer - lands through the start gantry, clear of the grid
+    { s: 835, len: 20, h: 4.0, name: 'FINISH FLYER' }    // Finish Line Flyer - lands through the start gantry, clear of the grid
   ],
 
   walls: [{ s0: 820, s1: 140, side: 0 }],

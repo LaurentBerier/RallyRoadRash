@@ -21,6 +21,7 @@
    ============================================================ */
 
 import { SURFACES, SURF } from '../world/surfaces.js';
+import * as ITEM_SFX from './audio-items.js';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const hz = (midi) => 440 * Math.pow(2, (midi - 69) / 12);
@@ -44,9 +45,20 @@ const FAMILIES = {
     f: [150, 432, 985, 2060], q: [4.0, 5.5, 7.0, 6.0], a: [0.95, 0.70, 0.44, 0.22],
     intake: 0.75, whistle: 1.0, crackle: 0.85, boom: 0.80, growl: 0.7,
   },
+  thumper: {                                // HORNET — motocross 450 single
+    /* One big cylinder. `odd` is pushed hard because a single is nothing but
+       odd harmonics between the bangs, `rev` is high because it turns twice
+       as fast as anything else here, and the formants sit high and thin —
+       there is no bodyshell on a bike, just a header pipe and an airbox.
+       `boom` is cut right back: the low end on a 450 is a rattle, not a
+       chest thump, and leaving it at 1.0 made it sound like a small truck. */
+    roll: 0.150, odd: 1.85, rev: 1.55,
+    f: [232, 690, 1480, 2950], q: [3.2, 4.5, 6.0, 5.5], a: [0.72, 0.86, 0.62, 0.34],
+    intake: 1.15, whistle: 0.0, crackle: 1.30, boom: 0.42, growl: 1.25,
+  },
 };
-// vehicle spec ids map onto the three characters so race flow can pass either
-const SPEC_FAMILY = { hopper: 'buggy', ridgeback: 'truck', redline: 'wedge' };
+// vehicle spec ids map onto the engine characters so race flow can pass either
+const SPEC_FAMILY = { hopper: 'buggy', ridgeback: 'truck', redline: 'wedge', moto: 'thumper' };
 
 /* Music. D minor throughout so menu and race share a tonal centre and the
    crossfade never sounds like two radios fighting. Roots as MIDI. */
@@ -897,6 +909,19 @@ export class Audio {
     const g = this._note(this.busSfx, freq, t, dur, peak, type, 0);
     g.connect(this.verb);
   }
+
+  /* ---- arcade layer ----
+     Bodies live in core/audio-items.js so this file stays under the house line;
+     they take the Audio instance and use the same private synthesis kit. */
+  boostTier(tier) { ITEM_SFX.boostTier(this, tier); }
+  boostFire(tier, gain) { ITEM_SFX.boostFire(this, tier, gain); }
+  itemRoll() { ITEM_SFX.itemRoll(this); }
+  itemThrow(gain) { ITEM_SFX.itemThrow(this, gain); }
+  itemDrop(gain) { ITEM_SFX.itemDrop(this, gain); }
+  spinOut(gain) { ITEM_SFX.spinOut(this, gain); }
+  towSnap(gain) { ITEM_SFX.towSnap(this, gain); }
+  sledLaunch() { ITEM_SFX.sledLaunch(this); }
+  stormHit(gain) { ITEM_SFX.stormHit(this, gain); }
 
   /** 3, 2, 1 — deliberately low and dry so GO reads as a release. */
   countdownBeep(n = 3) {

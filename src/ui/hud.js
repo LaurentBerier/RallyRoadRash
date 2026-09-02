@@ -56,7 +56,7 @@ export class HUD {
       pos: $('hPos'), posN: $('hPosN'), posT: $('hPosT'), rival: $('hRival'),
       lapN: $('hLapN'), lapT: $('hLapT'), track: $('hTrack'),
       time: $('hTime'), last: $('hLast'), best: $('hBest'),
-      kmh: $('hKmh'), gear: $('hGear'), air: $('hAir'),
+      kmh: $('hKmh'), gear: $('hGear'), air: $('hAir'), item: $('hItem'),
       banner: $('hBanner'), log: $('hLog'),
       count: $('hCount'), countN: $('hCountN'),
       wrong: $('hWrong'), off: $('hOff'), reset: $('hReset'),
@@ -86,6 +86,10 @@ export class HUD {
     this._c = {
       pos: -1, total: -1, lap: -1, lapT: -1, time: '', last: '', best: '',
       kmh: -1, gear: '', rival: '', wrong: null, off: null, reset: -1,
+      /* One string covering name + charges + rolling. An item you are holding
+         is static for seconds at a time, so the common case must cost zero
+         DOM writes — same discipline as every other field here. */
+      item: '\u0000',
     };
 
     this._onResize = () => { this._sized = false; };
@@ -131,6 +135,8 @@ export class HUD {
     if (this.el.banner) this.el.banner.innerHTML = '';
     if (this.el.log) this.el.log.innerHTML = '';
     if (this.el.air) this.el.air.innerHTML = '';
+    if (this.el.item) this.el.item.innerHTML = '';
+    this._c.item = '\u0000';
     if (this.el.count) this.el.count.classList.add('hidden');
     if (this.el.wrong) this.el.wrong.classList.add('hidden');
     if (this.el.off) this.el.off.classList.add('hidden');
@@ -260,6 +266,32 @@ export class HUD {
       g.beginPath(); g.moveTo(X - nx, Y - nz); g.lineTo(X + nx, Y + nz); g.stroke();
     }
 
+    /* --- jumps ---
+       The minimap knew about corners and checkpoints but said nothing at all
+       about the set pieces, which on this game are the reason you are looking
+       at the map in the first place: on CALDERA RUN there is a 24 m void 60 m
+       past a blind crest, and "there is a gap coming" is worth more than any
+       other single thing the instrument could tell you. Same language as the
+       stage-select cards — a filled diamond is air you must carry speed into,
+       a small ring is a kicker. */
+    const jumps = trackData.jumps || [];
+    for (let i = 0; i < jumps.length; i++) {
+      const j = jumps[i];
+      const X = px(j.x), Y = pz(j.z);
+      const hero = !!j.gap || j.h >= 3.0;
+      g.beginPath();
+      if (hero) {
+        const r = 5.5;
+        g.moveTo(X, Y - r); g.lineTo(X + r, Y); g.lineTo(X, Y + r); g.lineTo(X - r, Y);
+        g.closePath();
+        g.fillStyle = '#ff7a1a'; g.fill();
+        g.strokeStyle = 'rgba(0,0,0,.75)'; g.lineWidth = 1.4; g.stroke();
+      } else {
+        g.arc(X, Y, 2.6, 0, 6.2832);
+        g.fillStyle = 'rgba(255,122,26,.55)'; g.fill();
+      }
+    }
+
     // --- start / finish line ---
     spline.posAt(0, p); spline.dirAt(0, d);
     const X0 = px(p.x), Y0 = pz(p.z);
@@ -319,6 +351,36 @@ export class HUD {
 
   /** T5 calls this on touchdown after a long flight. Number of seconds, or a
       pre-formatted string if the caller wants its own wording. */
+  /**
+   * The item slot. Cache-driven rather than timer-driven, unlike airtime():
+   * an item persists until it is used, and the roulette is a rapid sequence
+   * of different names rather than one thing fading out.
+   */
+  _drawItem(it) {
+    const host = this.el.item;
+    if (!host) return;
+    const key = !it || !it.enabled || (!it.name && !it.rolling)
+      ? '' : it.name + '|' + it.charges + '|' + (it.rolling ? 1 : 0);
+    if (key === this._c.item) return;
+    this._c.item = key;
+    if (!key) { host.innerHTML = ''; return; }
+
+    host.innerHTML = '';
+    const d = document.createElement('div');
+    d.className = 'itemcard' + (it.rolling ? ' rolling' : '');
+    d.style.setProperty('--ic', toCss(it.col, '#ff7a1a'));
+    const n = document.createElement('b');
+    n.textContent = it.name || '—';
+    d.appendChild(n);
+    if (it.charges > 1) {
+      const pips = document.createElement('span');
+      pips.className = 'charges';
+      for (let i = 0; i < it.charges; i++) pips.appendChild(document.createElement('i'));
+      d.appendChild(pips);
+    }
+    host.appendChild(d);
+  }
+
   airtime(sec) {
     const host = this.el.air;
     if (!host) return;
@@ -345,6 +407,8 @@ export class HUD {
     const race = (p && p.race) || 0;
     const veh = (p && p.vehicle) || 0;
     const c = this._c;
+
+    this._drawItem(p && p.item);
 
     /* ---- position ---- */
     if (race) {

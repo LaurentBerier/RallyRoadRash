@@ -32,6 +32,7 @@ import { SURF, SURFACES } from '../world/surfaces.js';
 import { DUST_KIND } from '../world/dust.js';
 import { RaceTracker, formatTime } from './racecore.js';
 import { AIDriver, makeGridProfiles } from './ai.js';
+import { ItemWorld } from './itemworld.js';
 import { CAM } from './camera.js';
 import { applyResult, TRACK_ORDER } from './progression.js';
 import { Save } from '../core/save.js';
@@ -44,6 +45,9 @@ const FIELD = 6;                    // one player + five rivals
 const GRID_TIME = 1.2;              // s of "everyone is here" before the lights
 const COUNT_TIME = 3.0;             // 3 · 2 · 1 at one-second marks, then green
 const FINISH_HOLD = 2.2;            // s the sim keeps running after you cross
+/* Fraction of the race distance a rival must have covered by the time the
+   board freezes to be classified rather than retired. See _showResults(). */
+const DNF_FRAC = 0.35;
 const PLAYER_SLOT = 5;              // last on the grid: the whole field to pass
 
 /* TUNE.reset carries the distance but not a dwell time, and yanking a car back
@@ -60,6 +64,8 @@ const AIRTIME_BRAG = 1.3;           // s of air worth a HUD flourish. Hang-time
                                     //   has to stay something you earn.
 const CLUNK_VEL = 1.9;              // m/s of compression velocity that thumps
 const IMPACT_MIN = 2.0;             // m/s of closing speed worth hearing
+const BOOST = TUNE.boost;           // read every frame in _wheelEffects
+const BOOST_HEAR = 70;              // m — a rival's boost you can still hear
 
 const AI_NAMES = ['MARA', 'JUKKA', 'REY', 'OTTO', 'SANNE'];
 /* Minimap dots have to be told apart at four pixels across, which the three
@@ -145,6 +151,22 @@ export class Race {
       checkpoints: this.trackData.checkpoints
     });
 
+    /* ---- power-ups ----
+       Built after the tracker because the drop roulette reads race position,
+       and handed the SEEDED race stream so a sweep in dev/qa-drive.js stays
+       reproducible between builds. `items` false is the purist toggle: the
+       system still exists, it is simply inert and invisible. */
+    this.items = new ItemWorld({
+      scene: this.engine.scene, terrain: this.terrain, trackData: this.trackData,
+      dust: this.dust, audio: this.audio, feel: this.feel, engine: this.engine,
+      racers: this.racers, tracker: this.tracker, rng: this.rng,
+      enabled: o.items !== false,
+    });
+    /* Set at the green flag and never cleared mid-race: a record set with
+       items on is FLAGGED as such, and toggling them off on the last lap must
+       not launder it. */
+    this.itemsFlag = false;
+
     /* ---- reusable per-frame payloads ---- */
     this._pctl = { throttle: 0, steer: 0, brake: 0, handbrake: 0 };
     this._aictx = { vehicles: this.racers.map(r => r.vehicle), tracker: this.tracker, myId: 0, state: 'countdown' };
@@ -165,7 +187,11 @@ export class Race {
     this._hudVeh = { speedKmh: 0, gear: 0, rpmNorm: 0, airborne: false, airTime: 0 };
     this._hudDots = this.racers.map(r => ({ x: 0, z: 0, color: r.color, isPlayer: r.isPlayer }));
     this._hudRival = { name: '', gap: 0 };
-    this._hudPayload = { race: this._hudRace, vehicle: this._hudVeh, dots: this._hudDots, rival: null };
+    this._hudItem = { enabled: true, id: -1, name: '', col: 0, charges: 0, rolling: false };
+    this._hudPayload = {
+      race: this._hudRace, vehicle: this._hudVeh, dots: this._hudDots,
+      rival: null, item: this._hudItem,
+    };
 
     this._enterGrid(true);
   }
@@ -239,6 +265,8 @@ export class Race {
     }
 
     this.state = RS.GRID; this.stateT = 0;
+    this.items.resetAll();
+    this.itemsFlag = false;
     this.raceTime = 0; this.countdownN = -1; this._beat = -1;
     this.resetHold = 0; this._resultsShown = false;
     this._wrongWay = false; this._offCourse = 0; this._playerPos = PLAYER_SLOT + 1;
@@ -279,6 +307,12 @@ export class Race {
      ============================================================ */
   togglePause() { this.paused ? this.resume() : this.pause(); }
 
+  /** The ITEMS setting, applied live — a pause-screen toggle takes effect now. */
+  setItemsEnabled(on) {
+    this.items.setEnabled(on);
+    if (on) this.itemsFlag = this.itemsFlag || this.state >= RS.RUNNING;
+  }
+
   pause() {
     if (this.paused || this.state === RS.RESULTS) return;
     this.paused = true;
@@ -312,6 +346,7 @@ export class Race {
     this.terrain.clearDent();
     this.terrain.clearTrails();
     this.dust.clear();
+    this.items.resetAll();
     this.tracker.resetAll();
     this._enterGrid(false);
     this.input.lock();
@@ -348,6 +383,12 @@ export class Race {
 
     const live = this.state === RS.RUNNING || this.state === RS.FINISHED;
     if (this.state !== RS.RESULTS) {
+      /* Items step BEFORE the cars, so a hit landed this frame is felt this
+         frame rather than next. See the header note in itemworld.js. */
+      if (live && this.items.hasItem(PLAYER_SLOT) && this.input.hit('KeyF')) {
+        this.items.fire(PLAYER_SLOT, (raw.throttle || 0) < -0.25);
+      }
+      this.items.step(dt, live);
       this._stepVehicles(dt, raw);
       if (live) {
         this.raceTime += dt;
@@ -364,6 +405,7 @@ export class Race {
        and a wheel frozen at the chassis origin is visible from every angle.
        Headless vehicles no-op on the root check. */
     for (const r of this.racers) r.vehicle.updateVisuals(dt);
+    this.items.updateVisuals(dt, this.engine.camera);
 
     /* ---- camera, then the world it looks at ---- */
     this._look.lookX = raw.lookX || 0;
@@ -405,11 +447,13 @@ export class Race {
             this.audio.countdownGo();
             this.hud.countdown('GO');
             this.state = RS.RUNNING; this.stateT = 0;
+            this.itemsFlag = this.itemsFlag || this.items.enabled;
             this.raceTime = 0;
           }
         }
         if (this.stateT >= COUNT_TIME && this.state === RS.COUNTDOWN) {
           this.state = RS.RUNNING; this.stateT = 0; this.raceTime = 0;
+          this.itemsFlag = this.itemsFlag || this.items.enabled;
         }
         break;
       }
@@ -447,14 +491,28 @@ export class Race {
         // A finished AI is told to cruise by its own state machine; before the
         // lights it holds the brake. Either way it only ever returns a ctl.
         this._aictx.myId = r.id;
+        this._aictx.position = r.pos;
+        this._aictx.item = this.items.itemOf(r.id);
         ctl = r.ai.update(dt, this._aictx);
+        if (r.ai.wantsFire) {
+          this.items.fire(r.id, !!r.ai.fireBack);
+          if (r.ai.notifyFired) r.ai.notifyFired();
+        }
       }
+      /* A rocket sled drives itself. Overwriting the ctl in place is exactly
+         what the countdown lock above does, so there is no new mechanism
+         here and no new field on ctl. */
+      if (!locked) this.items.pilot(r.id, ctl);
       v.step(dt, ctl);
 
       if (r.ghostT > 0) {
         r.ghostT -= dt;
-        if (r.ghostT <= 0) { r.ghostT = 0; v.ghost = false; }
+        if (r.ghostT <= 0) r.ghostT = 0;
       }
+      /* ONE writer. The respawn ghost and the sled's pass-through ghost are
+         two independent reasons to be intangible; composing them here is what
+         stops the recovery system's countdown quietly cancelling a sled. */
+      v.ghost = r.ghostT > 0 || this.items.isGhost(r.id);
     }
 
     /* All fifteen pairs, exactly once. hardHit is read AFTER this. */
@@ -466,6 +524,10 @@ export class Race {
     }
 
     for (const r of this.racers) {
+      /* props.resolve() does not check `ghost` — it pushes anything out of a
+         rock. A sled that bounced off the first boulder it met would be a
+         comeback item that ends in a ditch, so it is the one exception. */
+      if (this.items.isSledding(r.id)) continue;
       const impact = this.props.resolve(r.vehicle);
       if (impact > IMPACT_MIN) this._contact(r, null, impact);
     }
@@ -506,6 +568,19 @@ export class Race {
        second — a three-wide corner exit would otherwise machine-gun. */
     const order = this.tracker.standings();
     for (let i = 0; i < order.length; i++) this.racers[order[i]].pos = i + 1;
+    /* Seconds adrift of the leader, by pace. items.js uses it to roll a badly
+       beaten racer one row further back than their POSITION says — without
+       it, a table keyed only on position quietly stops helping the moment the
+       field spreads out, which is exactly when it should be helping most. */
+    if (order.length) {
+      const lead = this.tracker.progress(order[0]);
+      for (let i = 0; i < order.length; i++) {
+        const r = this.racers[order[i]];
+        const pr = this.tracker.progress(r.id);
+        const ref = Math.max(Math.abs(r.vehicle.speed), 12);
+        r.behindSec = Math.max(0, (lead.raceS - pr.raceS) / ref);
+      }
+    }
     const pos = this.player.pos;
     this._posT += dt;
     if (pos !== this._playerPos) {
@@ -554,6 +629,48 @@ export class Race {
     }
   }
 
+  /**
+   * The one-shot half of the mini-turbo: the chime on a tier, and the shove
+   * on release. Split out of the wheel loop because it is per CAR, not per
+   * wheel, and because `tierUp`/`fired` are single-frame flags that must be
+   * consumed exactly once.
+   *
+   * Rivals are distance-gated the same way _contact() gates a crash: a boost
+   * seventy metres up the road is a sound you should hear, faintly, because
+   * it tells you somebody just got a run on you. Beyond that it is noise.
+   */
+  _boostCues(r, D, camD) {
+    if (D.tierUp) {
+      if (r.isPlayer) {
+        this.audio.boostTier(D.tier);
+        if (this.feel) this.feel.kick(BOOST.tierFov);
+      }
+    }
+    if (!D.fired) return;
+    const t = D.fired;
+    if (r.isPlayer) {
+      this.audio.boostFire(t, 1);
+      if (this.feel) {
+        this.feel.kick(BOOST.fireFov[t - 1]);
+        this.feel.addShake(BOOST.fireShake[t - 1]);
+      }
+    } else if (camD < BOOST_HEAR) {
+      this.audio.boostFire(t, clamp(1 - camD / BOOST_HEAR, 0.12, 0.5));
+    }
+    /* The flame. EMBER is already a glowing, buoyant, cooling particle whose
+       shader multiplies by a fixed warm tint and clears the bloom threshold —
+       so an ember IS a flame with no new particle kind, no fourth entry in
+       dust.js's K_GY/K_BUOY tables and no shader branch. It cannot be tinted
+       cool, which is why the TIER is read from the charge dust and the FLAME
+       is the same every time. */
+    const v = r.vehicle;
+    if (camD < 120) {
+      const f = v.forward;
+      this.dust.spawn(3 + t, v.pos.x - f.x * 1.6, v.pos.y - 0.15, v.pos.z - f.z * 1.6,
+        2.0 + t * 0.9, 0.30, -f.x, -f.z, 1.0, 0.55, 0.16, DUST_KIND.EMBER);
+    }
+  }
+
   /* ---------------- 7: ground effects from the wheels ----------------
      One pass per contact wheel doing
      tyre marks, ruts and the rooster tail, driven off the surface table so a
@@ -566,6 +683,26 @@ export class Race {
       // Rivals half a stage away still cut ruts nobody will ever see.
       const emit = r.isPlayer ? 1 : camD < 60 ? 0.7 : camD < 130 ? 0.3 : 0;
       const ground = r.isPlayer || camD < 90;
+
+      /* ---- mini-turbo: the whole visible half of the feature ----
+         The charge is READ OFF THE TYRE DUST rather than drawn as anything
+         new: while a tier is building, the rooster tail is tinted by tier
+         instead of by the surface. That costs zero extra particles, which
+         matters because the pool is 500 at LOW and shared with six cars —
+         an item VFX budget that starves the tyre dust would be a bad trade.
+         The colours go in OVER-BRIGHT (× glow): dust.js writes cr/cg/cb
+         straight into the colour attribute with no clamp, so a value past 1
+         clears the bloom threshold and the sparks actually glow. */
+      const D = v._drift;
+      /* Tinted from the FIRST frame of a drift, not from the first banked
+         tier. Waiting for tier 1 means the most important quarter-second in
+         the mechanic — the one where you are deciding whether to commit —
+         looks identical to not drifting at all. Pre-tier sparks use the
+         tier-1 hue at roughly half the glow, so "it has started" and "you
+         have banked something" are still different pictures. */
+      const bcol = D.active ? BOOST.col[D.tier > 0 ? D.tier - 1 : 0] : null;
+      const bglow = D.tier > 0 ? BOOST.glow : BOOST.glow * 0.5;
+      this._boostCues(r, D, camD);
 
       for (let i = 0; i < 4; i++) {
         const w = v.wheels[i];
@@ -636,10 +773,12 @@ export class Race {
           if (n > 0) {
             const sx = v.vel.x, sz = v.vel.z;
             const m = Math.hypot(sx, sz) || 1;
-            const c = S.dustCol;
+            const c = bcol || S.dustCol;
+            const k = bcol ? bglow : 1;
             this.dust.spawn(n > 3 ? 3 : n, gx, w.worldPos.y - v.spec.wheelR * 0.55, gz,
               0.26 + patch * 0.011 + slip * 0.55, 0.22, -sx / m, -sz / m,
-              c[0], c[1], c[2], S.sink > 0.6 ? DUST_KIND.CLOD : DUST_KIND.PUFF);
+              c[0] * k, c[1] * k, c[2] * k,
+              bcol ? DUST_KIND.PUFF : (S.sink > 0.6 ? DUST_KIND.CLOD : DUST_KIND.PUFF));
           }
         }
       }
@@ -749,8 +888,17 @@ export class Race {
          the stuck gate's speed window, 18 m off-centre: under every threshold,
          stranded forever. Race-line progress is the one signal a beached car
          cannot fake. Airborne time never counts against it (set-piece flights
-         are progress by definition). */
-      const progS = this.tracker.progress(r.id).raceS;
+         are progress by definition).
+
+         Read `liveS`, NOT `raceS`. raceS is ratcheted per segment so the
+         standings stay stable across a spin or a reset, which means a car
+         respawned to the gate behind it reports a FROZEN raceS for the whole
+         drive back to where it crashed. QA found the deadlock that makes:
+         canyon/ridgeback fell off the ridge 2 m short of gate 2, respawned
+         146 m back, and could not cover that in the 6 s window because the
+         only signal being measured was pinned — so it reset, and reset, 112
+         times, and DNF'd. liveS is the same estimate un-ratcheted. */
+      const progS = this.tracker.progress(r.id).liveS;
       if (r.bestS == null || progS > r.bestS + (T.noProgressDist ?? 4)) {
         r.bestS = progS; r.noProgT = 0;
       } else if (!v.airborne) {
@@ -797,6 +945,7 @@ export class Race {
        baseline must re-arm from here or it fires again on arrival. */
     r.bestS = null; r.noProgT = 0;
     r.wasAir = false; r.airPeak = 0;
+    this.items.notifyReset(r.id);
     for (let w = 0; w < 4; w++) r.lastGround[w].has = false;
     this.tracker.notifyTeleport(r.id, _sp.x, _sp.z);
 
@@ -883,6 +1032,7 @@ export class Race {
       this._hudNextCp.idx = slot.idx; this._hudNextCp.dist = p.distNext;
     }
 
+    this.items.hudFor(PLAYER_SLOT, this._hudItem);
     const hv = this._hudVeh;
     hv.speedKmh = v.speedKmh; hv.gear = v.gear; hv.rpmNorm = v.rpmNorm;
     hv.airborne = v.airborne; hv.airTime = v.airTime;
@@ -932,11 +1082,19 @@ export class Race {
       /* The classification freezes the moment the player's podium settles, so
          a rival mid-final-lap has no total. "DNF" is a lie about a car that is
          still audibly racing behind you — project its finish from its own
-         average pace instead. Cars that never cleared lap one earn the DNF. */
+         average pace instead.
+
+         The DNF test is a fraction of the WHOLE race, not one lap. "Has not
+         cleared lap one" is the right idea on a three-lap stage and complete
+         nonsense on PROVING GROUNDS, where the race IS one lap: every rival
+         who crossed the line two and a half seconds behind the player was
+         being posted as a retirement, and on the tutorial that was half the
+         field, every time. 0.35 of the race distance is about a lap on the
+         long stages — the same bar as before — and a third of one here. */
       let total = row.total, dnf = false;
       if (!row.finished) {
         const prog = this.tracker.progress(row.id);
-        if (prog.raceS < L) { dnf = true; }
+        if (prog.raceS < finishS * DNF_FRAC) { dnf = true; }
         else {
           const pace = prog.raceS / Math.max(1, this.raceTime);   // m/s of race made good
           total = this.raceTime + (finishS - prog.raceS) / Math.max(6, pace);
@@ -950,7 +1108,7 @@ export class Race {
     }
 
     const res = applyResult(this.profile, this.trackDef.id, playerPos,
-      playerTotal == null ? Infinity : playerTotal, playerBest);
+      playerTotal == null ? Infinity : playerTotal, playerBest, this.itemsFlag);
     this.profile = res.profile;
     Save.writeProfile(this.profile);
     this.onProfile(this.profile);
@@ -990,12 +1148,14 @@ export class Race {
     if (this._disposed) return;
     this._disposed = true;
 
+    this.items.dispose();
     for (const r of this.racers) r.vehicle.dispose();
     this.racers.length = 0;
 
     this.props.dispose();
     this.sky.dispose();
     this.dust.clear();
+    this.items.resetAll();
     this.dust.dispose();
     // terrain.dispose() frees its GPU objects but does not detach the clipmap.
     if (this.terrain.group && this.terrain.group.parent) {

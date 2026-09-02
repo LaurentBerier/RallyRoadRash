@@ -1,5 +1,5 @@
 /* ============================================================
-   RALLY ROAD RASH — THE THREE CARS
+   RALLY ROAD RASH — THE ROSTER
    ------------------------------------------------------------
    Pure data. No three.js, no DOM: importable from Node tests, from the UI,
    and from the physics alike.
@@ -11,7 +11,8 @@
    on a shared value in config.js — that is where the car's *character*
    lives, and it is the safe place to tune.
 
-   Sizing rules that hold across all three (break them and the checks fail):
+   Sizing rules that hold across the whole roster (break them and the checks
+   fail):
 
      suspK   is derived from a target ride frequency f:  k = (mass/4)·(2πf)²
              Static sag is then simply G/(2πf)², independent of mass, and it
@@ -180,6 +181,97 @@ export const VEHICLES = [
 
     liveryHues: [0.00, 0.07, 0.35, 0.52, 0.72],
   },
+
+  /* -----------------------------------------------------------------
+     HORNET — the motocross 450, and the only two-wheeler on the grid.
+
+     ONE MODEL, TWO TRACKS
+     ---------------------
+     The rigid body underneath every vehicle in this game has four corners,
+     and rewriting it for one bike would put every gate in dev/vehicle-check
+     back on the table. So the Hornet is a four-corner body that is DRAWN as
+     a single-track machine: vehicle.js collapses both wheels of an axle onto
+     the centreline and banks the whole bike into the corner (see
+     `bikeLean`). Nothing the player can see has four wheels.
+
+     What that buys, and what it costs:
+       • `track` (0.68) is an INVISIBLE outrigger. It exists only to keep the
+         rollover margin honest — (track/comHeight)/grip = 1.21x, the same
+         gate the cars pass. A real 0.1 m half-track would put the bike on
+         its side in the first corner and there is nothing in a four-corner
+         solver that would stop it.
+       • `antiRollBonus` 1.55 is the second half of that deal. The visual
+         lean is cosmetic, so the body underneath has to stay flat or the
+         drawn lean stacks on top of a real roll and the bike looks drunk.
+       • Everything a player actually feels — 245 kg, the lowest yaw inertia
+         on the grid, the sharpest rack, and the least grip — is real.
+
+     Character: it out-accelerates and out-jumps everything (a quarter of the
+     Ridgeback's mass off the same lip is a different sport), and it has less
+     grip than anything else here, so it arrives at every corner asking to be
+     slid. Contact is what kills it: 245 kg against 1680 kg of Ridgeback is
+     not an argument you win.
+     ----------------------------------------------------------------- */
+  {
+    id: 'moto',
+    name: 'HORNET',
+    desc: 'Motocross 450. Half the weight, twice the air, no margin at all.',
+    color: 0xe8c21a,
+    bodyStyle: 'bike',
+
+    mass: 245,                        // kg — 110 kg bike + rider + arcade fudge
+    dims: { L: 2.18, W: 0.86, H: 1.55 },  // W is BAR width, not body width; H is
+                                      //   ground-to-helmet with the rider up on the pegs.
+                                      //   Both feed aero and the collision spheres, so
+                                      //   moving the rider means re-checking the top-speed
+                                      //   gate — see TUNE.aero.cd.bike.
+
+    wheelR: 0.36,                     // m — an 80/100-21 front measures 0.347 m; the
+                                      //   rear is a 19 and the model splits the difference
+    wheelW: 0.12,
+    track: 0.74,                      // m — see the outrigger note above
+    wheelbase: { front: 0.72, rear: -0.72 },   // 1.44 m, real MX numbers
+
+    suspRest: 0.52,                   // long forks
+    suspTravel: 0.40,                 // m — 400 mm is generous for MX, but the sag
+                                      //   band (12–18 %) and the 1.6–2.25 Hz band
+                                      //   cannot both be met on 300 mm at G = 12.8
+    suspK: 11700,                     // N/m per corner → 2.20 Hz, sag 0.067 m = 16.8 %
+    suspC: 1320,                      // → ζ = 0.78
+
+    motorForce: 3050,                 // N → 12.45 m/s² on paper. It never sees that:
+                                      //   rear-biased drive on 245 kg is traction
+                                      //   limited off the line, so it wheelspins,
+                                      //   TC catches it, and it still leaves.
+    brakeForce: 6200,                 // above the friction limit, like the cars
+    topSpeed: 40,                     // m/s (144 km/h)
+    revRange: [1400, 11500],          // a 450 single. Screams higher than the Redline.
+
+    gripF: 1.42,                      // knobblies in loose dirt genuinely hook up, so the
+    gripR: 1.48,                      //   bike is not the low-grip machine — the front is
+                                      //   simply the end that lets go first, and tucking
+                                      //   it makes you a passenger. Rear-biased, because
+                                      //   a bike drives out of a corner on the back wheel.
+    driveSplit: 0.12,                 // chain drive is 0.00; 0.12 is the smallest front
+                                      //   share that keeps a 1.44 m wheelbase pointing
+                                      //   where it was aimed under the shared solver
+    brakeBias: 0.66,                  // front-brake dominant, the way a bike stops
+
+    comHeight: 0.40,                  // rollover threshold 23.7 m/s² vs 18.9 peak lateral
+                                      //   → 1.25× margin
+    antiRollBonus: 1.55,              // the invisible outrigger's spring — see above
+    /* LOW, and that is not a typo. The wheelbase is 1.44 m against the
+       Hopper's 2.64, so the same rack angle asks for twice the yaw rate;
+       past the tyre's peak slip angle the surplus is not cornering, it is
+       scrubbing, and full lock at 1.22 measured 32.6 m of radius against the
+       Hopper's 24.0. At 0.78 the bike turns inside every car on the grid at
+       walking pace (3.1 m against the Hopper's 4.3) and is grip-limited, not
+       scrub-limited, everywhere above it. The sharpest steering RESPONSE in
+       the game comes from the yaw inertia, which is a third of a car's. */
+    steerLockScale: 0.78,
+
+    liveryHues: [0.00, 0.11, 0.28, 0.55, 0.81],
+  },
 ];
 
 /* Lookup by id — the UI, save data and the AI all address cars by string. */
@@ -189,8 +281,10 @@ export const VEHICLE_BY_ID = Object.fromEntries(VEHICLES.map(v => [v.id, v]));
    STAT BARS (for the vehicle-select screen)
    ------------------------------------------------------------
    Four 0..1 numbers. The ranges below are FIXED, not derived from the roster:
-   if a fourth car is added later, the bars must not silently re-scale and
-   make the existing three look different. Pick ranges that leave headroom.
+   when the Hornet joined, the bars on the other three did not move by a pixel,
+   which is the entire point. The bike pins `accel` and bottoms out `grip` and
+   `weight` — all three are true statements about it, and the 0.05 floor in
+   `bar()` is what keeps a bottomed-out bar visible rather than absent.
    ============================================================ */
 const RANGE = {
   speed:  [26, 48],       // m/s of topSpeed

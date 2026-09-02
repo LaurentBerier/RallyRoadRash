@@ -7,11 +7,12 @@ should never need to touch solver code to change how the game feels.
 
 | File | What it owns |
 |---|---|
-| `src/game/config.js` | Gravity, steering feel, assists, drift, air control, reset rules, collisions, aero |
-| `src/game/vehicles.js` | The three car specs — mass, grip, power, suspension, silhouette |
+| `src/game/config.js` | Gravity, steering feel, assists, drift, **mini-turbo**, air control, reset rules, collisions, aero |
+| `src/game/vehicles.js` | The four machine specs — mass, grip, power, suspension, silhouette |
 | `src/world/surfaces.js` | What DIRT/SAND/MUD/… mean (grip, drag, sink, dust, squeal) |
 | `src/game/ai.js` (header consts) | AI lookahead, braking model, offsets, balancing |
 | `src/world/tracks/*.js` | Stage layout: path, widths, paints, jumps, walls, laps |
+| `src/game/items.js` (header consts) | Power-up roster and the rubber-banding table |
 
 ## The five numbers that matter most
 
@@ -28,7 +29,8 @@ should never need to touch solver code to change how the game feels.
 3. **`gripF / gripR` (per spec)** — base friction multiplied by the surface.
    The front/rear DIFFERENCE is the car's character: front-biased = safe
    understeer (hopper), near-square = planted (ridgeback), front-heavy with
-   low rear = throttle-rotates (redline).
+   low rear = throttle-rotates (redline), rear-biased on a short wheelbase =
+   drives out of the corner on the back wheel (moto).
 4. **`topSpeed` (per spec)** — honest terminal velocity; drive force fades to
    a tail at exactly this speed. AI reads it directly for its targets.
 5. **`TUNE.steer.speedTaper` (0.24)** -- fraction of full lock available at
@@ -108,10 +110,64 @@ braking and later yielding; consistency trades corner-entry noise.
   ai.js — the three gains most likely to need work are documented with their
   failure symptoms).
 
+## Mini-turbo (config.js `TUNE.boost`)
+
+A drift charges a tier; releasing it fires a boost. The mechanic is **always
+on** — it is handling, not a power-up, and the POWER-UPS setting does not
+touch it.
+
+The tier times are the number people get wrong first. They are
+`[0.12, 0.24, 0.34]` seconds and they look absurdly short until you measure
+what the handbrake actually does here: a swept test found the car leaves the
+slip band after **~0.47 s** no matter how you steer, with a maximum
+single-application charge of **0.36**. The handbrake in this game is a
+rotation tool, not a state you hold. Tiers longer than that are simply
+unreachable — the original `[0.85, 1.90, 3.10]` fired zero times in a full
+race. If you lengthen them, re-measure first.
+
+- **`slipHand` 0.20 / `slipFree` 0.34** — the dual gate, in radians of body
+  slip. The lower number applies with the handbrake down. The higher one is
+  what lets a *throttle* slide charge, and it is the only reason AI cars get
+  mini-turbos at all: `ai.js` sets `handbrake = 0` unconditionally.
+- **`slipMax` 1.15** — the upper gate. Without it a full pirouette counted as
+  a drift. It matches the top of `TUNE.drift.spinGuard`.
+- **`minSpeed` 9** — measured against `groundSpeed`, not `speed`. At 86° of
+  slip the forward component is ~0, so gating on `speed` switched the charge
+  off exactly when the car was most sideways.
+- **`grace` 0.30 / `decay` 1.2** — how long a slide may lapse before the
+  charge bleeds, and how fast it goes. `grace` is also the second fire
+  trigger: the first is the handbrake DOWN→UP edge.
+- **`fireTop` `[1.00, 1.06, 1.13]`** — the top-speed multiplier per tier.
+  Tier 1 is exactly 1.00 on purpose: it fires roughly twenty times a lap and
+  must add punch without moving terminal speed.
+- **`spinLockout` 0.40** — no charging while spun out.
+
+Symptom guide: *boosts never fire* → tiers too long, or `slipFree` too high.
+*Boosts fire constantly on straights* → `slipFree` too low. *Lap times fall
+off a cliff* → `fireTop` above ~1.15; the drive-fade curve stops being an
+honest ceiling.
+
+## Power-ups (`src/game/items.js`)
+
+`DROP_WEIGHTS[position][item]` is the whole balance surface — plain integers
+by row, not normalised. Row 0 is P1. Rubber-banding is **strong by design**:
+P1 draws defence only, last place draws a catch-up special about a third of
+the time, and anyone more than `ITEM_TUNE.gapShiftSec` (8 s) behind the
+leader rolls one row *lower* than their position. To soften the whole system,
+raise `gapShiftSec` and flatten the last two rows; to harden it, do the
+reverse. Changing a weight needs no code change and no other file.
+
+`ITEM_TUNE.sledLockoutM` (120) and `stormMinPos` (4) are the guards that stop
+the two specials deciding a race in its final metres. `dev/items-check.mjs`
+gates both, plus the two rubber-band assertions — if you rebalance the table,
+that suite tells you whether it is still a catch-up system.
+
 ## Race rules (config.js `TUNE.reset`)
 
-flip 2.5 s / stuck 4 s under throttle below 1.6 m/s / no-progress 4 m in
-6 s (ground only -- airborne time never counts against it) / off-course
+flip 2.5 s / stuck 4 s under throttle below 1.6 m/s / no-progress 4 m of
+`liveS` in 6 s (ground only -- airborne time never counts against it; it reads
+the UN-ratcheted progress estimate, because `raceS` is frozen after a respawn
+and a watchdog on it deadlocks) / off-course
 30 m for 2.5 s / lava loiter 1.2 s / manual hold 0.8 s / respawn ghost
 1.5 s. Respawns place you a few metres past the last gate you actually
 cleared, facing the right way, and are pushed clear of any gap-jump void

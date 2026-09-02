@@ -491,6 +491,10 @@ function normaliseJumps(trackDef, spline) {
     const d = spline.dirAt(s, { x: 0, z: 0 });
     out.push({
       idx: i, s, len: j.len, h: j.h, gap: j.gap || 0,
+      // Authored name, if the set piece has one. props.js prints it on the
+      // sponsor arch over the ramp; nothing else reads it, and an unnamed
+      // jump simply gets the generic banner.
+      name: j.name || '',
       x: p.x, y: p.y, z: p.z, dx: d.x, dz: d.z,
       w: spline.widthAt(s),
       // Steepest angle of the kicker face. rampRise()/LIP_HOLD below are the one

@@ -104,12 +104,25 @@ export const THEMES = {
   forest: {
     // Overcast-bright and misty: the haze is doing the work here, stacking the
     // pine ridges into layers instead of one flat green wall.
+    //
+    // Ambient came down from 0.82 and DIRT/ROCK got their own entries after a
+    // look at what the stage actually rendered: the default brown DIRT under
+    // an 0.82 hemisphere fill tone-mapped to (207,195,168) — bone, not loam —
+    // and the whole valley read as a desert with pine trees standing in it.
+    // 0.72 with a darker, wetter substrate puts the ground back where the
+    // track description has always claimed it is. The road stays legible: it
+    // is ROAD/DIRT at 0.40-plus and now has something dark to contrast with.
     name: 'TIMBERLINE CLIMB',
     sun: [-0.30, 0.76, 0.58], sunCol: [1.14, 1.16, 1.12],
-    sky: [0.52, 0.58, 0.64], ground: [0.20, 0.22, 0.17], ambient: 0.82,
+    sky: [0.52, 0.58, 0.64], ground: [0.19, 0.21, 0.16], ambient: 0.72,
     haze: [0.66, 0.71, 0.72], hazeDensity: 0.00125, hazeStart: 45,
     tint: [0.94, 0.98, 0.94],
-    surf: { 5: [0.24, 0.34, 0.16], 3: [0.17, 0.13, 0.09] }
+    surf: {
+      5: [0.24, 0.34, 0.16],    // GRASS
+      3: [0.17, 0.13, 0.09],    // MUD
+      1: [0.27, 0.21, 0.14],    // DIRT — forest loam, not desert hardpack
+      4: [0.34, 0.35, 0.32],    // ROCK — damp grey granite, faintly green
+    }
   },
   volcano: {
     // Low red sun through smoke. Everything not lit by it is lit by the ground.
@@ -1181,6 +1194,26 @@ export class Terrain {
           albedo *= 0.55 + 0.30*crack;
           emis = vec3(2.6, 0.72, 0.14) * glow * pulse;
           rough = 0.55; gritK = 0.45;
+        }
+
+        /* ---- past the edge of the world, everything is bedrock ----
+           The surface map only covers ±620 m. Outside it the uv clamps, so the
+           ENTIRE horizon — thousands of metres of relief — inherits whatever
+           loose surface happens to sit on the border texel. On SUNSTRIKE
+           CANYON that is SAND, albedo 0.82, which tone-maps to 0.93 and turns
+           a desert's far mesas into a snowfield; on TIMBERLINE CLIMB it is
+           DIRT and the ridges read as bone. It was the single worst thing in
+           any of the four stages and it was the same bug in all of them.
+
+           Distant relief is not loose material. Wind and water strip a slope
+           that size back to rock, so fade toward the theme's ROCK palette,
+           darkened, over the last 100 m of the map. Near ground is untouched:
+           the crossfade finishes 520 m out and nothing is playable past 600. */
+        {
+          float edge = max(abs(vW.x), abs(vW.z)) / uConst3.x;
+          float outside = smoothstep(0.42, 0.50, edge);
+          albedo = mix(albedo, uSurfCol[4] * (0.66 + 0.24*fb(vW.xz*0.045)), outside);
+          rough = mix(rough, 0.85, outside);
         }
 
         /* ---- steep ground can't hold its coat ----

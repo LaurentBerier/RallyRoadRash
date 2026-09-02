@@ -29,6 +29,12 @@ const SCREENS = ['main', 'tracks', 'garage', 'settings', 'pause', 'results'];
 /* Settings schema. `key` matches the settings-keys contract exactly; the UI
    never invents a key and never writes storage itself — it emits and T5 saves. */
 const SETTINGS_SPEC = [
+  /* First in the list, because it is the only row here that changes what the
+     race IS rather than how it looks. OFF is the clean time-attack game; the
+     drift boost is handling, not a power-up, and stays on either way. */
+  { key: 'items', label: 'POWER-UPS',
+    hint: 'Item boxes, weapons and catch-up. OFF for clean time attack — the drift boost stays.',
+    type: 'seg', opts: [[false, 'OFF'], [true, 'ON']], def: true },
   { key: 'quality', label: 'QUALITY', hint: 'Render tier. Drop it if the frame rate dips.',
     type: 'seg', opts: [['low', 'LOW'], ['medium', 'MED'], ['high', 'HIGH'], ['ultra', 'ULTRA']], def: 'high' },
   { key: 'fov', label: 'FIELD OF VIEW', hint: 'Base chase-camera FOV in degrees.',
@@ -77,6 +83,10 @@ const BINDINGS = {
 
 const clamp01 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
 
+/* A record set with power-ups on is still a record — it just says so. One
+   flag beats a dual leaderboard for a feature that is on by default. */
+const ITEM_FLAG = '<span class="itflag" title="set with power-ups on">⚡</span>';
+
 /** mm:ss.cc, or dashes when a time has not been set. */
 function fmtTime(t) {
   if (t == null || !isFinite(t) || t < 0) return '--:--.--';
@@ -115,7 +125,8 @@ export class UI {
     this.el = {
       boot: $('boot'), bootBar: $('bootBar'), bootMsg: $('bootMsg'),
       screens: $('screens'),
-      mainBadge: $('mainBadge'), mainHints: $('mainHints'),
+      mainBadge: $('mainBadge'), mainHints: $('mainHints'), mainProgress: $('mainProgress'),
+      garageSub: $('garageSub'),
       trackGrid: $('trackGrid'), tracksNote: $('tracksNote'), tracksNext: $('tracksNext'),
       tracksChampion: $('tracksChampion'), tracksSub: $('tracksSub'),
       garageGrid: $('garageGrid'), garageNote: $('garageNote'), garageStart: $('garageStart'),
@@ -295,7 +306,40 @@ export class UI {
       this.el.mainBadge.innerHTML = champ
         ? `<span class="champ-badge"><b>★</b>CHAMPION${typeof champ === 'string' ? ' · ' + esc(champ) : ''}</span>` : '';
     }
+    this._renderProgress(d);
     this._renderHints();
+  }
+
+  /**
+   * Career strip: one step per stage, in order, showing locked / open / the
+   * medal you took. The main menu previously said nothing whatsoever about
+   * progress, so a returning player had to walk into STAGE SELECT to find out
+   * where they were — and the RACE button said the same thing on the first
+   * run as on the last. Both are fixed here, from data main.js already sends.
+   */
+  _renderProgress(d) {
+    const el = this.el.mainProgress;
+    if (!el) return;
+    const prof = d.progression || d.profile || null;
+    const recs = d.records || (prof && prof.results) || {};
+    const unlocked = (prof && prof.unlockedTracks) || ['training'];
+    let done = 0, opened = 0;
+    const parts = [];
+    for (const t of TRACKS) {
+      const open = unlocked.indexOf(t.id) >= 0;
+      const medal = open && recs[t.id] ? recs[t.id].medal : null;
+      if (open) opened++;
+      if (medal) done++;
+      parts.push(
+        `<span class="prog-step${open ? '' : ' off'}${medal ? ' ' + esc(medal) : ''}" title="${esc(t.name)}">` +
+        `<i></i><em>${esc(t.name)}</em></span>`);
+    }
+    el.innerHTML = `<div class="prog-row">${parts.join('')}</div>` +
+      `<p class="prog-note">${done ? `${done} of ${TRACKS.length} stages medalled` :
+        opened > 1 ? 'Championship in progress' : 'New championship'}</p>`;
+    // The primary action tells you which it is: a first run or a continuation.
+    const race = this.el.screens && this.el.screens.querySelector('[data-act="main-race"]');
+    if (race) race.textContent = opened > 1 || done ? 'CONTINUE CHAMPIONSHIP' : 'RACE';
   }
 
   _renderHints() {
@@ -341,22 +385,31 @@ export class UI {
       const medal = t.medal ? `<span class="chip ${esc(t.medal)}">${esc(String(t.medal)).toUpperCase()}</span>` : '';
       const times = (t.best != null || t.bestLap != null)
         ? `<div class="pick-times">
-             <span><em>BEST</em>${fmtTime(t.best)}</span>
-             <span><em>LAP</em>${fmtTime(t.bestLap)}</span>
+             <span><em>BEST</em>${fmtTime(t.best)}${t.bestItems ? ITEM_FLAG : ''}</span>
+             <span><em>LAP</em>${fmtTime(t.bestLap)}${t.bestLapItems ? ITEM_FLAG : ''}</span>
            </div>` : '';
+      const def = TRACKS.find(x => x.id === t.id) || null;
+      const jumps = def ? (def.jumps || []) : [];
+      const big = jumps.filter(j => j.gap || j.h >= 3.0).length;
       b.innerHTML = `
         <div class="pick-top">
           <span class="pick-name">${esc(t.name || t.id)}</span>
           ${t.locked ? `<span class="lock"><b>&#128274;</b>LOCKED</span>` : medal}
         </div>
+        <canvas class="stage-art" width="440" height="252" aria-hidden="true"></canvas>
         <div class="pick-tag">${esc(t.tagline || '')}</div>
         <div class="pick-meta">
           <span class="chip">${laps} LAP${laps > 1 ? 'S' : ''}</span>
+          ${def ? `<span class="chip">${Math.round(splineLength(def.path) / 100) / 10} KM</span>` : ''}
+          ${big ? `<span class="chip info">${big} BIG AIR</span>` : ''}
+          ${def && def.shortcut ? `<span class="chip info">SHORTCUT</span>` : ''}
           ${t.locked && t.lockHint ? `<span class="chip info">${esc(t.lockHint)}</span>` : ''}
         </div>
         ${times}`;
       b.addEventListener('click', () => this._pickTrack(t));
       g.appendChild(b);
+      const cv = b.querySelector('.stage-art');
+      if (cv && def) drawStage(cv, def, t.locked);
     }
     this._syncTrackFoot(list);
   }
@@ -411,6 +464,16 @@ export class UI {
     if (this.el.garageTrack) {
       const t = TRACKS.find(x => x.id === this._sel.trackId);
       this.el.garageTrack.textContent = t ? `STAGE · ${t.name}` : '';
+    }
+    /* Written from the roster rather than baked into index.html, where it
+       said "Three cars" for as long as it took somebody to notice the
+       Hornet had made it four. */
+    if (this.el.garageSub) {
+      const n = ['no', 'one', 'two', 'three', 'four', 'five', 'six'][list.length] || list.length;
+      const open = list.filter(v => !v.locked).length;
+      this.el.garageSub.textContent =
+        `${n[0].toUpperCase()}${n.slice(1)} machines, ${open} unlocked. ` +
+        'No wrong answers, only different mistakes.';
     }
     const g = this.el.garageGrid;
     if (!g) return;
@@ -641,10 +704,15 @@ export class UI {
       this.el.resultsTable.innerHTML = P.map((p, i) => {
         const col = toCss(p.color, p.isPlayer ? 'var(--acc)' : `hsl(${nameHue(p.name)} 62% 58%)`);
         const best = d.newRecord && d.newRecord.lap != null && p.isPlayer;
-        return `<div class="class-row${p.isPlayer ? ' me' : ''}${p.dnf ? ' dnf' : ''}">
+        /* `est` means the car was still on track when the board froze and
+           race.js projected its finish from its own pace. Saying so with a
+           tilde is the difference between a result and a guess dressed as
+           one — and it explains why the time is not on the record boards. */
+        const time = p.dnf ? 'DNF' : (p.est ? '~' : '') + fmtTime(p.total);
+        return `<div class="class-row${p.isPlayer ? ' me' : ''}${p.dnf ? ' dnf' : ''}${p.est ? ' est' : ''}"${p.est ? ' title="Still running when the flag fell — projected from their own pace"' : ''}>
             <span class="p">${p.dnf ? '—' : i + 1}</span>
             <span class="nm"><i class="dot" style="background:${col}"></i>${esc(p.name || '—')}</span>
-            <span>${p.dnf ? 'DNF' : fmtTime(p.total)}</span>
+            <span>${time}</span>
             <span class="${best ? 'rec' : ''}">${fmtTime(p.bestLap)}</span>
           </div>`;
       }).join('');
@@ -866,6 +934,168 @@ function isVisible(el) {
    this project, and a photo of a car we do not have would be a lie anyway —
    these read as sponsor-plate pictograms, which is the house style.
    ============================================================ */
+/* ============================================================
+   STAGE PREVIEW ART
+   ------------------------------------------------------------
+   The stage cards used to be four paragraphs of text in four identical
+   boxes, which told a player nothing about what they were choosing. This
+   draws the actual racing line straight from the track module's `path` — so
+   the picture cannot drift out of step with the track, because it IS the
+   track — with the start line, the shortcut and every jump marked.
+
+   Everything is derived. There is no art file and there is no per-track
+   special case beyond the theme palette.
+   ============================================================ */
+const STAGE_SKIN = {
+  training: { ink: '#2ad2ff', ground: '#2b2f36', wash: '#1a2026' },
+  canyon: { ink: '#ff7a1a', ground: '#3a2820', wash: '#241a15' },
+  forest: { ink: '#4fd07a', ground: '#243026', wash: '#161f19' },
+  volcano: { ink: '#ff5a2c', ground: '#33211d', wash: '#1d1211' },
+};
+
+/** Closed-loop length of an authored path, in metres. */
+function splineLength(path) {
+  if (!path || path.length < 2) return 0;
+  let L = 0;
+  for (let i = 0; i < path.length; i++) {
+    const a = path[i], b = path[(i + 1) % path.length];
+    L += Math.hypot(b.x - a.x, b.z - a.z);
+  }
+  return L;
+}
+
+/**
+ * Fit a set of world-space points into the canvas with a margin, returning a
+ * projector. Aspect is preserved: a long thin stage must LOOK long and thin,
+ * or the preview is lying about the shape of the lap.
+ */
+function fitter(pts, W, H, pad) {
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const p of pts) {
+    if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
+    if (p.z < z0) z0 = p.z; if (p.z > z1) z1 = p.z;
+  }
+  const sx = (W - pad * 2) / Math.max(1, x1 - x0);
+  const sz = (H - pad * 2) / Math.max(1, z1 - z0);
+  const s = Math.min(sx, sz);
+  const ox = (W - (x1 - x0) * s) * 0.5 - x0 * s;
+  const oz = (H - (z1 - z0) * s) * 0.5 - z0 * s;
+  return (p) => [p.x * s + ox, p.z * s + oz];
+}
+
+/** Catmull-Rom through the control points, so the preview curves like the road. */
+function smoothLoop(path, steps = 6) {
+  const n = path.length, out = [];
+  const at = (i) => path[((i % n) + n) % n];
+  for (let i = 0; i < n; i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps, t2 = t * t, t3 = t2 * t;
+      out.push({
+        x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t +
+          (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+          (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+        z: 0.5 * ((2 * p1.z) + (-p0.z + p2.z) * t +
+          (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2 +
+          (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3),
+      });
+    }
+  }
+  return out;
+}
+
+function drawStage(canvas, def, locked) {
+  const g = canvas.getContext('2d');
+  if (!g) return;
+  const W = canvas.width, H = canvas.height;
+  const skin = STAGE_SKIN[def.theme] || STAGE_SKIN.training;
+  g.clearRect(0, 0, W, H);
+
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, skin.ground); bg.addColorStop(1, skin.wash);
+  g.fillStyle = bg; g.fillRect(0, 0, W, H);
+
+  const loop = smoothLoop(def.path, 7);
+  const all = def.shortcut ? loop.concat(def.shortcut.path) : loop;
+  const P = fitter(all, W, H, 18);
+
+  // contour rings behind the road: cheap, and it stops the card reading flat
+  g.save();
+  g.globalAlpha = 0.16;
+  g.strokeStyle = skin.ink; g.lineWidth = 1;
+  for (let r = 1; r <= 3; r++) {
+    g.beginPath();
+    for (let i = 0; i <= loop.length; i++) {
+      const p = loop[i % loop.length];
+      const q = P({ x: p.x * (1 + r * 0.10), z: p.z * (1 + r * 0.10) });
+      i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]);
+    }
+    g.closePath(); g.stroke();
+  }
+  g.restore();
+
+  const trace = (pts, closed) => {
+    g.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const q = P(pts[i]);
+      i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]);
+    }
+    if (closed) g.closePath();
+  };
+
+  // road: a wide dark casing under a bright core, which is the only way a
+  // 3 px line reads as a ROAD and not as a graph
+  g.lineJoin = g.lineCap = 'round';
+  trace(loop, true); g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 9; g.stroke();
+  trace(loop, true); g.strokeStyle = 'rgba(255,255,255,.82)'; g.lineWidth = 4.5; g.stroke();
+
+  if (def.shortcut) {
+    trace(def.shortcut.path, false);
+    g.setLineDash([7, 6]);
+    g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
+    g.setLineDash([]);
+  }
+
+  /* Jumps. The preview's whole job on this game is to say WHERE THE AIR IS,
+     so a gap jump gets a filled diamond and a plain kicker a small tick. */
+  const L = splineLength(def.path);
+  for (const j of (def.jumps || [])) {
+    const t = (j.s / Math.max(1, L)) * loop.length;
+    const p = loop[Math.floor(t) % loop.length];
+    const q = P(p);
+    const hero = !!j.gap || j.h >= 3.0;
+    g.beginPath();
+    if (hero) {
+      const r = 8;
+      g.moveTo(q[0], q[1] - r); g.lineTo(q[0] + r, q[1]);
+      g.lineTo(q[0], q[1] + r); g.lineTo(q[0] - r, q[1]); g.closePath();
+      g.fillStyle = skin.ink; g.fill();
+      g.strokeStyle = 'rgba(0,0,0,.7)'; g.lineWidth = 1.5; g.stroke();
+    } else {
+      g.arc(q[0], q[1], 3.2, 0, 6.2832);
+      g.fillStyle = 'rgba(255,255,255,.7)'; g.fill();
+    }
+  }
+
+  // start line
+  {
+    const a = P(loop[0]), b = P(loop[1]);
+    const dx = b[0] - a[0], dz = b[1] - a[1];
+    const len = Math.max(1e-3, Math.hypot(dx, dz));
+    const nx = -dz / len * 8, nz = dx / len * 8;
+    g.beginPath();
+    g.moveTo(a[0] - nx, a[1] - nz); g.lineTo(a[0] + nx, a[1] + nz);
+    g.strokeStyle = '#f2efe6'; g.lineWidth = 4; g.stroke();
+    g.strokeStyle = '#15161a'; g.lineWidth = 4; g.setLineDash([3, 3]); g.stroke();
+    g.setLineDash([]);
+  }
+
+  // No locked wash here: .pick.locked already drops the whole card to 44 %
+  // opacity, and dimming twice made the lap shape unreadable — which is the
+  // one thing a locked card still needs to sell.
+  void locked;
+}
+
 function drawCar(canvas, spec) {
   const g = canvas.getContext('2d');
   if (!g) return;
@@ -935,6 +1165,60 @@ function drawCar(canvas, spec) {
     // splitter
     g.fillStyle = 'rgba(255,255,255,.35)';
     g.fillRect(38 * s, 100 * s, 46 * s, 6 * s);
+  } else if (style === 'bike') {
+    /* Motocross: two big wheels close together, a rider standing on the pegs.
+       The rider is most of the read — a bike without one is a bicycle. */
+    const r = 41 * s;
+    const fx = 300 * s, rx = 150 * s;            // hub centres
+    const hy = gy - r;
+    wheel(rx, r); wheel(fx, r);
+    // frame: cases, spar to the headstock, swingarm back to the rear hub
+    g.strokeStyle = body; g.lineWidth = 9 * s; g.lineJoin = 'round'; g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(258 * s, hy - 42 * s); g.lineTo(214 * s, hy - 20 * s);
+    g.lineTo(196 * s, hy + 6 * s); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.30)'; g.lineWidth = 7 * s;
+    g.beginPath(); g.moveTo(196 * s, hy + 4 * s); g.lineTo(rx, hy); g.stroke();  // swingarm
+    // forks
+    g.strokeStyle = 'rgba(220,226,232,.85)'; g.lineWidth = 6 * s;
+    g.beginPath(); g.moveTo(272 * s, hy - 50 * s); g.lineTo(fx, hy); g.stroke();
+    // tank / shroud + seat
+    g.fillStyle = body;
+    g.beginPath();
+    g.moveTo(226 * s, hy - 30 * s); g.lineTo(268 * s, hy - 46 * s);
+    g.lineTo(276 * s, hy - 28 * s); g.lineTo(232 * s, hy - 14 * s); g.closePath(); g.fill();
+    g.fillStyle = 'rgba(20,22,26,.92)';
+    g.fillRect(180 * s, hy - 34 * s, 56 * s, 9 * s);                   // seat
+    g.fillStyle = body;
+    g.beginPath();                                                     // rear fender
+    g.moveTo(158 * s, hy - 46 * s); g.lineTo(196 * s, hy - 34 * s);
+    g.lineTo(190 * s, hy - 26 * s); g.lineTo(156 * s, hy - 38 * s); g.closePath(); g.fill();
+    g.beginPath();                                                     // front fender
+    g.moveTo(286 * s, hy - 40 * s); g.lineTo(330 * s, hy - 30 * s);
+    g.lineTo(326 * s, hy - 21 * s); g.lineTo(284 * s, hy - 32 * s); g.closePath(); g.fill();
+    // bars
+    g.strokeStyle = 'rgba(220,226,232,.9)'; g.lineWidth = 4 * s;
+    g.beginPath(); g.moveTo(272 * s, hy - 52 * s); g.lineTo(288 * s, hy - 72 * s); g.stroke();
+    // rider: boots on the pegs, hips back, shoulders over the bars
+    const dk = 'rgba(24,26,31,.95)';
+    g.strokeStyle = dk; g.lineWidth = 11 * s;
+    g.beginPath();
+    g.moveTo(206 * s, hy - 8 * s); g.lineTo(200 * s, hy - 46 * s);
+    g.lineTo(214 * s, hy - 74 * s); g.stroke();                        // legs
+    g.strokeStyle = 'rgba(255,255,255,.75)'; g.lineWidth = 14 * s;
+    g.beginPath(); g.moveTo(214 * s, hy - 74 * s); g.lineTo(244 * s, hy - 100 * s); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.75)'; g.lineWidth = 8 * s;
+    g.beginPath();
+    g.moveTo(244 * s, hy - 100 * s); g.lineTo(272 * s, hy - 92 * s);
+    g.lineTo(288 * s, hy - 72 * s); g.stroke();                        // arm to the bar
+    g.fillStyle = '#eef1f5';
+    g.beginPath(); g.arc(258 * s, hy - 112 * s, 13 * s, 0, 6.2832); g.fill();  // helmet
+    g.fillStyle = 'rgba(20,26,32,.85)';
+    g.fillRect(262 * s, hy - 117 * s, 14 * s, 7 * s);                  // visor
+    g.fillStyle = '#eef1f5';
+    g.beginPath();                                                     // peak
+    g.moveTo(266 * s, hy - 122 * s); g.lineTo(292 * s, hy - 128 * s);
+    g.lineTo(292 * s, hy - 122 * s); g.lineTo(266 * s, hy - 114 * s); g.closePath(); g.fill();
   } else {
     // buggy: exposed wheels, visible roll cage, short body
     const r = 31 * s;

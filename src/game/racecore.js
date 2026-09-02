@@ -33,6 +33,14 @@
       The ratio is also held at its running maximum per segment, so position
       jitter, a spin, or a respawn can never walk a racer backwards down the
       standings.
+
+      That ratchet is right for standings and WRONG for anything asking "is
+      this car moving?". A respawn drops a racer at the last gate it cleared
+      while `segFrac` stays pinned near 1, so `raceS` is frozen for the whole
+      drive back — a stall watchdog reading it sees a stationary car and
+      resets it, forever. `liveS` is the same number without the ratchet and
+      is published for exactly that job. Standings read `raceS`; liveness
+      reads `liveS`.
    ============================================================ */
 
 /** Shared empty result — the overwhelming majority of update() calls. */
@@ -151,7 +159,8 @@ export class RaceTracker {
       // reused by progress(); never handed out as a fresh object per frame
       prog: {
         lap: 0, nextCp: 0, raceS: 0, lapTime: 0, bestLap: 0, lastLap: 0,
-        finished: false, total: 0, wrongWay: false, distNext: 0, cpCount: 0
+        finished: false, total: 0, wrongWay: false, distNext: 0, cpCount: 0,
+        liveS: 0
       }
     };
   }
@@ -320,6 +329,7 @@ export class RaceTracker {
     p.wrongWay = r.wrongOn;
     p.distNext = r.distNext;
     p.cpCount = r.cpCount;
+    p.liveS = r.rawS;      // un-ratcheted twin — see the header note
     return p;
   }
 

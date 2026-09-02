@@ -214,6 +214,36 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
   color:var(--gold);font-size:11px;font-weight:800;letter-spacing:.2em;
 }
 .champ-badge b{font-size:14px}
+
+/* Career strip. Four steps, one per stage: a hollow pip for a stage you have
+   not opened, a filled one for a stage you have, and the medal colour once
+   you have taken one. The label under each pip is dropped on narrow screens
+   rather than wrapped — the pips alone still carry the state. */
+.main-progress{margin-top:20px}
+.prog-row{display:flex;align-items:flex-start;gap:0}
+.prog-step{display:flex;flex-direction:column;align-items:center;gap:7px;flex:0 1 132px;min-width:0;position:relative}
+.prog-step + .prog-step::before{
+  content:"";position:absolute;left:-50%;top:6px;width:100%;height:2px;
+  background:var(--line-2);z-index:0;
+}
+.prog-step.off + .prog-step::before,.prog-step + .prog-step.off::before{background:var(--line)}
+.prog-step i{
+  position:relative;z-index:1;width:14px;height:14px;border-radius:50%;
+  border:2px solid var(--acc);background:var(--acc);
+  box-shadow:0 0 0 4px var(--ink);
+}
+.prog-step.off i{border-color:var(--line-2);background:var(--ink)}
+.prog-step.gold i{border-color:var(--gold);background:var(--gold)}
+.prog-step.silver i{border-color:var(--silver);background:var(--silver)}
+.prog-step.bronze i{border-color:var(--bronze);background:var(--bronze)}
+.prog-step em{
+  font-style:normal;font-size:9px;letter-spacing:.13em;font-weight:700;color:var(--fg-3);
+  text-align:center;line-height:1.25;max-width:120px;
+}
+.prog-step.off em{color:var(--line-2)}
+.prog-note{margin-top:12px;font-size:10.5px;letter-spacing:.16em;color:var(--fg-3);font-weight:700}
+@media (max-width:560px){ .prog-step em{display:none} .prog-step{flex-basis:64px} }
+
 .main-actions{display:flex;flex-direction:column;gap:10px;max-width:340px}
 .main-actions .btn{min-height:56px;font-size:15px;justify-content:flex-start}
 .hintline{
@@ -268,6 +298,11 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
 
 /* ---- garage extras ---- */
 .car-art{width:100%;height:auto;display:block;aspect-ratio:2.6/1;background:rgba(0,0,0,.28);border-radius:2px}
+/* Stage preview: the lap, drawn from the track's own control points. 1.75:1
+   because most of these laps are roughly round — at 2.2:1 the fit was height
+   limited and half the card was empty either side of the loop. */
+.stage-art{width:100%;height:auto;display:block;aspect-ratio:1.75/1;border-radius:2px;
+  border:1px solid var(--line);background:#14171c}
 .stats{display:grid;gap:6px}
 .stat{display:grid;grid-template-columns:58px 1fr;align-items:center;gap:9px}
 .stat em{font-style:normal;font-size:9.5px;letter-spacing:.16em;color:var(--fg-3)}
@@ -371,6 +406,10 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:2px solid #1a0
 .class-row.me{background:rgba(255,122,26,.12);color:var(--fg)}
 .class-row.me .p{color:var(--acc)}
 .class-row.dnf{color:var(--fg-3)}
+/* Still running when the flag fell: classified, but on a projected time. Dim
+   enough to read as provisional, not so dim it reads as retired. */
+.class-row.est{color:var(--fg-2);opacity:.82}
+.class-row.est span:nth-child(3){font-style:italic}
 .class-row .rec{color:var(--cyan)}
 
 .records{padding:10px 12px;border-top:1px solid var(--line);display:flex;gap:10px;flex-wrap:wrap;
@@ -519,6 +558,41 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   font-weight:900;font-style:italic;color:var(--acc);
   border-left:1px solid var(--line);padding-left:calc(8 * var(--s));margin-left:calc(2 * var(--s));
 }
+/* ---------------- the item slot ----------------
+   Sits above the air tag in the .z-speed flex column, so it inherits the
+   right alignment and disappears with the rest of the cluster on a portrait
+   phone. Sized in var(--s) like every other instrument, so HUD SIZE moves it
+   with everything else. The card is tinted by the item via --ic, set inline
+   from the item table — one class, seven colours, no per-item CSS. */
+.item-slot{min-height:0}
+.itemcard{
+  display:flex;align-items:center;gap:calc(6 * var(--s));
+  padding:calc(4 * var(--s)) calc(10 * var(--s));
+  border:1px solid var(--ic,var(--acc));border-radius:calc(2 * var(--s));
+  background:linear-gradient(180deg,rgba(10,11,14,.82),rgba(10,11,14,.62));
+  box-shadow:0 0 calc(14 * var(--s)) color-mix(in srgb,var(--ic,#ff7a1a) 34%,transparent);
+  animation:air-pop .28s cubic-bezier(.2,1.3,.3,1);
+}
+.itemcard b{
+  font-size:max(9px,calc(11 * var(--s)));font-weight:900;font-style:italic;
+  letter-spacing:.14em;color:var(--ic,var(--acc));white-space:nowrap;
+}
+.itemcard .charges{display:flex;gap:calc(3 * var(--s))}
+.itemcard .charges i{
+  width:calc(5 * var(--s));height:calc(5 * var(--s));border-radius:50%;
+  background:var(--ic,var(--acc));
+}
+/* The roulette: still spinning, not yours yet, and not usable yet either. */
+.itemcard.rolling{animation:none;opacity:.86}
+.itemcard.rolling b{color:var(--fg-2)}
+@media (prefers-reduced-motion:no-preference){
+  .itemcard.rolling{animation:it-roll .18s steps(2,end) infinite}
+}
+@keyframes it-roll{from{transform:translateY(-2px)}to{transform:translateY(2px)}}
+
+/* Record set with power-ups on. Small, dim, and it never pushes the time. */
+.itflag{margin-left:.35em;font-size:.85em;color:var(--warn);opacity:.85}
+
 .air-slot{min-height:0}
 .airtag{
   font-size:max(10px,calc(13 * var(--s)));font-weight:900;font-style:italic;letter-spacing:.12em;
@@ -673,6 +747,8 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
 }
 #touch .rbtn.on{color:#160902;background:var(--acc);box-shadow:0 0 18px var(--acc-glow)}
 #touch .rbtn.drift.on{background:var(--cyan);color:#03181b;box-shadow:0 0 18px rgba(79,216,232,.35)}
+#touch .rbtn.fire{border-color:rgba(255,210,63,.55);color:var(--warn)}
+#touch .rbtn.fire.on{background:var(--warn);color:#1a1200;box-shadow:0 0 18px rgba(255,210,63,.4)}
 
 /* ============================================================
    ROTATE TOAST — portrait phones only, once, never blocking
@@ -785,7 +861,18 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   .z-lap{justify-self:start}
   .lap{text-align:left;min-width:0}
   .lap-row{justify-content:flex-start}
-  .z-log,.z-speed{display:none}          /* no room, and both are bottom-corner furniture */
+  .z-log{display:none}                   /* no room, and it is bottom-corner furniture */
+  /* The speed cluster goes too, EXCEPT the item slot. A portrait player has
+     a FIRE button and would otherwise have no idea what it fires — the one
+     piece of that cluster they cannot play without. Strip the cluster to
+     just that card and float it centred above the touch furniture (or above
+     the pedals when the touch layer is off). */
+  .z-speed{display:flex;position:fixed;left:50%;right:auto;transform:translateX(-50%);
+    bottom:calc(max(12px,env(safe-area-inset-bottom)) + 12px);
+    margin-right:0;align-items:center;z-index:6;pointer-events:none}
+  .z-speed > :not(.item-slot){display:none}
+  body.touch-controls .z-speed{margin-right:0;
+    bottom:calc(max(12px,env(safe-area-inset-bottom)) + 300px)}
   .map canvas{width:calc(104 * var(--s));height:calc(104 * var(--s))}
   .countdown{top:32%}
   .z-banner{align-self:start}
@@ -799,9 +886,11 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   #touch .pedal.gas{height:88px;min-height:88px}
   #touch .pedal.brk{left:max(12px,env(safe-area-inset-left));right:auto;height:88px;min-height:88px;
     bottom:max(12px,env(safe-area-inset-bottom))}
+  /* Five buttons now (FIRE joined DRIFT/RESET/CAM/PAUSE): 5 x 60 + 4 x 6 =
+     324 px, which still clears a 375 px portrait phone with margin. */
   #touch .rcol{right:auto;left:50%;transform:translateX(-50%);
-    bottom:calc(max(12px,env(safe-area-inset-bottom)) + 108px);grid-template-columns:repeat(4,auto);gap:7px}
-  #touch .rbtn{width:66px;height:66px;font-size:9px}
+    bottom:calc(max(12px,env(safe-area-inset-bottom)) + 108px);grid-template-columns:repeat(5,auto);gap:6px}
+  #touch .rbtn{width:60px;height:60px;font-size:8.5px}
 }
 @media (orientation:portrait) and (min-width:621px){
   .hud{--u:.94px}

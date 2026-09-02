@@ -4,7 +4,7 @@
    Two layers:
    1. Direct unit tests over the pure modules (racecore, progression,
       track data, surfaces) — fast, no three.js.
-   2. The five deep check suites under dev/ run as child processes
+   2. The eight deep check suites under dev/ run as child processes
       (they carry their own hundreds of assertions; the loader shim
       supplies 'three' for the ones that exercise physics/camera).
    ============================================================ */
@@ -103,7 +103,7 @@ test('formatTime renders M:SS.mmm', async () => {
 
 /* ---------------- layer 2: deep suites as child processes ---------------- */
 
-test('deep: racecore-check (104 assertions incl. mutation gates)', () => {
+test('deep: racecore-check (race logic + progression, incl. mutation gates)', () => {
   run(['dev/racecore-check.mjs']);
 });
 
@@ -111,7 +111,7 @@ test('deep: track-check (geometry, checkpoints, racing lines)', () => {
   run(['dev/track-check.mjs']);
 });
 
-test('deep: vehicle-check (102 physics gates)', () => {
+test('deep: vehicle-check (physics + procedural build gates)', () => {
   run(['--experimental-loader', './dev/loader.mjs', 'dev/vehicle-check.mjs']);
 });
 
@@ -119,6 +119,18 @@ test('deep: ai-check (lap completion, cornering, overtaking)', () => {
   run(['dev/ai-check.mjs']);
 });
 
-test('deep: camera-check (87 rig/feel gates)', () => {
+test('deep: camera-check (rig/feel gates)', () => {
   run(['--experimental-loader', './dev/loader.mjs', 'dev/camera-check.mjs']);
+});
+
+test('deep: items-check (drop table, rubber band, inventory)', () => {
+  run(['dev/items-check.mjs']);
+});
+
+test('deep: boost-check (mini-turbo + drive multipliers)', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/boost-check.mjs']);
+});
+
+test('deep: kit-check (set-dressing geometry gates)', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/kit-check.mjs']);
 });

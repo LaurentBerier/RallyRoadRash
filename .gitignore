@@ -5,3 +5,16 @@ Thumbs.db
 *.log
 
 .claude/
+
+# Sandscape CLI scaffolding, both regenerable and neither part of the game.
+# .sandscape/ is local sync state — a sha256 and version per file, rewritten
+# on every push. .agents/ is skill documentation the CLI installs; restore it
+# with `sandscape skill install --here`.
+.sandscape/
+.agents/
+# Also CLI-generated, and both say so in their own front matter: they are
+# regenerated on every pull, and their advice ("run sandscape pull before
+# doing anything", "any structure works") contradicts docs/ARCHITECTURE.md.
+# A real CLAUDE.md for this project should be hand-written.
+AGENTS.md
+CLAUDE.md

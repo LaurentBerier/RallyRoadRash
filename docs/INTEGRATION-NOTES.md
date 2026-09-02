@@ -68,6 +68,13 @@ Race-flow obligations:
   vehicles); terrain ShaderMaterial unaffected (does its own haze). `setFogEnabled(false)`
   to opt out; `dispose()` restores.
 - `engine.setLightTheme(SKY_THEMES[theme])` per race (pass whole theme object).
+  It also reads the optional `grade` field (an [r,g,b] multiplier) and writes it to
+  the final pass's `uGrade`. That uniform exists SEPARATELY from `uExposure`
+  because feel.js owns uExposure, holds it at exactly 1.0 and dips it on landings,
+  and dev/camera-check gates that it returns to 1.0 — a stage that simply wants to
+  be a stop darker has nowhere else to say so. The engine caches the grade and
+  re-applies it in buildComposer(), or a quality change would silently brighten
+  the stage.
 - Dust: `new Dust(scene, terrain, sunDirRef, max, theme)`; `DUST_KIND {PUFF,CLOD,EMBER}`;
   `spawn(n,x,y,z,force,spread,dirX,dirZ, r,g,b, kind)`; `burst(x,y,z,heading,force,col)`;
   `setTheme`, `setWind`, `dispose`. REQUIRED: `dust.setViewport(drawingBufferHeight)` at boot
@@ -190,7 +197,8 @@ hud.update(dt, {
          wrongWay, resetHold, offCourse},   // times seconds; countdown 3..0 or -1
   vehicle: {speedKmh, gear, rpmNorm, airborne, airTime},
   dots: [{x,z,color,isPlayer}],          // world XZ; hud projects via its baked map transform
-  rival: {name, gap} | null              // gap seconds, signed (negative = behind you)
+  rival: {name, gap} | null,             // gap seconds, signed (negative = behind you)
+  item: {id, name, colour, charges, rolling} | null   // power-up slot (wave 5)
 })
 hud.countdown(n)      // 3,2,1 then hud.countdown('GO') — big center overlay
 hud.banner(text, kind='good', ttl=2.2)   // 'good'|'warn'|'bad'
@@ -292,9 +300,12 @@ rig.snapBehind(vehicle)   // hard reset behind car (race start / respawn)
 export class AIDriver {
   constructor(id, vehicle, trackData, profile, rng)
   update(dt, ctx) -> ctl {throttle, steer, brake, handbrake}
-  // ctx: { vehicles:[Vehicle], tracker, myId, state:'countdown'|'running'|'finished' }
+  // ctx: { vehicles:[Vehicle], tracker, myId, state:'countdown'|'running'|'finished',
+  //        position?:int, item?:ITEM }   // both OPTIONAL — the item path no-ops without them
   wantsReset       // true when flipped/stuck beyond thresholds — race flow performs it
   notifyReset()    // race flow calls after performing the respawn
+  wantsFire; fireBack   // same latch shape, for power-ups — race flow performs it
+  notifyFired()    // race flow calls after firing
 }
 export function makeGridProfiles(count, difficulty01, rng) -> profiles
 ```
@@ -304,17 +315,106 @@ export function makeGridProfiles(count, difficulty01, rng) -> profiles
 ### Input (T7 owns input.js changes)
 poll() → {throttle -1..1, steer -1..1, brake 0..1, handbrake 0|1, lookX, lookY, zoom}
 Keyboard: W/S or Up/Down throttle/brake-reverse; A/D steer; Space handbrake; R reset
-(hold); C camera; Esc pause; M mute. Gamepad: LS steer, RT/LT, A handbrake, B reset,
-Y camera, Start pause. Touch: left steer zone, right GAS/BRAKE pedals, PAUSE/RESET/CAM
-buttons. `input.lastMethod` ∈ 'kb'|'pad'|'touch' updated on any activity. Reset semantics:
+(hold); F fire power-up; C camera; Esc pause; M mute. Gamepad: LS steer, RT/LT, A handbrake,
+B reset, X fire, Y camera, Start pause. Touch: left steer zone, right GAS/BRAKE pedals,
+PAUSE/RESET/CAM/FIRE buttons. Fire is an EDGE (`input.hit('KeyF')`); holding reverse at the
+moment of firing sends the shot backwards. `input.lastMethod` ∈ 'kb'|'pad'|'touch' updated on any activity. Reset semantics:
 race flow reads `input.down('KeyR')`/pad B/touch RESET as a HOLD (progress in
 race.resetHold), not edge.
 
 ### Settings keys (Save.settings(), applied by T5, edited via UI 'settings')
 quality ('low'|'medium'|'high'|'ultra'), fov (42..82 base 58), sens, volSfx, volMusic,
 music (bool), camMode, invertY, hudScale, grain (0|0.35|1), autoCentre (0|1|2),
-showTouch ('auto'|'on'|'off')
+showTouch ('auto'|'on'|'off'), items (bool, default true — power-ups; mini-turbo ignores it)
 
 ### Standings/timing source of truth
 racecore.RaceTracker per ARCHITECTURE.md. race.js owns wall-clock (raceTime starts at GO).
 progression.js decides medals/unlocks from final placements; race.js reports via UI results.
+
+### Kart layer — CONTRACT CHANGES (wave 5)
+
+Every line below is a contract that MOVED. They are listed together because
+the house rule is to flag a contract change rather than make it quietly.
+
+**1. HUD payload gains `item`.** `hud.update(dt, payload)` now reads
+`payload.item` — `null` for an empty slot, otherwise
+`{ id, name, colour, charges, rolling }`. Cache-guarded by `this._c.item` like
+every other HUD write, and wiped by `_clearTransients`. Markup: a new
+`<div class="item-slot" id="hItem">` inside `.z-speed`, sibling of `air-slot`.
+No grid change; already hidden on portrait phones.
+
+**2. Settings keys gain `items`** (bool, default `true`). Power-ups on
+everywhere including the championship; off gives a clean time-attack. It is a
+**setting, not a profile field** — `progression.normalizeProfile` is a strict
+whitelist and would silently drop it. `Race` has no generic settings
+pass-through, so `items` is also hand-listed in the option bag in `main.js`.
+Mini-turbo is a *handling* feature and ignores this toggle entirely.
+
+**3. `progression.applyResult` gains a TRAILING OPTIONAL `itemsOn`.** Trailing
+and optional because `dev/racecore-check.mjs` and `tests/all.test.mjs` both
+call it with the old arity. Per-track record rows gain `itemsTotal` and
+`itemsLap` — both mandatory in the `normalizeProfile` whitelist. `ui.js`
+renders `⚡items` on a stage card whose record was set with them on.
+
+**4. AI ctx gains `position` and `item`.** `position` also fixes a pre-existing
+bug: `ai.js` read `ctx.position` and `race.js` never set it, so every AI fell
+back to a 2 Hz `standings()` sort. `AIDriver` gains a `wantsFire` / `fireBack`
+latch mirroring `wantsReset` exactly — the driver never acts, it raises a hand
+and `race.js` polls it — plus `notifyFired()`. **Both fields are optional**:
+the item path early-returns on a falsy `ctx.item`, because `dev/ai-check.mjs`
+constructs a bare `{ state, vehicles }` ctx.
+
+Firing deliberately does **not** ride in `ctl`. `ctl` is copied through three
+separate scratch objects (`vehicle.js` `_ctl`, `race.js` `_pctl`, `ai.js`
+`this.ctl`) and a fifth field would be silently dropped by all of them.
+
+**5. Vehicle public state gains seven fields.** All zeroed by `placeAt()`.
+
+```js
+extDriveMul; extTopMul;   // WRITTEN BY ITEMS — recomputed from scratch each
+                          // frame by ItemWorld, which is the only writer
+driveMul; driveTopMul;    // READ-ONLY composite: mini-turbo × external
+bodySlip;                 // rad, published for miniturbo.js
+groundSpeed;              // true horizontal m/s — NOT `speed`, which is the
+                          // forward component and reads ~0 at 86° of slip
+spinT;                    // s of forced spin-out remaining
+```
+
+The drive multipliers enter `_substep` in three places, and the third is the
+subtle one:
+
+```js
+const vnRaw = speedAbs / S.topSpeed;                      // UNBOOSTED
+const vn    = speedAbs / (S.topSpeed * this.driveTopMul); // boosted ceiling
+let motor   = S.motorForce * this.driveMul;               // the shove
+const dfv   = Math.min(vnRaw, 1.15);                      // downforce: vnRaw!
+```
+
+Downforce squares `vn`, and a boosted `vn` is *lower* — using it would have cut
+~8 % of static weight of downforce at exactly the moment you crest a rise at
+45 m/s. `_updateRpm` needs no change: it derives its own `vn` from
+`S.topSpeed`, so it pins at the limiter through a boost, which is correct —
+you *are* on the limiter.
+
+**6. Final pass gains `uBlind`.** Added exactly the way `uGrade` was, three
+lines of GLSL before `col *= uGrade`. It must **not** reuse
+`uVignette`/`uExposure`/`uFlash` — those three are feel's and
+`dev/camera-check.mjs` asserts their exact reset values.
+
+**7. `audio.js` internals are now a documented shared surface.**
+`src/core/audio-items.js` holds nine procedural cues that take the Audio
+instance and use `A.ready`, `A.now()`, `A._note`, `A._burst`, `A._reap`,
+`A.busSfx` and `A.verb`. `audio.js` re-exports them as nine one-line
+delegates, so callers still see one audio object. Those seven members are no
+longer free to rename.
+
+**8. `racecore.progress()` gains `liveS`.** The un-ratcheted twin of `raceS`.
+`raceS` is held at its running maximum per segment so a spin or a respawn can
+never walk a racer down the standings — which makes it useless for asking "is
+this car moving?". A respawn drops a racer at the last gate it cleared with
+`segFrac` still pinned near 1, so `raceS` is **frozen for the whole drive
+back**. The no-progress watchdog read it and deadlocked: canyon/ridgeback fell
+off the ridge 2 m short of gate 2, respawned 146 m back, could not cover that
+in the 6 s window because the signal was pinned, reset, and reset again — 112
+times, then DNF. **Standings read `raceS`; liveness reads `liveS`.**
+

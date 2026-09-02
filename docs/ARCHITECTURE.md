@@ -44,6 +44,7 @@ src/
     engine.js             renderer, quality tiers, composer      [T3 environment: light rig only]
     input.js              kb/mouse/gamepad/touch                 [T7 ui: touch + input-method detect]
     audio.js              procedural WebAudio                    [T4 audio]
+    audio-items.js        power-up/boost cues (uses audio.js internals) [T4 audio]
     rng.js                noise/PRNG helpers (unchanged)         [locked]
     save.js               localStorage wrapper                   [T5 race-flow]
   world/
@@ -55,17 +56,21 @@ src/
     tracks/forest.js      TIMBERLINE CLIMB (mud, narrow, ramps)  [T1 terrain]
     tracks/volcano.js     CALDERA RUN (extreme, biggest jumps)   [T1 terrain]
     surfaces.js           surface-type table (shared data)       [T1 terrain]
-    props.js              rocks/trees/barriers/gates + colliders [T1 terrain]
+    props.js              scatter, landmarks, camps, jump kit     [T1 terrain]
+    kit.js                set-dressing geometry (vertex-coloured)  [T1 terrain]
     sky.js                day skies per theme, sun, clouds, IBL  [T3 environment]
     dust.js               atmospheric dust/mud/debris particles  [T3 environment]
     textures.js           shared procedural texture helpers      [T3 environment]
   game/
     config.js             ALL gameplay tuning in one place       [T2 vehicle]
     vehicle.js            4-wheel rigid-body vehicle + visuals   [T2 vehicle]
-    vehicles.js           the three vehicle specs                [T2 vehicle]
+    vehicles.js           the four machine specs                 [T2 vehicle]
     racecore.js           PURE race logic (no three, no DOM)     [T5 race-flow]
     race.js               race session: countdown→results        [T5 race-flow]
     progression.js        PURE unlocks/records (no three/DOM)    [T5 race-flow]
+    miniturbo.js          PURE drift->boost state machine        [T2 vehicle]
+    items.js              PURE power-up table + rubber-band roulette [T5 race-flow]
+    itemworld.js          live boxes/projectiles/hazards/effects  [T5 race-flow]
     ai.js                 AI drivers                             [T6 ai]
     camera.js             chase camera, shake, FOV, look-ahead   [T8 camera-feel]
     feel.js               game-feel triggers (shake/fx routing)  [T8 camera-feel]
@@ -191,10 +196,22 @@ export const TUNE = { steer: {...}, assists: {...}, reset: {...}, collide: {...}
 
 // vehicles.js
 export const VEHICLES = [
-  { id:'hopper',  name:'DUNE HOPPER', desc:'…', mass:1250, color:0xff7a1a, /* full spec */ },
+  { id:'hopper',  name:'DUNE HOPPER', desc:'…', mass:1120, color:0x2857e0, /* full spec */ },
   { id:'ridgeback', name:'RIDGEBACK', …heavier, grippier, slower… },
   { id:'redline',   name:'REDLINE',   …fastest, twitchy… },
+  { id:'moto',      name:'HORNET',    …245 kg motocross 450, bodyStyle 'bike'… },
 ];
+
+// The HORNET is the one spec that needs a paragraph. It is a FOUR-CORNER
+// rigid body, exactly like the cars — the solver has no idea a motorcycle
+// exists — drawn as a single-track machine: vehicle.js collapses both wheels
+// of an axle onto the centreline, hides one of each pair, and banks the whole
+// thing about the contact line via an extra `leanRoot` group. `track` (0.74 m
+// half) is therefore an INVISIBLE outrigger whose only job is keeping the
+// rollover margin honest, and `antiRollBonus` 1.55 holds the body flat so the
+// drawn bank is not stacked on a real roll. Everything a player feels —
+// 245 kg, a third of a car's yaw inertia, the shortest wheelbase — is real.
+// dev/vehicle-check.mjs section (j) gates all of it.
 
 // vehicle.js
 export class Vehicle {
@@ -217,6 +234,10 @@ export class Vehicle {
   hardHit;                          // peak landing/impact m/s this frame (race consumes)
   rpmNorm;                          // 0..1 engine speed proxy for audio
   spec;                             // the vehicle spec object
+  // --- kart layer (wave 5) — see INTEGRATION-NOTES "Kart layer" ---
+  extDriveMul; extTopMul;           // items write these; ItemWorld is the ONLY writer
+  driveMul; driveTopMul;            // read-only composite: mini-turbo x external
+  bodySlip; groundSpeed; spinT;     // published for miniturbo.js / spin-out
 }
 export function resolveVehiclePair(a, b) → impactSpeed   // impulse + separation between two
                                                           // vehicles (sphere-set model);
@@ -236,7 +257,8 @@ recover slides progressively, keep it drivable with binary keyboard input.
 export class RaceTracker {
   constructor({ ids, laps, lapLength, checkpoints })  // checkpoints: [{x,z,r,s,idx}]
   update(id, x, z, tNow) → events[]   // [{type:'checkpoint'|'lap'|'finish'|'wrongway', …}]
-  progress(id) → { lap, nextCp, raceS, lapTime, bestLap }
+  progress(id) → { lap, nextCp, raceS, liveS, lapTime, bestLap, distNext,
+  //                  cpCount, wrongWay, finished, total }   // REUSED object
   standings() → [id…]                 // finished first (by time), then by raceS desc
   results() → [{ id, finished, total, bestLap, lapTimes }]
 }
@@ -244,16 +266,91 @@ export class RaceTracker {
 Checkpoints must be hit **in order** (radius generous: max(10, roadHalfWidth+4) m, ignore Y).
 Missing one → next lap won't count until the racer goes back (HUD warns; reset offers return).
 `raceS` interpolates between checkpoint `s` values via nearest-point-on-spline, clamped to
-be monotonic. Shortcut legality: shortcut paths carry their own checkpoint replacing the main
+be monotonic. `liveS` is the same estimate WITHOUT that ratchet: standings read `raceS`,
+anything asking "is this car moving?" reads `liveS`. (A respawn leaves `segFrac` pinned, so
+`raceS` is frozen for the whole drive back to the crash — a watchdog on it deadlocks.) Shortcut legality: shortcut paths carry their own checkpoint replacing the main
 ones they bypass — encode as checkpoint groups: `idx` equal ⇒ either satisfies the slot.
 
 `race.js` drives the session: LOADING → GRID → COUNTDOWN (3-2-1-GO, inputs locked) → RUNNING →
 FINISHED → RESULTS. Owns: spawning player + 5 AI, per-frame vehicle stepping, pair collisions,
 reset/recovery (hold-R or auto after flipped >2.5 s / stuck >4 s / off-course >30 m (grounded
-time only) / no race-line progress >6 s → respawn at last checkpoint — never inside a gap
+time only) / no race-line progress (`liveS`) >6 s → respawn at last checkpoint — never inside a gap
 jump's void — aligned to spline, 1.5 s ghosted), timing, HUD feed, audio cues, autosave
 of records. `progression.js` (pure): unlock graph, medals by finish position, records,
 localStorage schema `rallye.v1` via `core/save.js`.
+
+## Kart layer — `miniturbo.js` (pure), `items.js` (pure), `itemworld.js` (T5)
+
+Three modules layered **on top of** the handling model, not inside it. Nothing
+here changes how a tyre generates force; everything is expressed through
+multipliers and through machinery the game already had.
+
+```js
+// miniturbo.js — PURE. No three, no DOM, allocates nothing after construction.
+export function makeDrift()                 // the 11-field state object
+export function driftReset(st)              // wipes it (placeAt calls this)
+export function driftStep(st, dt, v, ctl)   // mutates st; reads v.bodySlip,
+                                            // v.groundSpeed, v.contacts,
+                                            // v.airborne, v.spinT
+export function driftProgress(st) → 0..1    // HUD charge bar
+
+// items.js — PURE. The table, the roulette, the inventory rules.
+export const ITEM = { NONE:-1, NITRO:0, TRIPLE:1, WHEEL:2, SLICK:3, TOW:4, SLED:5, STORM:6 };
+export const ITEMS       // [{ id, name, colour, charges, rear }]
+export const DROP_WEIGHTS  // [6 positions][7 items] — integers, NOT normalised
+export const ITEM_TUNE   // { gapShiftSec, sledLockoutM, stormMinPos }
+export function rollItem(pos, field, ctx, rng) → ITEM.*
+export function makeInv() / clearInv(inv) / hasItem(inv) / canTake(inv)
+export function giveItem(inv, id) / consume(inv) / tickInv(inv, dt)
+
+// itemworld.js — the live system. Owned and disposed by Race.
+export class ItemWorld {
+  constructor({ scene, terrain, trackData, dust, audio, feel, engine,
+                racers, tracker, rng, enabled })
+  step(dt, live)            // MUST run BEFORE Race._stepVehicles
+  updateVisuals(dt, camera)
+  fire(ri, back)            // back = firing rearwards
+  pilot(ri, ctl)            // rocket-sled autopilot; overwrites ctl in place
+  hudFor(ri, out) · isGhost(ri) · isSledding(ri) · hasItem(ri) · itemOf(ri)
+  notifyReset(ri) · resetAll() · setEnabled(on) · dispose()
+}
+```
+
+**Mini-turbo.** A drift charges; releasing it fires a boost. The charge needs
+body slip past a **dual gate** — `slipHand` 0.20 rad with the handbrake down,
+`slipFree` 0.34 rad without — so a throttle slide charges too, which is the
+only reason the AI gets mini-turbos at all (`ai.js` sets `handbrake = 0`
+unconditionally). Two triggers fire it: the handbrake DOWN→UP **edge**, or the
+slide lapsing for longer than `grace`. An edge alone would make the grace
+window dead code; a lapse alone would make a deliberate release feel late.
+
+Tiers are short — `[0.12, 0.24, 0.34]` s — because the handbrake in this game
+is a *rotation tool*, not a sustainable state: a measured sweep found the car
+spins out after ~0.47 s inside the slip band no matter how you steer, with a
+maximum single-application charge of 0.36. Tier 1 therefore fires roughly
+twenty times a lap, which is why `fireTop[0]` is exactly `1.00` — it must add
+punch without moving terminal speed.
+
+**Items.** Boxes are derived from `trackData.racingLine` and a seeded RNG — no
+new track data, no new file. They are **triggers, never colliders**: they are
+not in `props.colliders`, so you drive through them. The trigger pass is the
+same O(1) idea as the checkpoint test: one `spline.nearest()` per racer into a
+**per-racer** scratch object, then a bucket lookup.
+
+**Rubber-banding is strong by design.** `DROP_WEIGHTS` is read by row (finish
+position), and a racer more than `gapShiftSec` behind the leader rolls one row
+lower still. P1 draws defence only; last place draws a catch-up special about a
+third of the time. `stormMinPos` and a `sledLockoutM` finish-line lockout stop
+the two specials from deciding a race in its last 120 m.
+
+**Effects reuse existing machinery — no damage system was invented.**
+
+| Effect | How |
+|---|---|
+| SPIN OUT | `v.spinT = max(v.spinT, t)` plus one `v.omega.y += side * 3.2`. Vehicle forces `handbrake = 1, throttle = 0, steer = 0` while `spinT > 0`. |
+| SLOW / BOOST | `v.extDriveMul` / `v.extTopMul`, recomputed from scratch every frame so there is exactly one writer and no drift. |
+| BLIND | the `uBlind` uniform in the final pass (see INTEGRATION-NOTES). |
+| ROCKET SLED | `ItemWorld.pilot()` writes the ctl from a racing-line follower — the same trick `dev/qa-drive.js` uses to drive the player car. |
 
 ## AI — `src/game/ai.js` (T6)
 
@@ -317,7 +414,8 @@ menu theme + in-race driving loop (intensity input), generative, energetic but n
 
 ```
 input.poll() → race.update(dt, raw)
-  ├─ per vehicle: ai.update / player ctl → vehicle.step → vehicle.sync
+  ├─ items.step(dt, live)        ← BEFORE the cars move: effects are written first
+  ├─ per vehicle: ai.update / player ctl → items.pilot → vehicle.step → vehicle.sync
   ├─ resolveVehiclePair for all pairs → feel/audio hooks
   ├─ tracker.update per vehicle → events → hud/audio/progression
   ├─ terrain ruts + tyre marks + dust emission from wheel state

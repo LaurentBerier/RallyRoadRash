@@ -148,7 +148,8 @@ export class Input {
       `<div class="pedal gas">GAS</div>` +
       `<div class="pedal brk">BRAKE</div>` +
       `<div class="rcol">` +
-        `<div class="rbtn drift">DRIFT</div>` +
+        `<div class="rbtn fire">FIRE</div>
+        <div class="rbtn drift">DRIFT</div>` +
         `<div class="rbtn reset">RESET</div>` +
         `<div class="rbtn cam">CAM</div>` +
         `<div class="rbtn pause">&#10073;&#10073;</div>` +
@@ -198,6 +199,7 @@ export class Input {
        hold and the handbrake both need this); the rest fire one edge. */
     this._bindBtn(wrap.querySelector('.pedal.gas'), { axis: 'gas' });
     this._bindBtn(wrap.querySelector('.pedal.brk'), { axis: 'brake' });
+    this._bindBtn(wrap.querySelector('.rbtn.fire'), { key: 'KeyF' });
     this._bindBtn(wrap.querySelector('.rbtn.drift'), { key: 'Space', hold: true });
     this._bindBtn(wrap.querySelector('.rbtn.reset'), { key: 'KeyR', hold: true });
     this._bindBtn(wrap.querySelector('.rbtn.cam'), { key: 'KeyC' });
@@ -349,6 +351,7 @@ export class Input {
       this._edge(bt, 0, 'Space', false);   // handbrake also lands in keys, for uniformity
       this._edge(bt, 1, 'KeyR', false);    // reset is a HOLD — race.js reads down('KeyR')
       this._edge(bt, 3, 'KeyC', false);
+      this._edge(bt, 2, 'KeyF', false);    // X — fire the held item
       this._edge(bt, 9, 'Escape', true);
       this._navCode = '';
     }

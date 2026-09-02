@@ -20,22 +20,22 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 export const QUALITY = {
   low: {
     name: 'LOW', maxDpr: 1.5, pixels: 0.85e6, clipM: 88, clipLevels: 7, clipCell: 0.28,
-    stars: 2500, boulders: 420, trailRes: 1024, sunRes: 512, sunSteps: 36, dentRes: 2048,
+    stars: 2500, boulders: 520, trailRes: 1024, sunRes: 512, sunSteps: 36, dentRes: 2048,
     shadow: 0, bloom: false, msaa: 0, dust: 500
   },
   medium: {
     name: 'MEDIUM', maxDpr: 1.75, pixels: 1.6e6, clipM: 128, clipLevels: 8, clipCell: 0.20,
-    stars: 6000, boulders: 1000, trailRes: 2048, sunRes: 768, sunSteps: 52, dentRes: 2048,
+    stars: 6000, boulders: 1250, trailRes: 2048, sunRes: 768, sunSteps: 52, dentRes: 2048,
     shadow: 1024, bloom: true, msaa: 0, dust: 1200
   },
   high: {
     name: 'HIGH', maxDpr: 2, pixels: 2.4e6, clipM: 160, clipLevels: 9, clipCell: 0.16,
-    stars: 11000, boulders: 1500, trailRes: 4096, sunRes: 1024, sunSteps: 76, dentRes: 4096,
+    stars: 11000, boulders: 2000, trailRes: 4096, sunRes: 1024, sunSteps: 76, dentRes: 4096,
     shadow: 2048, bloom: true, msaa: 4, dust: 2200
   },
   ultra: {
     name: 'ULTRA', maxDpr: 2, pixels: 4.2e6, clipM: 192, clipLevels: 9, clipCell: 0.13,
-    stars: 16000, boulders: 2200, trailRes: 4096, sunRes: 1536, sunSteps: 96, dentRes: 4096,
+    stars: 16000, boulders: 2900, trailRes: 4096, sunRes: 1536, sunSteps: 96, dentRes: 4096,
     shadow: 4096, bloom: true, msaa: 4, dust: 3200
   }
 };
@@ -49,6 +49,19 @@ const FinalShader = {
     // and the aberration sit low and exposure is neutral. Push them up only for
     // a deliberately degraded look — the shader still supports it.
     uExposure: { value: 1.0 },
+    /* Per-STAGE grade, distinct from uExposure on purpose. uExposure is
+       feel.js's: it sits at exactly 1.0 and dips for a few frames on a hard
+       landing, and dev/camera-check gates that it returns to 1.0 to the last
+       decimal. A stage that simply wants to be a stop darker has nowhere to
+       say so without breaking that contract, so it says it here instead —
+       set once per race from SKY_THEMES.grade and never animated. */
+    uGrade: { value: new THREE.Vector3(1, 1, 1) },
+    /* Screen blind, 0..1, owned by game/itemworld.js (the dust storm).
+       Deliberately NOT one of uVignette/uExposure/uFlash: feel.js owns those
+       three exclusively and dev/camera-check asserts their exact reset
+       values, so anything else that wants the screen needs somewhere of its
+       own. Same reasoning that gave the per-stage grade its own uniform. */
+    uBlind: { value: 0 },
     uVignette: { value: 0.85 },
     uGrain: { value: 0.35 },
     uAberr: { value: 0.5 },
@@ -64,6 +77,8 @@ const FinalShader = {
     varying vec2 vUv;
     uniform sampler2D tDiffuse;
     uniform float uTime, uExposure, uVignette, uGrain, uAberr, uGlitch, uFlash, uLetterbox;
+    uniform vec3 uGrade;
+    uniform float uBlind;
     uniform vec2 uRes; uniform vec3 uSunUV;
 
     vec3 aces(vec3 x){
@@ -115,6 +130,13 @@ const FinalShader = {
         col += vec3(0.75,0.42,0.25) * exp(-length((g2-uSunUV.xy)*vec2(aspect,1.0))*22.0) * 0.10 * uSunUV.z;
       }
 
+      /* The dust storm: warm grit over the lens and the contrast crushed
+         out of it. Before the grade, so a stage's own key still applies. */
+      if (uBlind > 0.001){
+        col = mix(col, vec3(0.62, 0.50, 0.34), uBlind * 0.72);
+        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uBlind * 0.45);
+      }
+      col *= uGrade;
       col *= uExposure;
       col += uFlash;
 
@@ -240,6 +262,7 @@ export class Engine {
     this.final = new ShaderPass(FinalShader);
     this.final.renderToScreen = true;
     this.composer.addPass(this.final);
+    this._applyGrade();          // a rebuild must not lose the stage's grade
   }
 
   setQuality(key) {
@@ -300,6 +323,20 @@ export class Engine {
     if (t.hemiSky !== undefined) this.fill.color.set(t.hemiSky);
     if (t.hemiGround !== undefined) this.fill.groundColor.set(t.hemiGround);
     if (t.hemiIntensity !== undefined) this.fill.intensity = t.hemiIntensity;
+    /* Optional per-stage grade. Absent means neutral, so a theme that says
+       nothing looks exactly as it did before this existed. Held on the engine
+       as well as in the uniform because a quality change rebuilds the whole
+       composer, and a stage that silently went a stop brighter when the
+       player touched a settings slider would be a nasty little bug. */
+    this.grade = t.grade || null;
+    this._applyGrade();
+  }
+
+  _applyGrade() {
+    const u = this.final && this.final.uniforms.uGrade;
+    if (!u) return;
+    const g = this.grade;
+    if (g) u.value.set(g[0], g[1], g[2]); else u.value.set(1, 1, 1);
   }
 
   /** keep the shadow frustum tight around the car so 2 k feels like 8 k */

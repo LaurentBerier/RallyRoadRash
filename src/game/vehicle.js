@@ -27,9 +27,15 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clamp, sstep, lerp, makeRNG } from '../core/rng.js';
 import { SURFACES, SURF } from '../world/surfaces.js';
 import { G, TUNE } from './config.js';
+import { makeDrift, driftStep, driftReset } from './miniturbo.js';
 
 const ZERO_CTL = { throttle: 0, steer: 0, brake: 0, handbrake: 0 };
 const RACE_NUMBERS = [7, 12, 23, 41, 68, 95, 3, 55];
+/* Peak visual bank on a two-wheeler, radians. 0.62 = 35.5°, which is what a
+   450 actually carries through a flat turn and about the point where the
+   inside peg would start dragging. Higher looks like a road racer, which is
+   the wrong sport. */
+const BIKE_LEAN_MAX = 0.62;
 
 /* ============================================================
    Vehicle
@@ -152,7 +158,24 @@ export class Vehicle {
     this._blip = 0;
     this._ctlBrake = 0; this._ctlThr = 0; this._ctlHand = 0;
     this._accelLong = 0; this._accelLat = 0;
-    this._leanRoll = 0; this._leanPitch = 0;
+
+    /* ---- drive multipliers ----
+       ONE WRITER EACH, and step() is the only place they are composed.
+       `_drift` belongs to miniturbo.js; `ext*` belong to whatever race-side
+       system is applying an item, and that system recomputes them from
+       scratch every frame so effects can never accumulate. Anything that
+       wants to make a car faster or slower goes through these two numbers —
+       there is no addForce on this class and adding one would bypass the
+       friction circle, the traction control and the fade curve all at once. */
+    this._drift = makeDrift();
+    this.extDriveMul = 1;      // external × motorForce
+    this.extTopMul = 1;        // external × topSpeed (fade denominator)
+    this.driveMul = 1;         // composed: _drift.mul * extDriveMul
+    this.driveTopMul = 1;      // composed: _drift.top * extTopMul
+    this.bodySlip = 0;         // rad, signed — published for the drift charge
+    this.groundSpeed = 0;      // m/s of true horizontal speed, not the forward part
+    this.spinT = 0;            // s of forced spin-out remaining
+    this._leanRoll = 0; this._leanPitch = 0; this._bikeLean = 0;
     this._lastSpeed = 0;
 
     /* ---- visuals ---- */
@@ -211,8 +234,12 @@ export class Vehicle {
     this.gear = 0; this._blip = 0;
     this._rpmRaw = TUNE.drive.rpmIdle; this.rpmNorm = TUNE.drive.rpmIdle;
     this._accelLong = 0; this._accelLat = 0; this._lastSpeed = 0;
-    this._leanRoll = 0; this._leanPitch = 0;
+    this._leanRoll = 0; this._leanPitch = 0; this._bikeLean = 0;
     this._ctlBrake = 0; this._ctlThr = 0; this._ctlHand = 0;
+    this.bodySlip = 0; this.groundSpeed = 0; this.spinT = 0;
+    this.extDriveMul = 1; this.extTopMul = 1;
+    this.driveMul = 1; this.driveTopMul = 1;
+    driftReset(this._drift);
 
     // One tiny zero-input substep so wheel world positions, normals and surface
     // ids are valid before anything reads them (first visual frame, AI, HUD).
@@ -237,7 +264,29 @@ export class Vehicle {
     _ctl.steer = clamp(c.steer || 0, -1, 1);
     _ctl.brake = clamp(c.brake || 0, 0, 1);
     _ctl.handbrake = c.handbrake ? 1 : 0;
+    /* ---- a spin-out IS a handbrake slide you did not ask for ----
+       Routing it through ctl means rearGripMul, the ABS-bypassed rear brake,
+       the stability cut and the spinGuard walk-back all fire unmodified. That
+       path is already tuned so a handbrake slide is catchable and never
+       becomes a pirouette; a hand-rolled spin force would have to re-earn all
+       of it. Deferred while airborne on purpose: throttle is the ONLY pitch
+       authority in the air, and being hit at the apex of the Caldera Leap
+       must not make the landing unrecoverable. The clock starts on touchdown. */
+    if (this.spinT > 0 && !this.airborne) {
+      this.spinT -= dt;
+      if (this.spinT < 0) this.spinT = 0;
+      _ctl.handbrake = 1; _ctl.throttle = 0; _ctl.steer = 0;
+    }
+    // Captured AFTER the spin override, or the brake lights and the audio
+    // would report the input the player gave rather than the one that ran.
     this._ctlThr = _ctl.throttle; this._ctlBrake = _ctl.brake; this._ctlHand = _ctl.handbrake;
+
+    /* Charge/burn the mini-turbo once per frame, not per substep: `charge` is
+       measured in seconds of drift and stepping it six times would run its
+       clock at 6x. */
+    driftStep(this._drift, Math.min(dt, TUNE.sim.dtCap), this, _ctl);
+    this.driveMul = this._drift.mul * this.extDriveMul;
+    this.driveTopMul = this._drift.top * this.extTopMul;
 
     // hardHit is a per-frame peak: whoever consumes it (feel/audio/damage)
     // reads it after step() and after resolveVehiclePair().
@@ -273,7 +322,21 @@ export class Vehicle {
     const vFwd = this.vel.dot(fwd);
     const vRgt = this.vel.dot(rgt);
     const speedAbs = Math.abs(vFwd);
-    const vn = speedAbs / S.topSpeed;
+    /* TWO normalised speeds, and they are not interchangeable.
+
+       `vn` is measured against the BOOSTED top speed, because that is what a
+       mini-turbo actually raises: the drive-fade denominator. It also feeds
+       the steering taper, which is a happy accident worth keeping — a boost
+       that turns the car into a train is the classic failure of this feature,
+       and a little extra lock while it burns is the fix, for free.
+
+       `vnRaw` is against the honest top speed and exists for exactly one
+       consumer: downforce. dfv squares min(vn, 1.15), so feeding it the
+       boosted value would CUT about 8 % of static weight of downforce at
+       precisely the moment you are cresting something at 45 m/s. That is a
+       handling regression hiding inside a feature. */
+    const vnRaw = speedAbs / S.topSpeed;
+    const vn = speedAbs / (S.topSpeed * this.driveTopMul);
     const hand = ctl.handbrake;
     /* How fast the car is ACTUALLY travelling, regardless of where it is
        pointing. Anything that asks "is this fast enough to need help" must use
@@ -333,7 +396,7 @@ export class Vehicle {
     if (vn <= T.drive.fadeKnee) fade = 1;
     else if (vn <= 1) fade = 1 - (1 - T.drive.fadeTail) * sstep(T.drive.fadeKnee, 1, vn);
     else fade = T.drive.fadeTail * (1 - sstep(1, 1 + T.drive.overBand, vn));
-    let motor = S.motorForce;
+    let motor = S.motorForce * this.driveMul;
     if (thr < 0) {                    // reverse: its own, much lower envelope
       motor *= T.drive.reverseForce;
       fade = 1 - sstep(0, T.drive.reverseFrac, vn);
@@ -514,6 +577,12 @@ export class Vehicle {
     }
     this.slipLat = slipLatMax;
     this.slipLong = slipLongMax;
+    // Published for miniturbo.js (and anything else that wants to know how
+    // sideways the car is) — it was a substep local and died here.
+    this.bodySlip = bodySlip;
+    // …and the speed the car is ACTUALLY doing, which is not the forward
+    // component once it is sideways. miniturbo gates on this.
+    this.groundSpeed = vHoriz;
 
     /* ---- gravity ----
        Full weight on the ground. Once the car has been genuinely airborne for
@@ -534,7 +603,7 @@ export class Vehicle {
          Along the body's own down axis, so cresting a rise still presses the
          car into the road instead of into the sky. Only while in contact —
          a barrel roll should not get vacuumed back down. */
-      const dfv = Math.min(vn, 1.15);
+      const dfv = Math.min(vnRaw, 1.15);
       force.addScaledVector(up, -T.assists.downforce * this.mass * G * dfv * dfv);
 
       /* ---- anti-roll ----
@@ -774,11 +843,30 @@ export class Vehicle {
 
     this.chassis = new THREE.Group();
     this.wheelRoot = new THREE.Group();
-    this.root.add(this.chassis, this.wheelRoot);
+
+    /* A bike leans, and it leans about the line where its tyres touch the
+       ground — not about the centre of mass. Rolling the chassis in place
+       would swing the contact patch 23 cm sideways at 35°, which reads as
+       the bike skating rather than banking. So the two-wheelers get one
+       extra group whose origin sits ON the ground plane; everything under it
+       is pushed back up by the same amount, and a rotation there pivots the
+       whole machine about the rubber. Four-wheelers keep the flat hierarchy. */
+    this.leanRoot = null;
+    if (spec.bodyStyle === 'bike') {
+      this.leanRoot = new THREE.Group();
+      this.leanRoot.position.y = -spec.comHeight;
+      this.chassis.position.y = spec.comHeight;
+      this.wheelRoot.position.y = spec.comHeight;
+      this.leanRoot.add(this.chassis, this.wheelRoot);
+      this.root.add(this.leanRoot);
+    } else {
+      this.root.add(this.chassis, this.wheelRoot);
+    }
 
     const kit = new Kit();
     if (spec.bodyStyle === 'truck') buildTruck(kit, spec);
     else if (spec.bodyStyle === 'wedge') buildWedge(kit, spec, this);
+    else if (spec.bodyStyle === 'bike') buildBike(kit, spec, this);
     else buildBuggy(kit, spec);
     this.geos = kit.flush(this.chassis, M);
 
@@ -793,6 +881,7 @@ export class Vehicle {
   }
 
   _buildRunningGear(spec, M) {
+    if (spec.bodyStyle === 'bike') return this._buildBikeGear(spec, M);
     const sxs = spec.bodyStyle === 'buggy';
     // An SxS wears its rubber big: the buggy's tyres run visually wider than
     // the contact-patch number the physics uses. Purely cosmetic.
@@ -870,6 +959,78 @@ export class Vehicle {
     }
   }
 
+  /* ---------------- running gear, two-wheeler ----------------
+     The solver has four corners; the machine has two wheels. The deal:
+
+       • the two wheels of an axle share ONE tyre mesh, drawn on the
+         centreline. `side === -1` owns it, `side === +1` renders nothing —
+         its object still exists and still tracks, because updateVisuals is
+         not allowed to care which corner it is looking at.
+       • the linkage is where the second corner earns its keep. Both front
+         corners span a fork leg, 8.5 cm either side of the centreline, so
+         the fork is a real pair of tubes that really travel. Both rear
+         corners span a swingarm rail; only the left one also spans the
+         mono-shock, because a bike has exactly one of those.
+
+     Net result: a wheel count of two, a fork that works, and no special
+     case anywhere in the physics. ---------------------------------------- */
+  _buildBikeGear(spec, M) {
+    const R = spec.wheelR;
+    const wheelGeo = buildWheelGeometry(R, spec.wheelW);
+    // Spoked hub: a plain disc reads as a scooter wheel. Rim ring + hub barrel.
+    const hubParts = [];
+    const rim = new THREE.CylinderGeometry(R * 0.80, R * 0.80, spec.wheelW * 0.34, 18, 1, true);
+    rim.rotateZ(Math.PI / 2); hubParts.push(rim);
+    const barrel = new THREE.CylinderGeometry(R * 0.20, R * 0.20, spec.wheelW * 1.5, 10);
+    barrel.rotateZ(Math.PI / 2); hubParts.push(barrel);
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * Math.PI * 2;
+      const spoke = new THREE.BoxGeometry(spec.wheelW * 0.10, R * 0.62, 0.012);
+      spoke.translate(0, R * 0.50, 0);
+      spoke.rotateX(a);
+      hubParts.push(spoke);
+    }
+    const discGeo = mergeGeometries(hubParts, false);
+    hubParts.forEach(p => p.dispose());
+    // Fork legs and swingarm rails are round tube; the shock wears a spring.
+    const legGeo = new THREE.CylinderGeometry(0.030, 0.036, 1, 8); legGeo.rotateX(Math.PI / 2);
+    const armGeo = new THREE.CylinderGeometry(0.034, 0.042, 1, 7); armGeo.rotateX(Math.PI / 2);
+    const shockGeo = new THREE.CylinderGeometry(0.048, 0.048, 1, 9); shockGeo.rotateX(Math.PI / 2);
+    this.geos.push(wheelGeo, discGeo, legGeo, armGeo, shockGeo);
+
+    const FORK_X = 0.085, ARM_X = 0.098;
+    for (const w of this.wheels) {
+      const g = new THREE.Group();
+      const tyre = new THREE.Mesh(wheelGeo, M.tyre);
+      const disc = new THREE.Mesh(discGeo, M.rim);
+      g.add(tyre, disc);
+      // One tyre per axle. The right-hand corner tracks silently.
+      g.visible = w.side < 0;
+      w.obj = g; w.hub = tyre;
+      this.wheelRoot.add(g);
+
+      /* Pickups are quoted as height above the ground and converted here, so
+         they can be read against buildBike's frame without arithmetic: the
+         fork tops sit just over the upper triple clamp at 1.19 m, the
+         swingarm hangs off the pivot at 0.42 m, and the shock's top eye is on
+         the frame behind the tank at 0.86 m. */
+      const Y = (h) => h - spec.comHeight;
+      w.hubOff = w.side * (w.front ? FORK_X : ARM_X);
+      w.arm = new THREE.Mesh(w.front ? legGeo : armGeo, w.front ? M.metal : M.dark);
+      this.wheelRoot.add(w.arm);
+      if (w.front) w.armRoot.set(w.hubOff, Y(1.19), w.mount.z - 0.12);
+      else w.armRoot.set(w.hubOff, Y(0.42), w.mount.z + 0.60);
+      if (w.front || w.side > 0) {
+        w.coil = null;                     // no shock on the forks, none on the right
+        w.coilRoot.set(0, 0, 0);
+      } else {
+        w.coil = new THREE.Mesh(shockGeo, M.spring);
+        this.wheelRoot.add(w.coil);
+        w.coilRoot.set(0, Y(0.86), w.mount.z + 0.62);
+      }
+    }
+  }
+
   /**
    * Wheels, suspension travel, steering, brake lights and the visual-only body
    * lean. Physics never reads any of this.
@@ -879,14 +1040,19 @@ export class Vehicle {
     const S = this.spec;
     _q1.copy(this.quat).invert();
 
+    const bike = S.bodyStyle === 'bike';
     for (const w of this.wheels) {
       _v1.copy(w.worldPos).sub(this.pos).applyQuaternion(_q1);
+      // Single track: both corners of an axle draw on the centreline. The
+      // physics hub keeps its real lateral offset; only the picture moves.
+      if (bike) _v1.x = 0;
       w.obj.position.copy(_v1);
       w.obj.rotation.set(0, 0, 0);
       w.obj.rotateY(w.steer);
       w.obj.rotateX(w.spin);
-      span(w.arm, w.armRoot, _v1);
-      span(w.coil, w.coilRoot, _v1);
+      if (w.hubOff) { _v2.copy(_v1); _v2.x += w.hubOff; span(w.arm, w.armRoot, _v2); }
+      else span(w.arm, w.armRoot, _v1);
+      if (w.coil) span(w.coil, w.coilRoot, _v1);
       if (w.arm2) { span(w.arm2, w.arm2Root, _v1); span(w.shaft, w.coilRoot, _v1); }
     }
 
@@ -899,6 +1065,21 @@ export class Vehicle {
     this._leanRoll += (tRoll - this._leanRoll) * kf;
     this._leanPitch += (tPitch - this._leanPitch) * kf;
     this.chassis.rotation.set(this._leanPitch, 0, this._leanRoll);
+
+    /* A bike banks INTO the corner — the opposite sign to a car's body roll,
+       and an order of magnitude bigger. This is the whole reason the machine
+       reads as a motorcycle: the four-corner body underneath is held flat by
+       antiRollBonus, and every degree of bank you see comes from here.
+       Pivoted about the contact line by `leanRoot` (see build()), rate
+       limited rather than snapped, so a flick through a chicane has weight.
+       Airborne it decays to zero: nothing is generating lateral load, and a
+       bike frozen at 30° of bank in mid-air looks broken. */
+    if (this.leanRoot) {
+      const grounded = this.contacts > 0 ? 1 : 0;
+      const want = clamp(this._accelLat / (G * 0.90), -1, 1) * BIKE_LEAN_MAX * grounded;
+      this._bikeLean += (want - this._bikeLean) * Math.min(1, dt * (grounded ? 6.0 : 2.4));
+      this.leanRoot.rotation.z = this._bikeLean;
+    }
 
     // brake lights: on under braking, and under reverse, like the real thing
     const lit = this._ctlBrake > 0.04 || this._ctlHand > 0 || this.speed < -0.6;
@@ -1422,6 +1603,105 @@ function buildWedge(kit, spec, v) {
   addLights(kit, y0 + 0.44, L * 0.485, -L * 0.485, hw * 0.58);
 }
 
+/* --- BIKE: motocross 450 with a rider up on the pegs ---------------------
+   Everything is built around three fixed points: the front hub (+0.72 z), the
+   rear hub (−0.72 z) and the ground plane (y0). The forks, the swingarm and
+   the shock are NOT built here — they are spanned live by _buildBikeGear so
+   they travel, which on a machine with 400 mm of suspension is most of what
+   you actually watch.
+
+   The rider is half the silhouette and all of the read at distance: standing
+   in the attack position, weight back, elbows up, helmet over the bars. Head
+   height lands at 1.6 m over the ground, which is what `dims.H` (1.42, plus
+   the CoM offset) is sized for — change one and the aero and the collision
+   spheres want the other. ------------------------------------------------ */
+function buildBike(kit, spec, v) {
+  const zF = spec.wheelbase.front, zR = spec.wheelbase.rear;
+  /* Everything below is quoted as HEIGHT ABOVE THE GROUND, because that is
+     the number you can check against a photograph. Y() converts to body
+     space, where the origin is the centre of mass. */
+  const Y = (h) => h - spec.comHeight;
+  const AXLE = spec.wheelR;                    // 0.36 — both hubs at static sag
+
+  /* ---- engine and frame. A modern MX frame is a pair of aluminium spars
+     wrapping over one very tall cylinder; the spars and the tank shrouds are
+     the whole silhouette from three metres away. ---- */
+  kit.box('dark', 0.28, 0.30, 0.40, 0, Y(0.50), 0.00, 0.05);              // cases
+  kit.box('metal', 0.23, 0.28, 0.23, 0, Y(0.78), 0.05, 0.04, -0.16);      // barrel + head
+  kit.box('dark', 0.19, 0.08, 0.19, 0, Y(0.94), 0.03, 0.03);              // valve cover
+  const HEAD = 1.00, PIVOT = 0.42;             // steering head, swingarm pivot
+  for (const s of [-1, 1]) {
+    // main spar: head -> over the engine -> down to the pivot
+    kit.tube('paint2', s * 0.055, Y(HEAD - 0.06), zF - 0.10, s * 0.108, Y(0.80), -0.04, 0.036);
+    kit.tube('paint2', s * 0.108, Y(0.80), -0.04, s * 0.098, Y(PIVOT + 0.04), -0.12, 0.033);
+    kit.tube('paint2', s * 0.052, Y(HEAD - 0.16), zF - 0.12, s * 0.082, Y(0.34), 0.12, 0.026);  // downtube
+    kit.tube('paint2', s * 0.104, Y(0.82), -0.08, s * 0.092, Y(0.93), zR + 0.28, 0.024);        // subframe
+  }
+  kit.box('metal', 0.15, 0.09, 0.13, 0, Y(HEAD + 0.02), zF - 0.11, 0.03); // triple clamp, lower
+  kit.box('metal', 0.19, 0.05, 0.11, 0, Y(HEAD + 0.16), zF - 0.13, 0.02); // triple clamp, upper
+
+  /* ---- plastics. The tank is nearly invisible on a modern MX bike; the
+     shrouds beside it are what you actually see, so they get the colour. ---- */
+  kit.box('paint', 0.21, 0.19, 0.40, 0, Y(0.99), 0.24, 0.07);             // tank
+  for (const s of [-1, 1]) {
+    kit.box('paint', 0.075, 0.30, 0.42, s * 0.135, Y(0.90), 0.22, 0.05, 0, 0, s * 0.17);   // shroud
+    kit.plate('livery', 0.32, 0.22, s * 0.126, Y(0.82), -0.26, 0, s * Math.PI / 2);        // number plate
+    kit.box('dark', 0.05, 0.19, 0.32, s * 0.122, Y(0.82), -0.26, 0.03);                    // airbox side
+    kit.box('dark', 0.055, 0.16, 0.26, s * 0.115, Y(0.56), -0.34, 0.03);                   // side panel
+  }
+  kit.box('dark', 0.16, 0.08, 0.62, 0, Y(0.97), -0.14, 0.04, -0.05);      // seat
+  kit.box('paint', 0.20, 0.04, 0.38, 0, Y(1.02), zR + 0.30, 0.02, 0.18);  // rear fender
+  kit.box('paint', 0.21, 0.04, 0.34, 0, Y(1.03), zF + 0.08, 0.02, 0.14);  // front fender
+  kit.plate('livery', 0.25, 0.19, 0, Y(HEAD + 0.24), zF - 0.05, -0.34);   // front number board
+
+  /* ---- exhaust: header off the front of the head, round the right side,
+     into a can under the seat. Three tubes and a silencer. ---- */
+  kit.tube('metal', 0.04, Y(0.86), 0.22, 0.09, Y(0.60), 0.30, 0.025);
+  kit.tube('metal', 0.09, Y(0.60), 0.30, 0.12, Y(0.56), -0.12, 0.025);
+  kit.tube('metal', 0.12, Y(0.56), -0.12, 0.14, Y(0.74), zR + 0.32, 0.029);
+  kit.cyl('metal', 0.052, 0.058, 0.36, 10, 0.145, Y(0.82), zR + 0.10, Math.PI / 2, 0, 0.10);
+
+  /* ---- bars, controls, pegs ---- */
+  const BAR = HEAD + 0.28, barZ = zF - 0.19;
+  for (const s of [-1, 1]) {
+    kit.cyl('metal', 0.026, 0.026, 0.06, 8, s * 0.070, Y(BAR - 0.05), zF - 0.13);           // riser
+    kit.tube('metal', s * 0.070, Y(BAR - 0.02), zF - 0.13, s * 0.33, Y(BAR), barZ, 0.017);  // bar
+    kit.cyl('dark', 0.023, 0.023, 0.12, 8, s * 0.365, Y(BAR), barZ, 0, 0, Math.PI / 2);     // grip
+    kit.box('dark', 0.085, 0.085, 0.028, s * 0.33, Y(BAR + 0.02), barZ + 0.06, 0.01);       // handguard
+    kit.box('metal', 0.12, 0.02, 0.085, s * 0.185, Y(0.35), -0.05, 0.01);                   // footpeg
+  }
+  kit.cyl('lamp', 0.068, 0.068, 0.04, 12, 0, Y(HEAD + 0.22), zF + 0.01, Math.PI / 2);       // headlight
+  kit.box('brake', 0.12, 0.06, 0.04, 0, Y(1.04), zR + 0.12, 0.02);                          // tail light
+
+  /* ---- rider. Up on the pegs, weight over the back wheel, elbows out: the
+     attack position, and the one pose that reads as motocross rather than as
+     a commuter. The helmet is the highest thing on the machine and `dims.H`
+     is measured to the top of it. ---- */
+  const PEG = 0.38, KNEE = 0.74, HIP = 1.10, SHOULDER = 1.36;
+  for (const s of [-1, 1]) {
+    kit.box('dark', 0.10, 0.08, 0.22, s * 0.185, Y(PEG - 0.02), -0.04, 0.03);              // boot
+    kit.tube('dark', s * 0.185, Y(PEG + 0.06), -0.03, s * 0.165, Y(KNEE), 0.02, 0.058);    // shin
+    kit.tube('dark', s * 0.165, Y(KNEE), 0.02, s * 0.125, Y(HIP), -0.14, 0.066);           // thigh
+    kit.tube('paint2', s * 0.155, Y(SHOULDER), -0.06, s * 0.295, Y(BAR + 0.15), barZ + 0.10, 0.050); // upper arm
+    kit.tube('paint2', s * 0.295, Y(BAR + 0.15), barZ + 0.10, s * 0.345, Y(BAR + 0.02), barZ, 0.039); // forearm
+  }
+  kit.box('dark', 0.26, 0.13, 0.20, 0, Y(HIP + 0.02), -0.16, 0.05);                        // hips
+  kit.box('paint2', 0.28, 0.36, 0.22, 0, Y((HIP + SHOULDER) * 0.5 + 0.02), -0.10, 0.08, 0.42); // torso
+  kit.plate('livery', 0.26, 0.20, 0, Y(1.24), -0.24, -0.42);                               // back number
+  kit.sphere('helmet', 0.142, 0, Y(1.42), 0.10);
+  kit.box('helmet', 0.19, 0.045, 0.15, 0, Y(1.50), 0.17, 0.02, -0.40);                     // peak
+  kit.plate('glass', 0.185, 0.095, 0, Y(1.40), 0.24, 0, 0, 0.10);                          // goggles
+
+  /* ---- pipe flare. One can, so one cone, at the silencer tip. */
+  const flame = new THREE.Mesh(
+    new THREE.ConeGeometry(0.065, 0.30, 8, 1, true).rotateX(-Math.PI / 2),
+    v.mats.glow);
+  flame.position.set(0.145, Y(0.84), zR - 0.14);
+  flame.renderOrder = 6;
+  v.chassis.add(flame);
+  v.exhaust = flame;
+}
+
 /** Stretch a unit-length +Z member so it spans exactly from a to b. */
 function span(mesh, a, b) {
   mesh.position.set((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5);
@@ -1445,6 +1725,7 @@ const _p4 = new THREE.Vector3(), _p5 = new THREE.Vector3(), _p6 = new THREE.Vect
 const _p7 = new THREE.Vector3(), _p8 = new THREE.Vector3(), _p9 = new THREE.Vector3();
 const _p10 = new THREE.Vector3(), _p11 = new THREE.Vector3(), _p12 = new THREE.Vector3();
 const _n1 = new THREE.Vector3(), _v1 = new THREE.Vector3(), _sv = new THREE.Vector3();
+const _v2 = new THREE.Vector3();          // fork/swingarm pickup, offset off _v1
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 /* collision scratch, kept separate so a resolve() call can never stomp on a
    step() that is mid-flight in some future threaded world */

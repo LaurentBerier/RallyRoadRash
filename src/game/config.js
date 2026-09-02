@@ -149,7 +149,11 @@ export const TUNE = {
      --------------------------------------------------------------- */
   aero: {
     rho: 1.2,               // kg/m³ — air density (sea level-ish, single number).
-    cd: { buggy: 0.44, truck: 0.52, wedge: 0.34 },   // drag coefficient by bodyStyle.
+    /* Drag coefficient by bodyStyle. `bike` is the outlier: a rider is a very
+       draggy shape for their frontal area, and the number has a second job —
+       it is the only brake on a 245 kg body with this much power-to-weight,
+       so it is what keeps the Hornet's terminal speed an honest 40 m/s. */
+    cd: { buggy: 0.44, truck: 0.52, wedge: 0.34, bike: 0.42 },
     frontalFrac: 0.82,      // frontal area = W × H × this (bodies are not rectangles).
   },
 
@@ -280,6 +284,91 @@ export const TUNE = {
   },
 
   /* ---------------------------------------------------------------
+     MINI-TURBO — the drift's payoff
+     ------------------------------------------------------------------
+     Hold a slide, charge a tier, release, get shoved down the road. The
+     state machine is src/game/miniturbo.js; these are its numbers.
+
+     TWO SLIP GATES, and the second one is the whole reason the AI has this
+     feature at all. ai.js:816 sets `ctl.handbrake = 0` unconditionally —
+     "the countersteer assist is better than we are" — so a handbrake-only
+     charge would be a mechanic five of the six cars on the grid could never
+     use. With `slipFree`, a genuine throttle slide charges too: the AI earns
+     mini-turbos on the corners where it is actually sideways, with no change
+     to ai.js, and a player who drifts on the throttle is rewarded for it.
+     `slipHand` is the lower bar because with the handbrake down, 11° of slip
+     is unambiguously a deliberate drift.
+
+     WHY TIER 1 CANNOT RAISE TERMINAL SPEED (fireTop[0] = 1.00). Tier 1 fires
+     twenty times a lap. `topSpeed` is an honest number that the UI quotes,
+     the AI plans against and dev/vehicle-check gates to ±2 %; letting the
+     most common event in the game move it would quietly make every one of
+     those a lie. Tier 1 is pure shove. Only the tiers you have to work for
+     move the ceiling.
+     --------------------------------------------------------------- */
+  boost: {
+    slipHand: 0.20,         // rad of body slip that counts as charging, handbrake down
+    slipFree: 0.34,         // rad without it — a real throttle slide, not a wobble
+    slipFull: 0.62,         // rad at which the charge rate saturates
+    /* Upper gate: past this you are spinning, not drifting. Deliberately the
+       top of TUNE.drift.spinGuard — the same angle at which the stability
+       controller comes back to stop the rotation. Without it, the fastest
+       way to bank tier 3 would be to stop racing and do donuts. */
+    slipMax: 1.15,          // rad
+    minSpeed: 9.0,          // m/s — a donut in the paddock is not a drift
+    fullSpeed: 22.0,        // m/s at which the speed term saturates
+
+    /* Grace is the single value that makes a chained S-bend feel good.
+       `drift.driftGripRecovery` already lets you flick-catch-flick; without a
+       matching hold on the CHARGE, the second flick starts from zero and
+       tier 3 is unreachable anywhere but a hairpin. */
+    grace: 0.30,            // s the charge survives a lost slide
+    decay: 1.2,             // 1/s it bleeds once the grace is spent
+
+    /* THE TIERS ARE SMALL, AND THE MEASUREMENT SAYS THEY HAVE TO BE.
+       A kart racer charges its turbo by holding one long drift. That cannot
+       work here, and it is worth writing down why: in this handling model the
+       handbrake is a ROTATION tool, not a sustainable state. Held down, it
+       pins rearGripMul at 0.34 and the car's slip angle climbs monotonically
+       — through the 0.20–1.15 rad drift band in about 0.47 s, and on to 180°
+       and travelling backwards by two seconds. Swept across steer angles from
+       0.3 to full lock at 32 m/s, the time spent inside the band never varied
+       by more than 40 ms. The maximum charge any single handbrake application
+       can produce is therefore about 0.36.
+
+       So the mechanic is not "how long can you hold it" — the physics has no
+       answer to that but "until you spin". It is HOW FAR DARE YOU ROTATE
+       BEFORE YOU CATCH IT: tier 1 is a flick, tier 2 a committed rotation,
+       tier 3 means riding it to about 63° with the spin one tenth of a second
+       away. That is the skill this game already has, and this pays for it.
+
+       Chaining still works, and is how a careful driver out-earns a brave one:
+       a flick that banks less than tier 1 KEEPS its charge, and `decay` at
+       1.2/s with a 0.30 s grace means a linked left-right adds up rather than
+       starting over. Once a tier is banked, releasing spends it. */
+    tier: [0.12, 0.24, 0.34],       // charge units (≈ seconds of saturated drift)
+    fireT: [0.45, 0.85, 1.40],      // s the boost lasts
+    fireMul: [1.35, 1.60, 1.95],    // × motorForce while boosting
+    fireTop: [1.00, 1.06, 1.13],    // × topSpeed, as the DRIVE-FADE denominator only
+    fireFov: [0.9, 1.8, 3.0],       // deg into feel.kick() on release
+    fireShake: [0.06, 0.14, 0.26],  // feel.addShake() on release
+    tierFov: 0.6,                   // deg of kick on each tier-up
+
+    /* Tyre-dust tint per tier — cyan, then the house orange, then violet.
+       Passed to dust.spawn OVER-BRIGHT (× glow): the colour attribute is
+       unclamped end to end, so a value past 1 clears the bloom threshold and
+       the sparks glow instead of just being coloured. */
+    col: [[0.24, 0.72, 1.00], [1.00, 0.54, 0.10], [0.77, 0.42, 1.00]],
+    glow: 2.6,
+
+    /* A spin-out charges a mini-turbo — recovering from an oil slick with a
+       tier-1 boost is the right arcade payoff. This is the cap that stops it
+       being farmed: no charge for the first 0.4 s of a spin you did not ask
+       for. */
+    spinLockout: 0.40,      // s
+  },
+
+  /* ---------------------------------------------------------------
      RESET / RECOVERY — race.js owns the behaviour, these are its thresholds.
      --------------------------------------------------------------- */
   reset: {
@@ -335,6 +424,11 @@ export const TUNE = {
       buggy: { radius: 1.02, spread: 1.00 },
       truck: { radius: 1.06, spread: 0.96 },   // fatter: bullbar and flares stick out
       wedge: { radius: 0.98, spread: 1.00 },
+      /* A bike is the one body whose envelope is genuinely small. radius runs
+         over 1.0 because W (0.86 m) is bar width, not body width, and a
+         0.43 m sphere would let a car's nose reach the rider before anything
+         touched. 1.24 puts the envelope at rider-plus-elbows. */
+      bike: { radius: 1.24, spread: 1.00 },
     },
   },
 

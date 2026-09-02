@@ -71,6 +71,23 @@ import { TUNE } from './config.js';
    The balancing knob. Documented above; exported so the integrator can
    flip it off from one place without touching driver code.
    --------------------------------------------------------------- */
+/* How eager a driver is with a power-up, evaluated four times a second.
+   `base` is the floor everyone has; `aggression` is the personality dial
+   makeGridProfiles already assigns and which is deliberately uncorrelated
+   with skill — "a slow driver who will not move over is the most memorable
+   car on the grid" applies just as well to one who will not stop throwing
+   things at you. */
+export const AI_ITEM = {
+  hz: 4,               // decisions per second
+  boost: 0.35, boostSkill: 0.50,   // p on a straight, at speed
+  shoot: 0.30, shootSkill: 0.60,   // p with a rival lined up
+  drop: 0.50,                      // p with somebody close behind, or a corner
+  special: 1.0,                    // sled and storm: no reason to wait
+  latGate: 3.5,        // m of lateral error inside which a shot is "lined up"
+  aheadMin: 4, aheadMax: 42,       // m — the window a forward shot wants
+  behindMin: 3, behindMax: 30,     // m — and a rearward one
+};
+
 export const AI_BALANCE = {
   enabled: true,
   leader: 0.985,      // multiplier on speed targets for P1
@@ -367,6 +384,16 @@ export class AIDriver {
     /* Returned every frame — the race flow consumes it immediately. */
     this.ctl = { throttle: 0, steer: 0, brake: 0, handbrake: 0 };
 
+    /* Item firing, latched exactly like `wantsReset`: this driver never acts,
+       it only ever raises a hand, and race.js polls it. Keeping it out of
+       `ctl` is deliberate — ctl is copied through three separate scratch
+       objects and a fifth field would be silently dropped by all of them. */
+    this.wantsFire = false;
+    this.fireBack = false;
+    this.fireT = 0;
+    this._shotAhead = Infinity;      // m to the nearest lined-up car ahead
+    this._shotBehind = Infinity;     // …and behind. Written by the rival scan.
+
     // --- route tracking ---
     this.ri = -1;             // route index at/just behind me; -1 = re-acquire
     this.rProj = 0;           // my projected distance along the route
@@ -415,9 +442,57 @@ export class AIDriver {
     this.recovering = false;
   }
 
+  /**
+   * Is now a good moment to use what we are holding? Sets the latch and
+   * nothing else. The windows come from the rival scan that already ran this
+   * frame (_shotAhead / _shotBehind), so targeting is free.
+   *
+   * ITEM ids are items.js's: 0 nitro, 1 triple, 2 wheel, 3 slick, 4 tow,
+   * 5 sled, 6 storm. Imported as numbers rather than by name to keep this
+   * file's import graph as thin as it has always been.
+   */
+  _decideFire(item, spd) {
+    const R = this.route, i = this.ri;
+    const k = (R && R.pts && i >= 0 && i < R.n) ? Math.abs(R.pts[i].k || 0) : 0;
+    const fast = spd > 0.55 * this.topSpeed;
+    const A = this.aggression;
+    let p = 0, back = false;
+
+    switch (item) {
+      case 0: case 1:
+        // A boost is worth nothing into a corner. Straight, and quick already.
+        if (k < 0.006 && fast && !this.vehicle.airborne) p = AI_ITEM.boost + AI_ITEM.boostSkill * A;
+        break;
+      case 2:
+        // Forward if somebody is lined up there, otherwise cover your back.
+        if (this._shotAhead < Infinity) p = AI_ITEM.shoot + AI_ITEM.shootSkill * A;
+        else if (this._shotBehind < Infinity) { p = AI_ITEM.shoot + AI_ITEM.shootSkill * A; back = true; }
+        /* Aim error from consistency: a sloppy driver takes the shot anyway
+           and misses, which is far more entertaining than not taking it. */
+        if (p > 0 && this.rng() > this.consistency) p *= 0.4;
+        break;
+      case 3:
+        // Drop it where it will do something: a corner, or in somebody's face.
+        if (this._shotBehind < Infinity || k > 0.012) { p = AI_ITEM.drop; back = true; }
+        break;
+      case 4:
+        if (this._shotAhead < Infinity) p = AI_ITEM.shoot + AI_ITEM.shootSkill * A;
+        break;
+      case 5: case 6:
+        p = AI_ITEM.special;
+        break;
+      default: break;
+    }
+    if (p > 0 && this.rng() < p) { this.wantsFire = true; this.fireBack = back; }
+  }
+
+  /** race.js consumed the fire request. */
+  notifyFired() { this.wantsFire = false; this.fireBack = false; this.fireT = 0; }
+
   /** Race flow calls this once it has actually performed the respawn. */
   notifyReset() {
     this.wantsReset = false;
+    this.wantsFire = false; this.fireBack = false; this.fireT = 0;
     this.flipT = 0; this.stuckT = 0; this.offT = 0;
     this.recovering = false;
     this.offset = 0; this.offsetTarget = 0; this.avoidHold = 0;
@@ -554,6 +629,14 @@ export class AIDriver {
         const ll = dx * fz - dz * fx;            // + = to my LEFT
         const d2 = dx * dx + dz * dz;
         if (d2 < RIVAL_NEAR * RIVAL_NEAR) rivalNear = true;
+        /* Free targeting data, inside a loop that already runs. `fl` and
+           `ll` are exactly what a shot needs to know and they are computed
+           three lines up for the blocker logic. */
+        const al = ll < 0 ? -ll : ll;
+        if (al < AI_ITEM.latGate) {
+          if (fl > AI_ITEM.aheadMin && fl < AI_ITEM.aheadMax && fl < this._shotAhead) this._shotAhead = fl;
+          if (-fl > AI_ITEM.behindMin && -fl < AI_ITEM.behindMax && -fl < this._shotBehind) this._shotBehind = -fl;
+        }
         if (fl > AVOID_AHEAD || fl < -6 || ll > latGate || ll < -latGate) continue;
 
         const theirFwd = o.vel ? o.vel.x * fx + o.vel.z * fz : 0;
@@ -803,6 +886,30 @@ export class AIDriver {
          ask forever — a stuck `wantsReset` would respawn a healthy car every
          frame if the caller polls it. */
       this.wantsReset = false;
+    }
+
+    /* --- 13b. power-ups ---
+       WRITE-ONLY to the latch. This block must never touch ctl, steerOut,
+       braking or offset, and it early-returns the moment `ctx.item` is
+       absent — which is what makes it completely inert inside
+       dev/ai-check.mjs, whose ctx is literally `{ state, vehicles }`. All
+       twenty of that suite's gates, its 50 µs/driver budget and its
+       allocation gate are untouched by construction.
+
+       Four times a second, not every frame: the decision is "is now a good
+       moment", and asking sixty times a second only makes it noisier. Rolled
+       from `this.rng`, never Math.random — dev/qa-drive.js compares lap times
+       between builds and the props.js hash2 comment is explicit that
+       unseeded noise at this scale hides real regressions. */
+    const item = ctx && ctx.item;
+    if (item !== undefined && item !== null && item >= 0 && state === 'running') {
+      this.fireT -= dt;
+      if (this.fireT <= 0 && !this.wantsFire) {
+        this.fireT = 1 / AI_ITEM.hz;
+        this._decideFire(item, spd);
+      }
+    } else if (item === undefined || item === null || item < 0) {
+      this.wantsFire = false;
     }
 
     /* --- 14. rate-limit our own output and ship it --- */

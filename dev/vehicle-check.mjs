@@ -555,6 +555,60 @@ head('(j) VISUALS — procedural build + dispose (DOM stubbed)');
     ok(`${S.id}: dispose detaches from the scene`, scene.children.length === before - 1);
     ok(`${S.id}: dispose is idempotent`, (built.v.dispose(), true));
   }
+  /* ---- the two-wheeler's own contract ----
+     The Hornet is a four-corner rigid body drawn as a single-track machine.
+     Three things have to hold or it stops being a motorcycle, and none of
+     them is visible to any of the gates above. */
+  {
+    const S = VEHICLE_BY_ID.moto;
+    const v = new Vehicle(scene, terr, S, { livery: 1 });
+    v.placeAt(0, 0, 0);
+    for (let i = 0; i < 8; i++) { v.step(DT, ctl(0.4, 0.8)); v.updateVisuals(DT); }
+
+    // 1. One tyre per axle, on the centreline. Two visible wheels, not four.
+    const visible = v.wheels.filter(w => w.obj.visible);
+    const offCentre = v.wheels.filter(w => w.obj.visible && Math.abs(w.obj.position.x) > 1e-6);
+    ok('moto: exactly two wheels are drawn', visible.length === 2, `${visible.length}`);
+    ok('moto: both drawn wheels sit on the centreline', offCentre.length === 0,
+      offCentre.map(w => f(w.obj.position.x, 3)).join(',') || 'x = 0');
+    ok('moto: the physics hubs keep their real track',
+      Math.abs(v.wheels[0].mount.x) > 0.5 && v.wheels[0].mount.x === -v.wheels[1].mount.x,
+      `mount.x ±${f(Math.abs(v.wheels[0].mount.x), 2)}`);
+
+    // 2. The fork is a PAIR of legs, offset either side, and it travels.
+    const legs = v.wheels.filter(w => w.front && w.arm);
+    const legX = legs.map(w => w.hubOff);
+    ok('moto: two fork legs, one either side of the wheel',
+      legs.length === 2 && legX[0] === -legX[1] && Math.abs(legX[0]) > 0.02,
+      `x ±${f(Math.abs(legX[0] || 0), 3)}`);
+    ok('moto: exactly one rear shock', v.wheels.filter(w => w.coil).length === 1);
+
+    /* 3. The bank pivots about the CONTACT LINE, not the centre of mass.
+       Roll the lean group by 30° and the tyre's bottom must stay on the
+       ground; pivot it at the CoM instead and it swings 20 cm sideways and
+       lifts, which reads as the bike skating rather than banking. */
+    const wheel = visible[0];
+    const groundY = -S.comHeight;
+    v.leanRoot.rotation.z = 0.52;                 // ~30°
+    v.leanRoot.updateMatrixWorld(true);
+    const contact = new THREE.Vector3(0, -S.wheelR, 0);
+    wheel.obj.localToWorld(contact);
+    v.root.worldToLocal(contact);
+    const drop = Math.abs(contact.y - groundY);
+    const slide = Math.abs(contact.x);
+    info(`moto       banked 30°: contact patch moves ${f(slide * 100, 1)} cm across, ${f(drop * 100, 1)} cm up`);
+    ok('moto: banking pivots about the contact line, not the CoM',
+      drop < 0.06 && slide < 0.06, `Δy ${f(drop, 3)} m, Δx ${f(slide, 3)} m`);
+    v.leanRoot.rotation.z = 0;
+
+    // 4. Airborne, the bank decays — a bike frozen at 30° in mid-air is broken.
+    v.pos.y += 8;
+    for (let i = 0; i < 40; i++) { v.step(DT, ctl(0)); v.updateVisuals(DT); }
+    ok('moto: the bank washes out while airborne',
+      Math.abs(v.leanRoot.rotation.z) < 0.05, `${f(v.leanRoot.rotation.z, 3)} rad`);
+    v.dispose();
+  }
+
   info(`6-car grid would be ~${Math.round(totalTris / 3 * 6)} tris — budget is 450 k in view`);
   ok('6 cars fit the triangle budget', totalTris / 3 * 6 < 120000,
     `${Math.round(totalTris / 3 * 6)} tris`);

@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>RALLY ROAD RASH — Off-Road Championship</title>
-<meta name="description" content="Arcade off-road rally: six cars, four procedural stages, big air. No downloads, no plugins — it all builds itself in your browser." />
+<meta name="description" content="Arcade off-road rally: four machines, four procedural stages, big air. No downloads, no plugins — it all builds itself in your browser." />
 <meta name="theme-color" content="#0a0a0c" />
 <!-- Procedural favicon: tyre + chequer. Data URI so the game still ships with
      zero asset files (see docs/ARCHITECTURE.md hard rule 1). -->
@@ -12,7 +12,7 @@
 <!-- ?v= is a cache buster: static hosts serve assets with max-age=600, so a
      returning player keeps the old layout for ten minutes after a deploy.
      Bump this whenever styles.css changes in a way players must see. -->
-<link rel="stylesheet" href="src/ui/styles.css?v=5" />
+<link rel="stylesheet" href="src/ui/styles.css?v=9" />
 <script type="importmap">
 {
   "imports": {
@@ -54,6 +54,10 @@
         </div>
         <p class="strap">OFF-ROAD CHAMPIONSHIP</p>
         <div class="badge-slot" id="mainBadge"></div>
+        <!-- Career strip: one step per stage, filled in by ui.js from the
+             profile. The main menu used to say nothing at all about how far
+             you had got. -->
+        <div class="main-progress" id="mainProgress"></div>
       </div>
       <nav class="main-actions">
         <button class="btn primary" data-focus data-act="main-race">RACE</button>
@@ -81,7 +85,7 @@
   <!-- ---- garage ---- -->
   <section id="scr-garage" class="screen sheet hidden">
     <header class="scr-head">
-      <div><h2>GARAGE</h2><p class="scr-sub" id="garageSub">Three cars. No wrong answers, only different mistakes.</p></div>
+      <div><h2>GARAGE</h2><p class="scr-sub" id="garageSub"></p></div>
       <div class="scr-head-right" id="garageTrack"></div>
     </header>
     <div class="scr-body"><div class="card-grid cars" id="garageGrid"></div></div>
@@ -182,6 +186,9 @@
 
   <!-- ── bottom-right: speed cluster ─────────────────────── -->
   <div class="z-speed">
+    <!-- Item slot: a sibling of the air tag inside .z-speed, so it needs no
+         grid change and is hidden with the rest of the cluster in portrait. -->
+    <div class="item-slot" id="hItem"></div>
     <div class="air-slot" id="hAir"></div>
     <div class="speedbox">
       <canvas id="hRpm" width="240" height="72" aria-hidden="true"></canvas>
@@ -224,7 +231,7 @@
 <noscript>
   <div class="overlay boot">
     <div class="boot-inner">
-      <div class="wordmark"><span class="wm-r">R</span><span>ALLYE</span></div>
+      <div class="wordmark"><span class="wm-r">R</span><span>ALLY ROAD</span><br /><span>RASH</span></div>
       <p class="strap">JavaScript is required to run this game.</p>
     </div>
   </div>

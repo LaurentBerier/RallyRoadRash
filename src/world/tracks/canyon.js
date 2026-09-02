@@ -55,9 +55,9 @@ export default {
   ],
 
   jumps: [
-    { s: 100, len: 20, h: 4.5 },                 // Mesa Launcher - 40+ m/s opening straight
+    { s: 100, len: 20, h: 4.5, name: 'MESA LAUNCHER' },  // Mesa Launcher - 40+ m/s opening straight
     { s: 250, len: 12, h: 1.6 },
-    { s: 630, len: 18, h: 3.2, gap: 24 },        // true canyon leap, ~26 m/s to clear; see header
+    { s: 630, len: 18, h: 3.2, gap: 24, name: 'THE GAP' },  // true canyon leap, ~26 m/s to clear; see header
     { s: 880, len: 13, h: 1.9 },
     { s: 1330, len: 12, h: 1.7 },
     { s: 1475, len: 13, h: 2.4 },                // rhythm double 1/2

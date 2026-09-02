@@ -67,14 +67,14 @@ export default {
                                                  //   here, so no gap: QA watched a whole field
                                                  //   overfly the corner and grind on recovery
     { s: 255, len: 14, h: 2.8 },
-    { s: 575, len: 22, h: 5.0, gap: 24 },        // CALDERA LEAP - biggest jump in the game, fired
+    { s: 575, len: 22, h: 5.0, gap: 24, name: 'CALDERA LEAP' },  // CALDERA LEAP - biggest jump in the game, fired
                                                  //   onto the falling descent straight (5 deg of
                                                  //   bend, -10 m over the flight): the ground drops
                                                  //   with the arc, so even a flat-out overfly meets
                                                  //   road - or the fissure's own up-ramp. ~23 m/s
                                                  //   to clear; chains into the fissure below
-    { s: 745, len: 18, h: 4.2, gap: 20 },        // fissure - back half of the descent double, ~21.8 m/s to clear
-    { s: 1795, len: 15, h: 3.3 }
+    { s: 745, len: 18, h: 4.2, gap: 20, name: 'THE FISSURE' },  // fissure - back half of the descent double, ~21.8 m/s to clear
+    { s: 1795, len: 15, h: 3.3, name: 'RIM ROAD' }
   ],
 
   walls: [

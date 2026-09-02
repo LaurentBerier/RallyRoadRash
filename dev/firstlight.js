@@ -26,12 +26,23 @@ async function boot() {
 
   const gen = bakeTrack(def, (p, m) => { stats.textContent = `bake ${(p * 100) | 0}% ${m || ''}`; });
   const baked = await new Promise((res) => {
-    const pump = () => {
-      const t0 = performance.now();
-      let r; do { r = gen.next(); } while (!r.done && performance.now() - t0 < 14);
-      if (r.done) res(r.value); else requestAnimationFrame(pump);
+    /* Race rAF against a timer and take whichever fires first — the same
+       trick main.js uses. A harness driven by an automation tool, or left in
+       a background tab, gets rAF at a couple of hertz, and a bake chunked at
+       14 ms a frame then takes minutes instead of seconds. */
+    const schedule = (fn) => {
+      let fired = false;
+      const go = () => { if (!fired) { fired = true; fn(); } };
+      requestAnimationFrame(go);
+      setTimeout(go, 24);
     };
-    pump();
+    const pump = () => {
+      const budget = document.hidden ? 1e9 : 14;
+      const t0 = performance.now();
+      let r; do { r = gen.next(); } while (!r.done && performance.now() - t0 < budget);
+      if (r.done) res(r.value); else schedule(pump);
+    };
+    schedule(pump);
   });
 
   const terrain = new Terrain(engine.renderer, baked, engine.quality, engine.caps, def);
@@ -46,6 +57,32 @@ async function boot() {
   const spline = terrain.spline, line = terrain.trackData.racingLine;
   const g0 = terrain.trackData.gridSlots[0];
   veh.placeAt(g0.x, g0.z, g0.yaw);
+
+  /* Debug handle. Everything the harness built, so a console (or an
+     automation tool that cannot wait out a lap) can teleport the car to a
+     set piece: FL.at(575) drops it on the caldera leap. */
+  window.FL = {
+    engine, terrain, props, sky, dust, veh, def, spline,
+    at(s, lat = 0) {
+      const p = spline.offsetPoint(spline.wrapS(s), lat, {});
+      const d = spline.dirAt(spline.wrapS(s), {});
+      veh.placeAt(p.x, p.z, Math.atan2(d.x, d.z));
+      return veh.pos.clone();
+    },
+    /* What the dressing pass actually produced, for a quick sanity read. */
+    census() {
+      const out = {};
+      props.group.traverse(o => {
+        if (!o.isMesh) return;
+        const g = o.geometry;
+        const tris = (g.index ? g.index.count : g.attributes.position.count) / 3
+          * (o.isInstancedMesh ? o.count : 1);
+        const k = o.isInstancedMesh ? `inst x${o.count}` : 'mesh';
+        out[k] = (out[k] || 0) + Math.round(tris);
+      });
+      return { draws: props.group.children.length, ...out };
+    },
+  };
 
   const _out = {}, _v = new THREE.Vector3();
   let elapsed = 0, last = performance.now(), frames = 0, ft = 0, fps = 0;

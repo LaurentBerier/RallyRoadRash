@@ -16,14 +16,21 @@
      PROVING GROUNDS   finish, any placement  ->  SUNSTRIKE CANYON  (+ tutorial done)
      SUNSTRIKE CANYON  podium (top 3)         ->  TIMBERLINE CLIMB  + RIDGEBACK
      TIMBERLINE CLIMB  podium (top 3)         ->  CALDERA RUN       + REDLINE
+     CALDERA RUN       podium (top 3)         ->  HORNET
      CALDERA RUN       win                    ->  CHAMPION
+
+   The caldera pays twice on purpose. Before the Hornet there was no reward
+   at all for a caldera podium that was not a win, which made the last track
+   in the game the only one where third place bought you nothing; now the
+   bike is the prize for getting there and the crown is still the prize for
+   winning.
    ============================================================ */
 
 export const PROFILE_VERSION = 1;
 
 /** Progression order. Index is also the championship order the UI walks. */
 export const TRACK_ORDER = ['training', 'canyon', 'forest', 'volcano'];
-export const VEHICLE_ORDER = ['hopper', 'ridgeback', 'redline'];
+export const VEHICLE_ORDER = ['hopper', 'ridgeback', 'redline', 'moto'];
 
 const TRACK_NAME = {
   training: 'PROVING GROUNDS',
@@ -34,7 +41,8 @@ const TRACK_NAME = {
 const VEHICLE_NAME = {
   hopper: 'DUNE HOPPER',
   ridgeback: 'RIDGEBACK',
-  redline: 'REDLINE'
+  redline: 'REDLINE',
+  moto: 'HORNET'
 };
 
 /* What each locked thing is waiting for. `podium` means placement <= 3. */
@@ -43,7 +51,8 @@ const REQUIREMENT = {
   forest: { track: 'canyon', podium: true },
   volcano: { track: 'forest', podium: true },
   ridgeback: { track: 'canyon', podium: true },
-  redline: { track: 'forest', podium: true }
+  redline: { track: 'forest', podium: true },
+  moto: { track: 'volcano', podium: true }
 };
 
 /** Everything a track win at `trackId` opens up. */
@@ -51,7 +60,7 @@ const REWARDS = {
   training: { tracks: ['canyon'], vehicles: [], podium: false },
   canyon: { tracks: ['forest'], vehicles: ['ridgeback'], podium: true },
   forest: { tracks: ['volcano'], vehicles: ['redline'], podium: true },
-  volcano: { tracks: [], vehicles: [], podium: true, winOnly: true }
+  volcano: { tracks: [], vehicles: ['moto'], podium: true }
 };
 
 export const CHAMPION_BANNER = 'CHAMPION OF THE CALDERA';
@@ -103,6 +112,13 @@ export function normalizeProfile(raw) {
         medal: MEDAL_RANK[r.medal] ? r.medal : null,
         bestTotal: numOrNull(r.bestTotal),
         bestLap: numOrNull(r.bestLap),
+        /* Was this record set with power-ups on? The two records improve
+           independently, so they carry independent flags. MANDATORY here:
+           normalizeProfile is a strict whitelist and silently drops anything
+           it does not name, so a field missing from this list is a field that
+           never survives a reload. */
+        itemsTotal: !!r.itemsTotal,
+        itemsLap: !!r.itemsLap,
         wins: Math.max(0, r.wins | 0),
         plays: Math.max(0, r.plays | 0)
       };
@@ -151,7 +167,10 @@ export function lockHintFor(id) {
 /** Blank record row, so callers never have to null-check the table. */
 export function recordFor(profile, trackId) {
   const r = profile && profile.results ? profile.results[trackId] : null;
-  return r || { medal: null, bestTotal: null, bestLap: null, wins: 0, plays: 0 };
+  return r || {
+    medal: null, bestTotal: null, bestLap: null, wins: 0, plays: 0,
+    itemsTotal: false, itemsLap: false,
+  };
 }
 
 /**
@@ -177,11 +196,14 @@ export function nextTrackFor(profile) {
  * @param placement  1-based finishing position (6 = last, or a DNF)
  * @param total      total race time in seconds, or null/Infinity for a DNF
  * @param bestLap    best lap in seconds, or null
+ * @param itemsOn    true if power-ups were enabled — flags any record set,
+ *                   so the board can say so. Trailing and optional: every
+ *                   existing caller, including the check suites, still works.
  * @returns {{profile, unlocks:string[], medal:string|null, newRecord:{total?:number,lap?:number}}}
  *          `unlocks` are ready-to-show banner strings; `newRecord` carries the
  *          NEW time for each record that improved, and is empty otherwise.
  */
-export function applyResult(profile, trackId, placement, total, bestLap) {
+export function applyResult(profile, trackId, placement, total, bestLap, itemsOn) {
   const p = cloneProfile(normalizeProfile(profile));
   const unlocks = [];
   const newRecord = {};
@@ -192,15 +214,18 @@ export function applyResult(profile, trackId, placement, total, bestLap) {
 
   /* ---- records ---- */
   const rec = p.results[trackId] ||
-    (p.results[trackId] = { medal: null, bestTotal: null, bestLap: null, wins: 0, plays: 0 });
+    (p.results[trackId] = {
+      medal: null, bestTotal: null, bestLap: null, wins: 0, plays: 0,
+      itemsTotal: false, itemsLap: false,
+    });
   rec.plays++;
   if (pos === 1 && finished) rec.wins++;
   if (finished && (rec.bestTotal == null || total < rec.bestTotal)) {
-    rec.bestTotal = total; newRecord.total = total;
+    rec.bestTotal = total; newRecord.total = total; rec.itemsTotal = !!itemsOn;
   }
   const bl = numOrNull(bestLap);
   if (bl != null && (rec.bestLap == null || bl < rec.bestLap)) {
-    rec.bestLap = bl; newRecord.lap = bl;
+    rec.bestLap = bl; newRecord.lap = bl; rec.itemsLap = !!itemsOn;
   }
   // A silver never demotes an earlier gold — the medal is the best you ever did.
   if (medal && (MEDAL_RANK[medal] || 0) > (MEDAL_RANK[rec.medal] || 0)) rec.medal = medal;
@@ -211,7 +236,7 @@ export function applyResult(profile, trackId, placement, total, bestLap) {
 
   if (trackId === 'training' && finished && !p.tutorialDone) p.tutorialDone = true;
 
-  if (reward && earned && !reward.winOnly) {
+  if (reward && earned) {
     for (const t of reward.tracks) {
       if (p.unlockedTracks.indexOf(t) < 0) {
         p.unlockedTracks.push(t);

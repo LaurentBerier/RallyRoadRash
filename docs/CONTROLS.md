@@ -11,7 +11,8 @@ debounce).
 | Throttle | W or ↑ |
 | Brake / reverse | S or ↓ (brakes while rolling forward, reverses from rest) |
 | Steer | A / D or ← / → |
-| Handbrake (drift) | Space |
+| Handbrake (drift / charge mini-turbo) | Space |
+| Fire power-up | F (hold reverse to fire it backwards) |
 | Reset to track | R — HOLD for ~0.8 s (ring fills on the HUD) |
 | Camera (chase/hood) | C |
 | Pause | Esc |
@@ -25,6 +26,7 @@ debounce).
 | Steer | Left stick X |
 | Throttle / brake | Right / left trigger |
 | Handbrake | A (button 0) |
+| Fire power-up | X (button 2) |
 | Reset (hold) | B (button 1) |
 | Camera | Y (button 3) |
 | Pause | Start (button 9) |
@@ -35,8 +37,9 @@ debounce).
 - **Steering pad** — bottom-left horizontal slider with centre detent; drag
   the nub. Absolute position → steering angle.
 - **GAS / BRAKE pedals** — right edge, stacked; BRAKE reverses from rest.
-- **DRIFT** (hold) · **RESET** (hold) · **CAM** · **⏸** — round buttons
-  between pad and pedals. Every target ≥64 px, multitouch-safe, no tap delay.
+- **DRIFT** (hold) · **FIRE** · **RESET** (hold) · **CAM** · **⏸** — round
+  buttons between pad and pedals. Every target ≥60 px, multitouch-safe, no tap
+  delay. (Portrait packs five into one column at 60 px; landscape uses two.)
 - Controls appear automatically once the screen is touched (Settings →
   TOUCH CONTROLS = AUTO/ON/OFF). Portrait works; landscape is the intended
   layout and a one-time toast says so.
@@ -46,5 +49,25 @@ debounce).
 There is no in-game remapper in v1. All keyboard bindings are read in
 `Input.poll()` (`src/core/input.js`, the `down('KeyW', 'ArrowUp')`-style
 lines) and the race-action keys (`KeyR`, `KeyC`, `Escape`, `KeyM`) are
-polled by `race.js`/`main.js` via `input.hit()/down()` — grep for the code
+polled by `race.js`/`main.js` via `input.hit()/down()` (`KeyF` is an edge) — grep for the code
 you want to move; each binding appears exactly once.
+
+## Drifting, boosting and power-ups
+
+**Mini-turbo.** Hold DRIFT through a corner. Once the car is genuinely
+sideways the tyre dust changes colour — cyan, then orange, then violet — and
+releasing DRIFT fires a boost of that tier. A throttle slide charges too, at
+a wider slip angle, so you can bank a tier without ever touching the
+handbrake. Spinning out cancels the charge. Mini-turbo is part of the
+handling model and is always available.
+
+**Power-ups.** Drive through a hovering box to roll an item; the HUD slot
+under the speedometer shows what you got. FIRE uses it. Holding reverse as
+you fire sends a shot backwards instead of forwards. You can only hold one
+item at a time, so a box you drive through with a full slot is wasted.
+
+What you roll depends on where you are: the leader draws defensive items
+almost exclusively, and the back of the field draws the two specials that
+can rescue a race. Settings → POWER-UPS turns the whole item system off for
+a clean time attack; records set with items on are flagged with a ⚡ on the
+stage card so the two are never compared.

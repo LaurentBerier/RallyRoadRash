@@ -24,6 +24,14 @@ import { makeCloudSprite, makeSmokeSprite } from './textures.js';
    sunDir is a unit vector, written out to six places from
        (cos(el)cos(az), sin(el), cos(el)sin(az))
    with the elevation/azimuth noted per theme. Y is up, world is XZ.
+
+   `grade` is the per-stage colour grade, read by engine.setLightTheme and
+   applied in the final pass just before tone mapping. It is NOT exposure:
+   feel.js owns uExposure, holds it at exactly 1.0 and dips it on landings,
+   and dev/camera-check gates that it comes back. This is the stage's own
+   key, and it is what stops four different times of day all resolving to the
+   same washed-out mid-grey after ACES. All four are pulls, never pushes —
+   tone mapping already has all the highlight it can use.
    ============================================================ */
 export const SKY_THEMES = {
   /* clean noon over an empty airfield: flat light, nothing to misread */
@@ -37,7 +45,8 @@ export const SKY_THEMES = {
     cloudAmount: 0.55, cloudTint: 0xffffff, cloudShade: 0x93a8c2,
     cloudY: 1250, cirrus: 0.35,
     sunDiscColor: 0xfff8ee, sunAngDeg: 1.1, haloStrength: 0.55, sunGlow: 1.0,
-    fogHint: 0.00050
+    fogHint: 0.00050,
+    grade: [0.88, 0.90, 0.93]
   },
 
   /* late afternoon in the red rock — long shadows, warm dust in the air */
@@ -51,7 +60,8 @@ export const SKY_THEMES = {
     cloudAmount: 0.62, cloudTint: 0xffe6cc, cloudShade: 0xa08498,
     cloudY: 1500, cirrus: 0.55,
     sunDiscColor: 0xfff0d2, sunAngDeg: 1.6, haloStrength: 0.95, sunGlow: 1.25,
-    fogHint: 0.00068
+    fogHint: 0.00068,
+    grade: [0.98, 0.90, 0.82]
   },
 
   /* mountain morning: the sun still low behind the ridge, mist in the valleys */
@@ -65,7 +75,8 @@ export const SKY_THEMES = {
     cloudAmount: 1.00, cloudTint: 0xf6f0e6, cloudShade: 0x8e9aa6,
     cloudY: 900, cirrus: 0.30,
     sunDiscColor: 0xfff2d8, sunAngDeg: 1.4, haloStrength: 1.10, sunGlow: 1.15,
-    fogHint: 0.00105
+    fogHint: 0.00105,
+    grade: [0.82, 0.86, 0.84]
   },
 
   /* caldera dusk: the sun is a coin behind the ash, the horizon glows on its own */
@@ -80,6 +91,7 @@ export const SKY_THEMES = {
     cloudY: 1100, cirrus: 0.25,
     sunDiscColor: 0xff9a52, sunAngDeg: 3.4, haloStrength: 1.35, sunGlow: 0.85,
     fogHint: 0.00130,
+    grade: [1.00, 0.90, 0.86],
     // ash + the thing making it: a plume off the caldera, downwind of the track
     ash: 0.85, ashColor: 0x3a2a2a, emberColor: 0xff4a12, emberGlow: 0.9,
     plume: { dir: { x: -0.62, z: 0.78 }, dist: 3400, baseY: 120, height: 2600, count: 1.0 }

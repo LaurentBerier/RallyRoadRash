@@ -42,7 +42,7 @@ const AS = { BOOT: 0, MENU: 1, TRACKS: 2, GARAGE: 3, LOADING: 4, RACE: 5 };
    UI can edit has a default here; anything not here is not a setting. */
 const DEFAULTS = {
   quality: 'high', fov: 58, sens: 1.0, invertY: false,
-  volSfx: 0.8, volMusic: 0.6, music: true,
+  volSfx: 0.8, volMusic: 0.6, music: true, items: true,
   camMode: 0, hudScale: 1, grain: 0.35, autoCentre: 1, showTouch: 'auto'
 };
 
@@ -187,6 +187,14 @@ function applySetting(key, value) {
       S.showTouch = value;
       if (App.input.setTouchMode) App.input.setTouchMode(value);
       break;
+    /* Live, so a toggle from the pause screen takes effect on the next
+       corner rather than the next race. The catch-all below would persist it
+       correctly but would not reach the running race. */
+    case 'items':
+      S.items = !!value;
+      if (App.race) App.race.setItemsEnabled(S.items);
+      break;
+
     default: S[key] = value; break;
   }
   persist();
@@ -245,7 +253,8 @@ function trackList() {
     return {
       id: t.id, name: t.name, tagline: t.tagline, laps: t.laps,
       locked, lockHint: locked ? lockHintFor(t.id) : '',
-      medal: rec.medal, best: rec.bestTotal, bestLap: rec.bestLap
+      medal: rec.medal, best: rec.bestTotal, bestLap: rec.bestLap,
+      bestItems: !!rec.itemsTotal, bestLapItems: !!rec.itemsLap
     };
   });
 }
@@ -338,6 +347,7 @@ function startRace(trackId, vehicleId) {
       props: App.world.props, dust: App.world.dust,
       trackDef: def, trackData: App.world.terrain.trackData,
       vehicleSpec: spec, difficulty: difficultyFor(def),
+      items: App.settings.items !== false,
       profile: App.profile,
       onExit: quitToMenu,
       onProfile: (p) => { App.profile = p; },

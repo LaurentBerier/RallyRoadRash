@@ -459,10 +459,16 @@ head('g  progression: unlocks, medals, records');
   eq(isVehicleUnlocked(p, 'redline'), true, 'and the redline');
   eq(p.champion, false, 'not champion yet');
 
-  // volcano podium is not enough — only the win crowns you
+  /* The caldera pays twice: a podium hands over the Hornet, and only an
+     outright win crowns you. Before the bike existed, third at the last track
+     in the game bought absolutely nothing. */
+  eq(isVehicleUnlocked(p, 'moto'), false, 'the hornet starts locked');
+  ok(lockHintFor('moto').includes('CALDERA RUN'), 'hornet hint names the caldera');
   r = applyResult(p, 'volcano', 2, 350, 110);
   p = r.profile;
   eq(p.champion, false, 'second at the caldera is not the championship');
+  eq(isVehicleUnlocked(p, 'moto'), true, 'but a caldera podium does unlock the hornet');
+  ok(r.unlocks.some(u => u.includes('HORNET')), 'and says so');
 
   r = applyResult(p, 'volcano', 1, 344, 108);
   p = r.profile;

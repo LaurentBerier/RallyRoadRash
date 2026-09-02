@@ -16,7 +16,7 @@ One vendored library: three.js.
 
 </div>
 
-> Six cars, four stages, one championship. Pick a machine, learn the dirt,
+> Four machines, four stages, one championship. Pick a ride, learn the dirt,
 > jump the gap everyone else drives around — and take the caldera.
 
 RALLY ROAD RASH is a complete small racing game: a physics-driven player car and five
@@ -45,8 +45,22 @@ There is nothing to install: `npm start` runs the zero-dependency
   a 15 m gap jump and a slot-canyon shortcut), TIMBERLINE CLIMB (mud, pines,
   a 58 m climb, wooden ramps, a high-route shortcut), CALDERA RUN (rock,
   lava fissures, the biggest air in the game).
-- **3 vehicles** — DUNE HOPPER (sport side-by-side, friendly), RIDGEBACK
-  (two-tonne truck, planted), REDLINE (cab-forward wedge, 41 m/s and lively).
+- **4 machines** — DUNE HOPPER (sport side-by-side, friendly), RIDGEBACK
+  (two-tonne truck, planted), REDLINE (cab-forward wedge, 45 m/s and lively)
+  and the HORNET — a 245 kg motocross 450 that out-accelerates and out-jumps
+  everything on the grid, and loses every argument it has with one.
+- **Drift for boost** — hold the handbrake through a corner and the tyre
+  dust turns cyan, then orange, then violet. Let go and you get a
+  mini-turbo of that tier. A throttle slide charges too, at a wider slip
+  angle, so the AI does it as well.
+- **Power-ups** — hovering boxes on the racing line hand out seven items:
+  NITRO and TRIPLE NITRO, a bouncing SPARE WHEEL, a dropped OIL SLICK, a
+  homing TOW LINE, and two that only the back of the field can draw — a
+  ROCKET SLED that flies you up the order and a DUST STORM that blinds
+  everyone ahead. Distribution is rubber-banded hard: the leader draws
+  defence and nothing else. Settings → POWER-UPS turns the lot off for a
+  clean time attack, and records set with them on are flagged ⚡ so the
+  two are never compared.
 - **Progression** — finish the tutorial to open the canyon; podium each stage
   to open the next and unlock the next machine; win the caldera to be
   champion. Medals, best totals and best laps are saved locally.
@@ -61,7 +75,8 @@ There is nothing to install: `npm start` runs the zero-dependency
 |---|---|---|---|
 | Throttle / brake-reverse | W / S (or ↑ / ↓) | RT / LT | GAS / BRAKE pedals |
 | Steer | A / D (or ← / →) | Left stick | Steering pad |
-| Handbrake (drift) | Space | A | DRIFT (hold) |
+| Handbrake (drift / charge boost) | Space | A | DRIFT (hold) |
+| Fire power-up | F | X | FIRE |
 | Reset to track (hold) | R | B | RESET (hold) |
 | Camera | C | Y | CAM |
 | Pause | Esc | Start | ⏸ |
@@ -84,6 +99,13 @@ simulator. Airborne, you get limited pitch/yaw authority and a soft
 self-alignment that saves the landing you nearly made — not the one you
 botched.
 
+The kart layer sits on top of that rather than inside it. A mini-turbo is
+two multipliers on motor force and the top-speed denominator; a spin-out is
+the handbrake the game already had, held for you; a dust storm is the same
+top-speed multiplier running backwards, so a slowed car sheds speed on aero
+honestly instead of being teleported down to a number. Nothing in this
+layer knows what a tyre is, and the solver has no idea any of it exists.
+
 The terrain is baked once per stage into float heightfield textures that the
 GPU renders (geometry clipmap) and the physics reads back **byte-for-byte** —
 wheels and pixels never disagree. The road is carved into the field along a
@@ -104,6 +126,7 @@ src/
     engine.js         renderer, quality tiers, pixel budget, composer
     input.js          keyboard / gamepad / touch, input-method detection
     audio.js          procedural WebAudio: engine synth, surfaces, music
+    audio-items.js    power-up and mini-turbo cues
     rng.js            deterministic noise shared by bake and runtime
     save.js           localStorage (profile + settings)
   world/
@@ -111,16 +134,20 @@ src/
     track.js          spline, checkpoints, grid, racing line (Node-testable)
     tracks/           the four stage definitions (pure data)
     surfaces.js       the surface table (grip/drag/sink/dust/skid)
-    props.js          rocks, trees, gates, barriers + colliders
+    props.js          scatter, landmarks, camps, jump furniture + colliders
+    kit.js            procedural set dressing (structures, foliage, junk)
     sky.js            per-theme skies, clouds, IBL
     dust.js           pooled atmospheric dust / clods / embers
   game/
     config.js         THE tuning file (gravity, assists, reset rules…)
     vehicle.js        rigid body + wheels + procedural car builds
-    vehicles.js       the three car specs (pure data)
+    vehicles.js       the four machine specs (pure data)
     racecore.js       positions, laps, checkpoints (pure logic)
     race.js           race session: countdown → results
     progression.js    unlocks, medals, records (pure logic)
+    miniturbo.js      drift -> boost state machine (pure)
+    items.js          power-up table + rubber-banded roulette (pure)
+    itemworld.js      boxes, projectiles, hazards, effects
     ai.js             AI drivers (pure math)
     camera.js         chase/hood/orbit rig
     feel.js           shake, kicks, vignette — one juice budget
@@ -128,8 +155,11 @@ src/
     ui.js             screens: menu, stages, garage, settings, results
     hud.js            position/lap/times, minimap, countdown, banners
     styles.css        responsive layout, touch-safe, one scale knob
-tests/                node:test suite (runs the five deep check suites)
-dev/                  headless check suites + browser harness (firstlight)
+tests/                node:test suite (runs the eight deep check suites)
+dev/                  headless check suites + browser harnesses
+                        firstlight.html  a whole stage, auto-driven
+                        garage.html      one machine on a pad, no bake
+                        qa-drive.js      AI-driven race sweep, in-page
 docs/                 architecture, integration notes, tuning, QA report
 vendor/three/         three.js r160 (MIT)
 ```
@@ -137,7 +167,8 @@ vendor/three/         three.js r160 (MIT)
 ## Development
 
 ```bash
-npm test          # ~300 assertions: geometry, physics gates, AI, race logic
+npm test          # ~700 assertions: geometry, physics gates, AI, race logic,
+                  # mini-turbo, power-up balance
 node server.js 5490   # dev server
 ```
 
