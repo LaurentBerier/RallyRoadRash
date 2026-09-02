@@ -1,0 +1,26 @@
+{
+  "sky/training": { "url": "sky/training-skyline.jpg", "kind": "color" },
+  "sky/canyon": { "url": "sky/canyon-skyline.jpg", "kind": "color" },
+  "sky/forest": { "url": "sky/forest-skyline.jpg", "kind": "color" },
+  "sky/volcano": { "url": "sky/volcano-skyline.jpg", "kind": "color" },
+  "sky/thunder": { "url": "sky/thunder-skyline.jpg", "kind": "color" },
+
+  "ground": {
+    "kind": "layers",
+    "layers": [
+      "ground/dirt.jpg",
+      "ground/sand.jpg",
+      "ground/rock.jpg",
+      "ground/mud.jpg",
+      "ground/grass.jpg",
+      "ground/road.jpg"
+    ]
+  },
+
+  "art/training": { "url": "art/training.jpg", "kind": "color" },
+  "art/canyon": { "url": "art/canyon.jpg", "kind": "color" },
+  "art/forest": { "url": "art/forest.jpg", "kind": "color" },
+  "art/volcano": { "url": "art/volcano.jpg", "kind": "color" },
+  "art/thunder": { "url": "art/thunder.jpg", "kind": "color" },
+  "art/title": { "url": "art/title.jpg", "kind": "color" }
+}
