@@ -1,14 +1,19 @@
 /* ============================================================
-   RALLY ROAD RASH — screens (boot, menu, stage select, garage, settings, pause,
-   results) and the focus manager that makes all of them drivable with a
-   keyboard, a gamepad d-pad or a thumb.
+   RALLY ROAD RASH — screens (boot, menu, stage select, garage, playbook,
+   settings, pause, results) and the focus manager that makes all of them
+   drivable with a keyboard, a gamepad d-pad or a thumb.
 
    Contract: docs/INTEGRATION-NOTES.md "UI facade — src/ui/ui.js".
      new UI(save) · boot(p,msg) · bootDone() · show(screen,data) ·
      hide(screen?) · on(fn) · setInputMethod(m)
-   ADDITION (flagged for T5): setAudio(audio) — the facade contract has no
-   audio in the constructor, but every press wants a click. Call it once
-   after audio.init(); until then the UI is silently mute.
+   ADDITIONS (flagged for the lead):
+     setAudio(audio)   — the facade contract has no audio in the constructor,
+                         but every press wants a click. Call it once after
+                         audio.init(); until then the UI is silently mute.
+     setAssets(assets) — core/assets.js's handle, for the stage key art on the
+                         cards and the loading screen. NEVER required: with no
+                         handle, or with the usual empty one, every screen
+                         draws the procedural art it always did.
 
    Three rules hold everywhere in here:
      1. Never throw on missing data. Every field is optional; screens fall
@@ -18,13 +23,24 @@
         only the actions the race flow must act on. It also emits a
         {type:'nav', to} hint so main.js can keep its state machine in sync.
      3. Settings apply live. There is no apply button and no cancel.
+
+   The canvas drawing that used to live at the bottom of this file is now
+   ui/cards.js, ui/logo.js and ui/icons.js; the how-to-play copy is
+   ui/playbook.js. This file is screens, data and focus.
    ============================================================ */
 import { TRACKS } from '../world/tracks/index.js';
 import { VEHICLES, statBars } from '../game/vehicles.js';
+import { drawStage, drawCar, stageChips, toCss, artImage } from './cards.js';
+import { paintLogos } from './logo.js';
+import { paintIcons } from './icons.js';
+import { PLAYBOOK_TABS, playbookHTML } from './playbook.js';
 
 const $ = (id) => document.getElementById(id);
 
-const SCREENS = ['main', 'tracks', 'garage', 'settings', 'pause', 'results'];
+const SCREENS = ['main', 'tracks', 'garage', 'playbook', 'settings', 'pause', 'results'];
+/* Screens that put a menu backdrop behind themselves. PAUSE and RESULTS sit
+   over a live race, so the hero must stay out of the way there. */
+const HERO_SCREENS = { main: 1, tracks: 1, garage: 1, playbook: 1, settings: 1 };
 
 /* Settings schema. `key` matches the settings-keys contract exactly; the UI
    never invents a key and never writes storage itself — it emits and T5 saves. */
@@ -59,24 +75,40 @@ const SETTINGS_SPEC = [
     type: 'seg', opts: [[0, 'OFF'], [0.35, 'LOW'], [1, 'FULL']], def: 0.35 },
   { key: 'showTouch', label: 'TOUCH CONTROLS', hint: 'AUTO shows them only after you touch the screen.',
     type: 'seg', opts: [['auto', 'AUTO'], ['on', 'ON'], ['off', 'OFF']], def: 'auto' },
+  /* Wave-6 additions (ARCHITECTURE §6.10). motionFx is the one that buys
+     frames: at 0 the menu backdrop is a still picture instead of a live
+     scene, which is the right default on a phone that is already deciding
+     whether it can hold 30 fps in the race. */
+  { key: 'motionFx', label: 'MENU MOTION', hint: 'Live 3D behind the menus. Turn it off on a warm phone.',
+    type: 'seg', opts: [[0, 'OFF'], [0.5, 'LOW'], [1, 'FULL']], def: 1 },
+  { key: 'tips', label: 'FIRST-RUN TIPS', hint: 'One-line cards the first time something new happens.',
+    type: 'seg', opts: [[false, 'OFF'], [true, 'ON']], def: true },
+  { key: 'trickAssist', label: 'TRICK ASSIST', hint: 'How much the game helps you land what you threw.',
+    type: 'seg', opts: [[0, 'OFF'], [1, 'SOME'], [2, 'FULL']], def: 1 },
 ];
 
-/* Controls reference, one table per input method. */
+/* Controls reference, one table per input method.
+   FIRE was missing from all three of these — the game shipped a whole item
+   system and never told anybody which button throws one. The playbook's
+   CONTROLS tab renders these same tables and adds the air-control rows. */
 const BINDINGS = {
   kb: [
     ['Throttle / reverse', 'W S  or  ↑ ↓'], ['Steer', 'A D  or  ← →'],
-    ['Handbrake (drift)', 'SPACE'], ['Reset to track', 'hold R'],
+    ['Handbrake (drift)', 'SPACE'], ['Fire power-up', 'F'],
+    ['Barrel roll (in air)', 'Q / E'], ['Reset to track', 'hold R'],
     ['Camera', 'C'], ['Pause', 'ESC'], ['Mute', 'M'], ['Look around', 'right-drag'],
   ],
   pad: [
     ['Throttle / brake', 'RT / LT'], ['Steer', 'left stick'],
-    ['Handbrake (drift)', 'A'], ['Reset to track', 'hold B'],
+    ['Handbrake (drift)', 'A'], ['Fire power-up', 'X'],
+    ['Barrel roll (in air)', 'LB / RB'], ['Reset to track', 'hold B'],
     ['Camera', 'Y'], ['Pause', 'START'], ['Look around', 'right stick'],
     ['Menus', 'd-pad + A, B = back'],
   ],
   touch: [
     ['Steer', 'left slider pad'], ['Throttle', 'GAS pedal'],
     ['Brake / reverse', 'BRAKE pedal'], ['Handbrake (drift)', 'DRIFT'],
+    ['Fire power-up', 'FIRE'], ['Barrel roll (in air)', 'DRIFT + steer'],
     ['Reset to track', 'hold RESET'], ['Camera', 'CAM'], ['Pause', 'II'],
   ],
 };
@@ -103,28 +135,30 @@ function nameHue(name) {
   for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
   return ((h >>> 0) % 360);
 }
-function toCss(c, fallback) {
-  if (typeof c === 'number') return '#' + (c >>> 0 & 0xffffff).toString(16).padStart(6, '0');
-  if (typeof c === 'string' && c) return c;
-  return fallback;
-}
 
 export class UI {
   constructor(save) {
     this.save = save || null;
     this.audio = null;
+    this.assets = null;               // core/assets.js handle; null is normal
     this._cb = null;
     this._cur = null;                 // active screen name or null
     this._returnTo = 'main';          // where SETTINGS backs out to
+    this._playbookFrom = 'main';      // and where the PLAYBOOK does
+    this._tab = 0;                    // playbook tab index
     this._method = 'kb';
     this._data = {};                  // last payload per screen, so the UI can re-show itself
     this._sel = { trackId: null, vehicleId: null };
     this._pending = new Map();        // coalesced range emits
     this._flushT = 0;
+    this._artSrc = '';                // last loading-screen art, so we set it once
 
     this.el = {
-      boot: $('boot'), bootBar: $('bootBar'), bootMsg: $('bootMsg'),
+      boot: $('boot'), bootBar: $('bootBar'), bootMsg: $('bootMsg'), bootArt: $('bootArt'),
+      hero: $('hero'), heroArt: $('heroArt'),
       screens: $('screens'),
+      playbookTabs: $('playbookTabs'), playbookBody: $('playbookBody'),
+      playbookHint: $('playbookHint'),
       mainBadge: $('mainBadge'), mainHints: $('mainHints'), mainProgress: $('mainProgress'),
       garageSub: $('garageSub'),
       trackGrid: $('trackGrid'), tracksNote: $('tracksNote'), tracksNext: $('tracksNext'),
@@ -187,7 +221,20 @@ export class UI {
 
     this._buildSettings();
     this._buildControls();
+    this._buildPlaybook();
     this._maybeRotateToast();
+
+    /* The wordmark is a canvas now (ui/logo.js) rather than a heavy system
+       font that is not heavy everywhere, so it has to be repainted whenever
+       its box changes size. Coalesced onto one timer: a drag-resize fires
+       this a hundred times and each paint is a full canvas clear. */
+    this._onResize = () => {
+      if (this._logoT) return;
+      this._logoT = setTimeout(() => { this._logoT = 0; paintLogos(document); }, 90);
+    };
+    addEventListener('resize', this._onResize);
+    addEventListener('orientationchange', this._onResize);
+    paintLogos(document);
   }
 
   /* ---------------- ADDITION: audio, injected late ---------------- */
@@ -207,6 +254,38 @@ export class UI {
     }
   }
   _sfx(kind) { try { if (this.audio && this.audio.ui) this.audio.ui(kind); } catch { /* never break the UI for a click */ } }
+
+  /* ---------------- ADDITION: optional key art ----------------
+     `assets.get(id)` returns null on a normal install and that is the case
+     everything here is written for. Passing a handle upgrades the stage
+     cards and the loading screen; passing nothing, or never calling this at
+     all, leaves both exactly as they were. */
+  setAssets(assets) {
+    this.assets = assets && typeof assets.get === 'function' ? assets : null;
+    if (this._cur === 'tracks') this._renderTracks(this._data.tracks || {});
+  }
+
+  /** The texture for a stage's key art, or null. */
+  _stageArt(trackId) {
+    return this.assets && trackId ? this.assets.get('art/' + trackId) : null;
+  }
+
+  /**
+   * Put the stage's key art behind the bake bar. Idempotent and cheap: the
+   * background-image is only written when the URL actually changes.
+   * With no art the layer stays empty and the loading screen is the gradient
+   * it has always been.
+   */
+  setLoadingArt(trackId) {
+    const el = this.el.bootArt;
+    if (!el) return;
+    const img = artImage(this._stageArt(trackId || this._sel.trackId));
+    const src = img && img.nodeName === 'IMG' ? img.src : '';
+    if (src === this._artSrc) return;
+    this._artSrc = src;
+    el.style.backgroundImage = src ? `url("${src}")` : '';
+    el.classList.toggle('on', !!src);
+  }
 
   /* ---------------- settings storage ---------------- */
   _readSettings() {
@@ -231,9 +310,20 @@ export class UI {
   /* ============================================================
      BOOT
      ============================================================ */
-  boot(p01, msg) {
+  /** @param trackId optional — which stage's key art to show behind the bar. */
+  boot(p01, msg, trackId) {
     const b = this.el.boot;
-    if (b) b.classList.remove('hidden');
+    if (b) {
+      const first = b.classList.contains('hidden');
+      b.classList.remove('hidden');
+      // The logo canvas measures 0 while the screen is hidden, so it cannot
+      // paint until it is shown. First reveal = first honest measurement.
+      if (first) paintLogos(b);
+    }
+    /* The UI's own selection is the authority for which stage is loading —
+       the player picked it on the tracks screen — so the lead does not have
+       to pass one, and a `nextTrack` flow that does pass one still wins. */
+    this.setLoadingArt(trackId || this._sel.trackId);
     if (this.el.bootBar) this.el.bootBar.style.width = `${clamp01(+p01 || 0) * 100}%`;
     if (this.el.bootMsg && msg != null && msg !== this._bootMsg) {
       this._bootMsg = msg; this.el.bootMsg.textContent = String(msg);
@@ -259,14 +349,19 @@ export class UI {
     if (this.el.screens) this.el.screens.classList.remove('hidden');
     document.body.classList.add('ui-open');     // input.js reads this to route d-pad to menus
     this._cur = screen;
+    this._syncHero();
 
     if (screen === 'main') this._renderMain(d);
     else if (screen === 'tracks') this._renderTracks(d);
     else if (screen === 'garage') this._renderGarage(d);
+    else if (screen === 'playbook') this._renderPlaybook();
     else if (screen === 'settings') this._renderSettings(d);
     else if (screen === 'pause') this._renderPause(d);
     else if (screen === 'results') this._renderResults(d);
 
+    // Canvases measure 0 while their screen is hidden; now that it is not,
+    // the wordmark can size itself honestly.
+    paintLogos(this.scr[screen] || document);
     this._collectFocus();
   }
 
@@ -284,6 +379,18 @@ export class UI {
       document.body.classList.remove('ui-open');
       this._focus = []; this._fi = -1;
     }
+    this._syncHero();
+  }
+
+  /* The hero layer is shown for menu screens and hidden for PAUSE, RESULTS
+     and no-screen (a race). It carries the CSS fallback on its own, so the
+     right-hand half of the plate looks deliberate whether or not the lead has
+     wired ui/menuscene.js yet — menuscene sets body.menu3d, which makes this
+     layer transparent so the live scene shows through instead. */
+  _syncHero() {
+    const el = this.el.hero;
+    if (!el) return;
+    el.classList.toggle('hidden', !(this._cur && HERO_SCREENS[this._cur]));
   }
 
   /** 'kb' | 'pad' | 'touch' — swaps prompt glyphs and the controls reference. */
@@ -295,6 +402,7 @@ export class UI {
     document.body.classList.add('im-' + m);
     this._renderHints();
     this._buildControls();
+    if (this._cur === 'playbook') this._renderPlaybook();
   }
 
   /* ============================================================
@@ -316,6 +424,11 @@ export class UI {
    * progress, so a returning player had to walk into STAGE SELECT to find out
    * where they were — and the RACE button said the same thing on the first
    * run as on the last. Both are fixed here, from data main.js already sends.
+   *
+   * BONUS STAGES ARE SKIPPED. THUNDER PARK is unlocked by the championship
+   * and is not part of it (progression.js EXTRA_TRACKS), so putting it in the
+   * chain would make the strip say "1 of 5 medalled" to a player who has in
+   * fact finished the game.
    */
   _renderProgress(d) {
     const el = this.el.mainProgress;
@@ -323,9 +436,11 @@ export class UI {
     const prof = d.progression || d.profile || null;
     const recs = d.records || (prof && prof.results) || {};
     const unlocked = (prof && prof.unlockedTracks) || ['training'];
-    let done = 0, opened = 0;
+    let done = 0, opened = 0, chain = 0;
     const parts = [];
     for (const t of TRACKS) {
+      if (t.bonus) continue;
+      chain++;
       const open = unlocked.indexOf(t.id) >= 0;
       const medal = open && recs[t.id] ? recs[t.id].medal : null;
       if (open) opened++;
@@ -335,7 +450,7 @@ export class UI {
         `<i></i><em>${esc(t.name)}</em></span>`);
     }
     el.innerHTML = `<div class="prog-row">${parts.join('')}</div>` +
-      `<p class="prog-note">${done ? `${done} of ${TRACKS.length} stages medalled` :
+      `<p class="prog-note">${done ? `${done} of ${chain} stages medalled` :
         opened > 1 ? 'Championship in progress' : 'New championship'}</p>`;
     // The primary action tells you which it is: a first run or a continuation.
     const race = this.el.screens && this.el.screens.querySelector('[data-act="main-race"]');
@@ -359,7 +474,9 @@ export class UI {
     if (Array.isArray(d.tracks) && d.tracks.length) return d.tracks;
     // Fallback: the static registry, everything open. Keeps the menu alive if
     // the race flow has not pushed progression yet.
-    return TRACKS.map(t => ({ id: t.id, name: t.name, tagline: t.tagline, laps: t.laps, locked: false }));
+    return TRACKS.map(t => ({
+      id: t.id, name: t.name, tagline: t.tagline, laps: t.laps, bonus: !!t.bonus, locked: false
+    }));
   }
 
   _renderTracks(d) {
@@ -389,8 +506,14 @@ export class UI {
              <span><em>LAP</em>${fmtTime(t.bestLap)}${t.bestLapItems ? ITEM_FLAG : ''}</span>
            </div>` : '';
       const def = TRACKS.find(x => x.id === t.id) || null;
-      const jumps = def ? (def.jumps || []) : [];
-      const big = jumps.filter(j => j.gap || j.h >= 3.0).length;
+      /* The chip row is derived from the track schema, so a wave-6 stage that
+         declares banks, whoops, pads, routes, a difficulty and named set
+         pieces advertises all of them, and a stage written before §6.1 lands
+         produces exactly the chips this card had before. */
+      const chips = def ? stageChips(def) : [];
+      if (t.locked && t.lockHint) chips.push({ text: t.lockHint, kind: 'info' });
+      const bonus = !!(t.bonus || (def && def.bonus));
+      b.classList.toggle('bonus', bonus);
       b.innerHTML = `
         <div class="pick-top">
           <span class="pick-name">${esc(t.name || t.id)}</span>
@@ -398,18 +521,15 @@ export class UI {
         </div>
         <canvas class="stage-art" width="440" height="252" aria-hidden="true"></canvas>
         <div class="pick-tag">${esc(t.tagline || '')}</div>
-        <div class="pick-meta">
-          <span class="chip">${laps} LAP${laps > 1 ? 'S' : ''}</span>
-          ${def ? `<span class="chip">${Math.round(splineLength(def.path) / 100) / 10} KM</span>` : ''}
-          ${big ? `<span class="chip info">${big} BIG AIR</span>` : ''}
-          ${def && def.shortcut ? `<span class="chip info">SHORTCUT</span>` : ''}
-          ${t.locked && t.lockHint ? `<span class="chip info">${esc(t.lockHint)}</span>` : ''}
-        </div>
+        <div class="pick-meta">${chips.map(c =>
+        `<span class="chip${c.kind ? ' ' + c.kind : ''}">${esc(c.text)}</span>`).join('')}</div>
         ${times}`;
       b.addEventListener('click', () => this._pickTrack(t));
       g.appendChild(b);
       const cv = b.querySelector('.stage-art');
-      if (cv && def) drawStage(cv, def, t.locked);
+      if (cv && def) {
+        drawStage(cv, def, t.locked, { art: this._stageArt(t.id), elev: t.elev || def.elev });
+      }
     }
     this._syncTrackFoot(list);
   }
@@ -425,6 +545,8 @@ export class UI {
     const g = this.el.trackGrid;
     if (g) for (const c of g.children) c.classList.toggle('sel', c.dataset.id === t.id);
     this._syncTrackFoot(this._trackList(this._data.tracks || {}));
+    // ARCHITECTURE §6.8: the menu backdrop swaps its sky from this.
+    this._emit({ type: 'preview', trackId: t.id });
   }
 
   _syncTrackFoot(list) {
@@ -531,6 +653,8 @@ export class UI {
     const g = this.el.garageGrid;
     if (g) for (const c of g.children) c.classList.toggle('sel', c.dataset.id === v.spec.id);
     this._syncGarageFoot(this._vehicleList(this._data.garage || {}));
+    // ARCHITECTURE §6.8: the machine on the menu pad swaps from this.
+    this._emit({ type: 'preview', vehicleId: v.spec.id });
   }
 
   _syncGarageFoot(list) {
@@ -650,7 +774,58 @@ export class UI {
     const rows = BINDINGS[this._method] || BINDINGS.kb;
     const title = this._method === 'pad' ? 'GAMEPAD' : this._method === 'touch' ? 'TOUCH' : 'KEYBOARD';
     host.innerHTML = `<h3>CONTROLS · ${title}</h3>` + rows
-      .map(([what, how]) => `<div class="keyrow"><span>${esc(what)}</span><b>${esc(how)}</b></div>`).join('');
+      .map(([what, how]) => `<div class="keyrow"><span>${esc(what)}</span><b>${esc(how)}</b></div>`).join('')
+      + `<p class="ctl-more">Full reference in the PLAYBOOK.</p>`;
+  }
+
+  /* ============================================================
+     PLAYBOOK
+     ------------------------------------------------------------
+     The tab strip is ONE [data-focus] element and handles `ui-step`, exactly
+     the way a settings segment does. That is deliberate: the focus manager is
+     shared and untouched, and left/right on a focused strip changes tab
+     instead of jumping out of it.
+     ============================================================ */
+  _buildPlaybook() {
+    const strip = this.el.playbookTabs;
+    if (!strip) return;
+    strip.innerHTML = '';
+    for (let i = 0; i < PLAYBOOK_TABS.length; i++) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = PLAYBOOK_TABS[i];
+      b.setAttribute('role', 'tab');
+      b.dataset.i = String(i);
+      b.addEventListener('click', () => this._setTab(i));
+      strip.appendChild(b);
+    }
+    strip.addEventListener('ui-step', (e) => {
+      const n = PLAYBOOK_TABS.length;
+      this._setTab((this._tab + (e.detail > 0 ? 1 : -1) + n) % n);
+    });
+  }
+
+  _setTab(i) {
+    if (i === this._tab) return;
+    this._tab = i;
+    this._sfx('tick');
+    this._renderPlaybook();
+    // The pane's contents changed under the focus ring, so it has to be
+    // re-collected or the next d-pad press walks a list that is gone.
+    this._collectFocus();
+  }
+
+  _renderPlaybook() {
+    const strip = this.el.playbookTabs, body = this.el.playbookBody;
+    if (strip) for (const b of strip.children) b.classList.toggle('on', +b.dataset.i === this._tab);
+    if (this.el.playbookHint) {
+      this.el.playbookHint.textContent = this._method === 'pad'
+        ? 'LB / RB · TABS' : this._method === 'touch' ? 'TAP A TAB' : '← → TABS';
+    }
+    if (!body) return;
+    body.innerHTML = playbookHTML(this._tab, this._method, BINDINGS, esc);
+    paintIcons(body);
+    body.scrollTop = 0;
   }
 
   /* ============================================================
@@ -680,8 +855,15 @@ export class UI {
       this.el.resultsSub.textContent = t ? t.name : '';
     }
     if (this.el.resultsMedal) {
-      this.el.resultsMedal.innerHTML = d.medal
-        ? `<span class="medal-award ${esc(d.medal)}">&#9679; ${esc(String(d.medal)).toUpperCase()} MEDAL</span>` : '';
+      /* The medal and the best trick sit together: one says how you placed,
+         the other says how you looked doing it, and on this game the second
+         is half the reason anybody replays a stage. Both are optional. */
+      const me = P.find(p => p && p.isPlayer) || 0;
+      const bestTrick = d.bestTrick || (me && me.bestTrick) || '';
+      const bestPts = d.bestTrickPts != null ? d.bestTrickPts : (me ? me.bestTrickPts : null);
+      this.el.resultsMedal.innerHTML =
+        (d.medal ? `<span class="medal-award ${esc(d.medal)}">&#9679; ${esc(String(d.medal)).toUpperCase()} MEDAL</span>` : '') +
+        (bestTrick ? `<span class="best-trick">BEST TRICK · ${esc(bestTrick)}${bestPts ? ` +${bestPts | 0}` : ''}</span>` : '');
     }
 
     // ---- podium: 2nd, 1st, 3rd, so first place stands in the middle ----
@@ -709,11 +891,16 @@ export class UI {
            tilde is the difference between a result and a guess dressed as
            one — and it explains why the time is not on the record boards. */
         const time = p.dnf ? 'DNF' : (p.est ? '~' : '') + fmtTime(p.total);
+        /* STYLE: the trick total for the race. A dash rather than a zero for
+           anyone who never left the ground — a column of noughts reads as a
+           broken feature, a column of dashes reads as "not this driver". */
+        const st = p.style | 0;
         return `<div class="class-row${p.isPlayer ? ' me' : ''}${p.dnf ? ' dnf' : ''}${p.est ? ' est' : ''}"${p.est ? ' title="Still running when the flag fell — projected from their own pace"' : ''}>
             <span class="p">${p.dnf ? '—' : i + 1}</span>
             <span class="nm"><i class="dot" style="background:${col}"></i>${esc(p.name || '—')}</span>
             <span>${time}</span>
             <span class="${best ? 'rec' : ''}">${fmtTime(p.bestLap)}</span>
+            <span class="sty">${st > 0 ? st : '—'}</span>
           </div>`;
       }).join('');
     }
@@ -755,6 +942,7 @@ export class UI {
     switch (act) {
       case 'main-race': this._sfx('ok'); this._nav('tracks'); break;
       case 'main-settings': this._sfx('ok'); this._returnTo = 'main'; this._nav('settings'); break;
+      case 'main-playbook': this._sfx('ok'); this._playbookFrom = 'main'; this._nav('playbook'); break;
 
       case 'tracks-back': this._sfx('back'); this._nav('main', true); break;
       case 'tracks-next': {
@@ -780,8 +968,14 @@ export class UI {
         this._nav(this._returnTo || 'main', true);
         break;
 
+      /* The playbook is reachable from MAIN and from PAUSE, and must go back
+         to whichever one sent it — backing a paused player out to the main
+         menu would quietly bin their race. */
+      case 'playbook-back': this._sfx('back'); this._nav(this._playbookFrom || 'main', true); break;
+
       case 'pause-resume': this._sfx('back'); this._emit({ type: 'resume' }); break;
       case 'pause-restart': this._sfx('ok'); this._emit({ type: 'restart' }); break;
+      case 'pause-playbook': this._sfx('ok'); this._playbookFrom = 'pause'; this._nav('playbook'); break;
       case 'pause-settings': this._sfx('ok'); this._returnTo = 'pause'; this._nav('settings'); break;
       case 'pause-quit': this._sfx('back'); this._emit({ type: 'quit' }); break;
 
@@ -816,6 +1010,7 @@ export class UI {
     switch (this._cur) {
       case 'tracks': this._act('tracks-back'); break;
       case 'garage': this._act('garage-back'); break;
+      case 'playbook': this._act('playbook-back'); break;
       case 'settings': this._act('settings-back'); break;
       case 'pause': this._act('pause-resume'); break;
       case 'main': this._sfx('back'); break;   // nowhere further back to go
@@ -925,325 +1120,4 @@ export class UI {
 function same(a, b) { return a === b || (typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 1e-9); }
 function isVisible(el) {
   return !!(el && !el.classList.contains('hidden') && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-}
-
-/* ============================================================
-   PROCEDURAL CAR ART
-   ------------------------------------------------------------
-   A side profile per bodyStyle, drawn once per card. No images anywhere in
-   this project, and a photo of a car we do not have would be a lie anyway —
-   these read as sponsor-plate pictograms, which is the house style.
-   ============================================================ */
-/* ============================================================
-   STAGE PREVIEW ART
-   ------------------------------------------------------------
-   The stage cards used to be four paragraphs of text in four identical
-   boxes, which told a player nothing about what they were choosing. This
-   draws the actual racing line straight from the track module's `path` — so
-   the picture cannot drift out of step with the track, because it IS the
-   track — with the start line, the shortcut and every jump marked.
-
-   Everything is derived. There is no art file and there is no per-track
-   special case beyond the theme palette.
-   ============================================================ */
-const STAGE_SKIN = {
-  training: { ink: '#2ad2ff', ground: '#2b2f36', wash: '#1a2026' },
-  canyon: { ink: '#ff7a1a', ground: '#3a2820', wash: '#241a15' },
-  forest: { ink: '#4fd07a', ground: '#243026', wash: '#161f19' },
-  volcano: { ink: '#ff5a2c', ground: '#33211d', wash: '#1d1211' },
-};
-
-/** Closed-loop length of an authored path, in metres. */
-function splineLength(path) {
-  if (!path || path.length < 2) return 0;
-  let L = 0;
-  for (let i = 0; i < path.length; i++) {
-    const a = path[i], b = path[(i + 1) % path.length];
-    L += Math.hypot(b.x - a.x, b.z - a.z);
-  }
-  return L;
-}
-
-/**
- * Fit a set of world-space points into the canvas with a margin, returning a
- * projector. Aspect is preserved: a long thin stage must LOOK long and thin,
- * or the preview is lying about the shape of the lap.
- */
-function fitter(pts, W, H, pad) {
-  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-  for (const p of pts) {
-    if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
-    if (p.z < z0) z0 = p.z; if (p.z > z1) z1 = p.z;
-  }
-  const sx = (W - pad * 2) / Math.max(1, x1 - x0);
-  const sz = (H - pad * 2) / Math.max(1, z1 - z0);
-  const s = Math.min(sx, sz);
-  const ox = (W - (x1 - x0) * s) * 0.5 - x0 * s;
-  const oz = (H - (z1 - z0) * s) * 0.5 - z0 * s;
-  return (p) => [p.x * s + ox, p.z * s + oz];
-}
-
-/** Catmull-Rom through the control points, so the preview curves like the road. */
-function smoothLoop(path, steps = 6) {
-  const n = path.length, out = [];
-  const at = (i) => path[((i % n) + n) % n];
-  for (let i = 0; i < n; i++) {
-    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
-    for (let k = 0; k < steps; k++) {
-      const t = k / steps, t2 = t * t, t3 = t2 * t;
-      out.push({
-        x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t +
-          (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
-          (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
-        z: 0.5 * ((2 * p1.z) + (-p0.z + p2.z) * t +
-          (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2 +
-          (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3),
-      });
-    }
-  }
-  return out;
-}
-
-function drawStage(canvas, def, locked) {
-  const g = canvas.getContext('2d');
-  if (!g) return;
-  const W = canvas.width, H = canvas.height;
-  const skin = STAGE_SKIN[def.theme] || STAGE_SKIN.training;
-  g.clearRect(0, 0, W, H);
-
-  const bg = g.createLinearGradient(0, 0, 0, H);
-  bg.addColorStop(0, skin.ground); bg.addColorStop(1, skin.wash);
-  g.fillStyle = bg; g.fillRect(0, 0, W, H);
-
-  const loop = smoothLoop(def.path, 7);
-  const all = def.shortcut ? loop.concat(def.shortcut.path) : loop;
-  const P = fitter(all, W, H, 18);
-
-  // contour rings behind the road: cheap, and it stops the card reading flat
-  g.save();
-  g.globalAlpha = 0.16;
-  g.strokeStyle = skin.ink; g.lineWidth = 1;
-  for (let r = 1; r <= 3; r++) {
-    g.beginPath();
-    for (let i = 0; i <= loop.length; i++) {
-      const p = loop[i % loop.length];
-      const q = P({ x: p.x * (1 + r * 0.10), z: p.z * (1 + r * 0.10) });
-      i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]);
-    }
-    g.closePath(); g.stroke();
-  }
-  g.restore();
-
-  const trace = (pts, closed) => {
-    g.beginPath();
-    for (let i = 0; i < pts.length; i++) {
-      const q = P(pts[i]);
-      i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]);
-    }
-    if (closed) g.closePath();
-  };
-
-  // road: a wide dark casing under a bright core, which is the only way a
-  // 3 px line reads as a ROAD and not as a graph
-  g.lineJoin = g.lineCap = 'round';
-  trace(loop, true); g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 9; g.stroke();
-  trace(loop, true); g.strokeStyle = 'rgba(255,255,255,.82)'; g.lineWidth = 4.5; g.stroke();
-
-  if (def.shortcut) {
-    trace(def.shortcut.path, false);
-    g.setLineDash([7, 6]);
-    g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
-    g.setLineDash([]);
-  }
-
-  /* Jumps. The preview's whole job on this game is to say WHERE THE AIR IS,
-     so a gap jump gets a filled diamond and a plain kicker a small tick. */
-  const L = splineLength(def.path);
-  for (const j of (def.jumps || [])) {
-    const t = (j.s / Math.max(1, L)) * loop.length;
-    const p = loop[Math.floor(t) % loop.length];
-    const q = P(p);
-    const hero = !!j.gap || j.h >= 3.0;
-    g.beginPath();
-    if (hero) {
-      const r = 8;
-      g.moveTo(q[0], q[1] - r); g.lineTo(q[0] + r, q[1]);
-      g.lineTo(q[0], q[1] + r); g.lineTo(q[0] - r, q[1]); g.closePath();
-      g.fillStyle = skin.ink; g.fill();
-      g.strokeStyle = 'rgba(0,0,0,.7)'; g.lineWidth = 1.5; g.stroke();
-    } else {
-      g.arc(q[0], q[1], 3.2, 0, 6.2832);
-      g.fillStyle = 'rgba(255,255,255,.7)'; g.fill();
-    }
-  }
-
-  // start line
-  {
-    const a = P(loop[0]), b = P(loop[1]);
-    const dx = b[0] - a[0], dz = b[1] - a[1];
-    const len = Math.max(1e-3, Math.hypot(dx, dz));
-    const nx = -dz / len * 8, nz = dx / len * 8;
-    g.beginPath();
-    g.moveTo(a[0] - nx, a[1] - nz); g.lineTo(a[0] + nx, a[1] + nz);
-    g.strokeStyle = '#f2efe6'; g.lineWidth = 4; g.stroke();
-    g.strokeStyle = '#15161a'; g.lineWidth = 4; g.setLineDash([3, 3]); g.stroke();
-    g.setLineDash([]);
-  }
-
-  // No locked wash here: .pick.locked already drops the whole card to 44 %
-  // opacity, and dimming twice made the lap shape unreadable — which is the
-  // one thing a locked card still needs to sell.
-  void locked;
-}
-
-function drawCar(canvas, spec) {
-  const g = canvas.getContext('2d');
-  if (!g) return;
-  const W = canvas.width, H = canvas.height;
-  g.clearRect(0, 0, W, H);
-
-  const body = toCss(spec && spec.color, '#ff7a1a');
-  const style = (spec && spec.bodyStyle) || 'buggy';
-  const dark = 'rgba(0,0,0,.55)';
-
-  // ground shadow — sells "vehicle" before a single panel is drawn
-  const grad = g.createLinearGradient(0, H * 0.82, 0, H);
-  grad.addColorStop(0, 'rgba(0,0,0,.35)'); grad.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = grad; g.fillRect(0, H * 0.82, W, H * 0.18);
-
-  const gy = H * 0.80;                     // ground line
-  const s = W / 416;                       // art is authored at 416 wide
-
-  const wheel = (cx, r) => {
-    g.fillStyle = '#15161a';
-    g.beginPath(); g.arc(cx, gy - r, r, 0, 6.2832); g.fill();
-    g.strokeStyle = 'rgba(255,255,255,.16)'; g.lineWidth = 2 * s;
-    g.beginPath(); g.arc(cx, gy - r, r - 2 * s, 0, 6.2832); g.stroke();
-    g.fillStyle = body;
-    g.beginPath(); g.arc(cx, gy - r, r * 0.36, 0, 6.2832); g.fill();
-    g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 1.4 * s;
-    for (let i = 0; i < 5; i++) {
-      const a = i / 5 * 6.2832;
-      g.beginPath(); g.moveTo(cx, gy - r);
-      g.lineTo(cx + Math.cos(a) * r * 0.82, gy - r + Math.sin(a) * r * 0.82); g.stroke();
-    }
-  };
-
-  const path = (pts, fill, stroke) => {
-    g.beginPath();
-    for (let i = 0; i < pts.length; i += 2) i ? g.lineTo(pts[i] * s, pts[i + 1] * s) : g.moveTo(pts[i] * s, pts[i + 1] * s);
-    g.closePath();
-    if (fill) { g.fillStyle = fill; g.fill(); }
-    if (stroke) { g.strokeStyle = stroke; g.lineWidth = 2 * s; g.stroke(); }
-  };
-
-  if (style === 'truck') {
-    const r = 34 * s;
-    wheel(104 * s, r); wheel(316 * s, r);
-    // ladder frame + tray
-    path([56, 92, 372, 92, 372, 106, 56, 106], dark);
-    // cab + bed
-    path([96, 92, 104, 46, 214, 40, 236, 92], body, 'rgba(255,255,255,.22)');
-    path([236, 92, 236, 62, 368, 62, 368, 92], body, 'rgba(255,255,255,.16)');
-    // glass
-    path([116, 86, 122, 56, 204, 52, 218, 86], 'rgba(150,205,225,.35)');
-    // bullbar + light bar
-    g.fillStyle = 'rgba(255,255,255,.55)';
-    g.fillRect(44 * s, 66 * s, 12 * s, 34 * s);
-    g.fillRect(108 * s, 30 * s, 96 * s, 9 * s);
-  } else if (style === 'wedge') {
-    const r = 27 * s;
-    wheel(112 * s, r); wheel(310 * s, r);
-    path([48, 106, 384, 106, 384, 114, 48, 114], dark);
-    // long low wedge: nose at the left, cab pushed forward
-    path([44, 104, 92, 74, 168, 58, 268, 60, 356, 82, 386, 104], body, 'rgba(255,255,255,.22)');
-    path([120, 72, 176, 46, 254, 48, 288, 70], 'rgba(150,205,225,.35)');
-    // rear wing
-    g.fillStyle = body;
-    g.fillRect(330 * s, 48 * s, 62 * s, 8 * s);
-    g.fillRect(352 * s, 52 * s, 8 * s, 28 * s);
-    // splitter
-    g.fillStyle = 'rgba(255,255,255,.35)';
-    g.fillRect(38 * s, 100 * s, 46 * s, 6 * s);
-  } else if (style === 'bike') {
-    /* Motocross: two big wheels close together, a rider standing on the pegs.
-       The rider is most of the read — a bike without one is a bicycle. */
-    const r = 41 * s;
-    const fx = 300 * s, rx = 150 * s;            // hub centres
-    const hy = gy - r;
-    wheel(rx, r); wheel(fx, r);
-    // frame: cases, spar to the headstock, swingarm back to the rear hub
-    g.strokeStyle = body; g.lineWidth = 9 * s; g.lineJoin = 'round'; g.lineCap = 'round';
-    g.beginPath();
-    g.moveTo(258 * s, hy - 42 * s); g.lineTo(214 * s, hy - 20 * s);
-    g.lineTo(196 * s, hy + 6 * s); g.stroke();
-    g.strokeStyle = 'rgba(255,255,255,.30)'; g.lineWidth = 7 * s;
-    g.beginPath(); g.moveTo(196 * s, hy + 4 * s); g.lineTo(rx, hy); g.stroke();  // swingarm
-    // forks
-    g.strokeStyle = 'rgba(220,226,232,.85)'; g.lineWidth = 6 * s;
-    g.beginPath(); g.moveTo(272 * s, hy - 50 * s); g.lineTo(fx, hy); g.stroke();
-    // tank / shroud + seat
-    g.fillStyle = body;
-    g.beginPath();
-    g.moveTo(226 * s, hy - 30 * s); g.lineTo(268 * s, hy - 46 * s);
-    g.lineTo(276 * s, hy - 28 * s); g.lineTo(232 * s, hy - 14 * s); g.closePath(); g.fill();
-    g.fillStyle = 'rgba(20,22,26,.92)';
-    g.fillRect(180 * s, hy - 34 * s, 56 * s, 9 * s);                   // seat
-    g.fillStyle = body;
-    g.beginPath();                                                     // rear fender
-    g.moveTo(158 * s, hy - 46 * s); g.lineTo(196 * s, hy - 34 * s);
-    g.lineTo(190 * s, hy - 26 * s); g.lineTo(156 * s, hy - 38 * s); g.closePath(); g.fill();
-    g.beginPath();                                                     // front fender
-    g.moveTo(286 * s, hy - 40 * s); g.lineTo(330 * s, hy - 30 * s);
-    g.lineTo(326 * s, hy - 21 * s); g.lineTo(284 * s, hy - 32 * s); g.closePath(); g.fill();
-    // bars
-    g.strokeStyle = 'rgba(220,226,232,.9)'; g.lineWidth = 4 * s;
-    g.beginPath(); g.moveTo(272 * s, hy - 52 * s); g.lineTo(288 * s, hy - 72 * s); g.stroke();
-    // rider: boots on the pegs, hips back, shoulders over the bars
-    const dk = 'rgba(24,26,31,.95)';
-    g.strokeStyle = dk; g.lineWidth = 11 * s;
-    g.beginPath();
-    g.moveTo(206 * s, hy - 8 * s); g.lineTo(200 * s, hy - 46 * s);
-    g.lineTo(214 * s, hy - 74 * s); g.stroke();                        // legs
-    g.strokeStyle = 'rgba(255,255,255,.75)'; g.lineWidth = 14 * s;
-    g.beginPath(); g.moveTo(214 * s, hy - 74 * s); g.lineTo(244 * s, hy - 100 * s); g.stroke();
-    g.strokeStyle = 'rgba(255,255,255,.75)'; g.lineWidth = 8 * s;
-    g.beginPath();
-    g.moveTo(244 * s, hy - 100 * s); g.lineTo(272 * s, hy - 92 * s);
-    g.lineTo(288 * s, hy - 72 * s); g.stroke();                        // arm to the bar
-    g.fillStyle = '#eef1f5';
-    g.beginPath(); g.arc(258 * s, hy - 112 * s, 13 * s, 0, 6.2832); g.fill();  // helmet
-    g.fillStyle = 'rgba(20,26,32,.85)';
-    g.fillRect(262 * s, hy - 117 * s, 14 * s, 7 * s);                  // visor
-    g.fillStyle = '#eef1f5';
-    g.beginPath();                                                     // peak
-    g.moveTo(266 * s, hy - 122 * s); g.lineTo(292 * s, hy - 128 * s);
-    g.lineTo(292 * s, hy - 122 * s); g.lineTo(266 * s, hy - 114 * s); g.closePath(); g.fill();
-  } else {
-    // buggy: exposed wheels, visible roll cage, short body
-    const r = 31 * s;
-    wheel(100 * s, r); wheel(322 * s, r);
-    path([70, 96, 352, 96, 352, 108, 70, 108], dark);
-    path([84, 96, 100, 70, 300, 66, 344, 96], body, 'rgba(255,255,255,.22)');
-    // roll cage
-    g.strokeStyle = 'rgba(255,255,255,.62)'; g.lineWidth = 5 * s; g.lineJoin = 'round';
-    g.beginPath();
-    g.moveTo(120 * s, 92 * s); g.lineTo(156 * s, 34 * s);
-    g.lineTo(258 * s, 34 * s); g.lineTo(298 * s, 92 * s);
-    g.moveTo(258 * s, 34 * s); g.lineTo(316 * s, 74 * s);
-    g.stroke();
-    // seat + spare
-    g.fillStyle = 'rgba(0,0,0,.55)';
-    g.fillRect(186 * s, 48 * s, 34 * s, 42 * s);
-    g.fillStyle = '#15161a';
-    g.beginPath(); g.arc(332 * s, 62 * s, 17 * s, 0, 6.2832); g.fill();
-  }
-
-  // number plate — the sponsor-plate cue that ties the three cards together
-  g.fillStyle = 'rgba(255,255,255,.9)';
-  g.fillRect(W - 62 * s, 18 * s, 46 * s, 26 * s);
-  g.fillStyle = '#0d0d0f';
-  g.font = `italic 800 ${20 * s}px system-ui, sans-serif`;
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText(String((spec && spec.id ? spec.id.length : 4) % 9 + 1), W - 39 * s, 32 * s);
 }

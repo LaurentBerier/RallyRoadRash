@@ -55,11 +55,23 @@ export const ITEM = {
      charges   how many uses one pickup grants
      aimable   true if the fire direction (forward / behind) matters
      hud       display name and colour — the colours are the existing HUD
-               palette, not new ones */
+               palette, not new ones
+     desc      what it DOES, for the playbook. One or two sentences, present
+     tip       when to use it. These two and `icon` are the UI's fields
+     icon      a src/ui/icons.js glyph id
+               (ARCHITECTURE §6.9) and are the only ones ui/ owns in here.
+               They exist because until wave 6 an item had a name in a HUD
+               corner and nothing else anywhere in the game — no icon, no
+               description, no hint that the table is rigged by position. */
 export const ITEMS = [
   {
     id: ITEM.NITRO, name: 'NITRO', kind: 'boost', charges: 1, aimable: false,
     col: 0xff8a1a,
+    icon: 'nitro',
+    desc: 'A short, hard shove. Roughly twice the engine for a second and a half, ' +
+      'and it lifts your terminal speed while it burns.',
+    tip: 'Fire it on the exit, never the entry — a boost into a corner is a boost ' +
+      'into the scenery. Best used where the road straightens after a crest.',
     force: 1.90,        // x motorForce
     top: 1.16,          // x topSpeed (drive-fade denominator)
     time: 1.6,          // s
@@ -67,11 +79,21 @@ export const ITEMS = [
   {
     id: ITEM.TRIPLE, name: 'TRIPLE NITRO', kind: 'boost', charges: 3, aimable: false,
     col: 0xffd23f,
+    icon: 'triple',
+    desc: 'Three nitros on one pickup. Each one is the same shove; the slot stays ' +
+      'full until you have spent all three.',
+    tip: 'Holding a full slot means you drive past every box you pass, so spend ' +
+      'them rather than hoarding them — three down a long straight is a lap gain.',
     force: 1.90, top: 1.16, time: 1.6,
   },
   {
     id: ITEM.WHEEL, name: 'SPARE WHEEL', kind: 'projectile', charges: 1, aimable: true,
     col: 0x9aa1a8,
+    icon: 'wheel',
+    desc: 'A truck tyre, thrown forward or dropped behind. It arcs, bounces off ' +
+      'the ground up to five times, and spins out whoever it catches.',
+    tip: 'It bounces, so aim it at the ROAD in front of a car rather than at the ' +
+      'car. Hold reverse as you fire to send it backwards at whoever is nagging you.',
     speed: 34,          // m/s relative to the firing car
     lift: 2.2,          // m/s of initial vertical, so it arcs rather than skims
     bounce: 0.55,       // restitution against the ground
@@ -84,6 +106,11 @@ export const ITEMS = [
   {
     id: ITEM.SLICK, name: 'OIL SLICK', kind: 'hazard', charges: 1, aimable: false,
     col: 0x2a2420,
+    icon: 'slick',
+    desc: 'A patch of oil dropped three metres behind you. It sits there for nine ' +
+      'seconds and spins out anyone who drives across it.',
+    tip: 'Defence, and the leader\'s best item. Drop it on the racing line at a ' +
+      'corner entry, where nobody has room to go around it.',
     drop: 3.2,          // m behind the car
     radius: 2.6,
     life: 9.0,
@@ -95,6 +122,12 @@ export const ITEMS = [
   {
     id: ITEM.TOW, name: 'TOW LINE', kind: 'tow', charges: 1, aimable: false,
     col: 0x4fd07a,
+    icon: 'tow',
+    desc: 'Hooks the car ahead inside a 35° cone. For a second and a half it drags ' +
+      'you forward and holds them back — the line snaps if you get too close or ' +
+      'they get too far.',
+    tip: 'The overtaking item. Fire it on a straight where you can use the closing ' +
+      'speed; fired into a corner you arrive far too fast to take it.',
     minDist: 8, maxDist: 55,   // m — the lock-on window
     cone: 0.61,                // rad (±35°)
     time: 1.4,                 // s
@@ -105,6 +138,12 @@ export const ITEMS = [
   {
     id: ITEM.SLED, name: 'ROCKET SLED', kind: 'sled', charges: 1, aimable: false,
     col: 0xc46bff,
+    icon: 'sled',
+    desc: 'Three and a half seconds of autopilot at more than twice the engine. ' +
+      'The car drives itself down the racing line and lets go the moment you reach ' +
+      'third place.',
+    tip: 'Last place only, and never on the run to the flag. Take your hands off — ' +
+      'it steers better than you do, and fighting it only slows it down.',
     time: 3.4,
     force: 2.60, top: 1.45,
     /* Ends early on reaching this position — the point is to rescue a lost
@@ -114,6 +153,12 @@ export const ITEMS = [
   {
     id: ITEM.STORM, name: 'DUST STORM', kind: 'storm', charges: 1, aimable: false,
     col: 0xb99a6a,
+    icon: 'storm',
+    desc: 'Blows a wall of grit over everyone ahead of you. They lose a third of ' +
+      'their drive for two and a half seconds, and if the leader is the player, ' +
+      'they cannot see either.',
+    tip: 'It hits the whole field in front, so it is worth most when they are ' +
+      'nose-to-tail — fire it into a queue, not at one car.',
     time: 2.6,
     force: 0.72, top: 0.80,    // what it does to everyone ahead
     blind: 0.80,               // peak uBlind on the player, if they are ahead

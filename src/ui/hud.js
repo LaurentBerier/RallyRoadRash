@@ -1,10 +1,11 @@
 /* ============================================================
    RALLY ROAD RASH — in-race HUD
    ------------------------------------------------------------
-   Contract: docs/INTEGRATION-NOTES.md "HUD — src/ui/hud.js".
+   Contract: docs/INTEGRATION-NOTES.md "HUD — src/ui/hud.js", plus the wave-6
+   payload additions in docs/ARCHITECTURE.md §6.6.
      new HUD(audio) · showRace(info) · hideRace() · bakeMap(terrain, trackData)
      update(dt, payload) · countdown(n) · banner(text, kind, ttl) ·
-     log(text, kind) · airtime(sec)
+     log(text, kind) · airtime(sec) · tip(id, text, ttl) · setInputMethod(m)
 
    Cost discipline (this runs every frame at 60 Hz next to six cars of
    physics):
@@ -17,9 +18,15 @@
        dots that lag look broken.
      • The minimap background is baked ONCE per race into an offscreen
        canvas; nothing samples the terrain after that.
+
+   EVENTS ARE SEQUENCE NUMBERS, NOT BOOLEANS. race.js bumps `item.seq`,
+   `trick.seq`, `events.hitSeq` and friends; the HUD keeps the last value it
+   acted on and fires when they differ. A boolean would need a handshake to
+   clear it and would drop two hits in the same frame; a counter cannot.
    ============================================================ */
 import { PLAYABLE_EXT } from '../world/terrain.js';
 import { TUNE } from '../game/config.js';
+import { iconCanvas } from './icons.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -28,6 +35,17 @@ const MAP_N = 96;          // heightfield samples per side (9216 heightAt calls,
 const MAP_BASE = 256;      // offscreen background resolution
 const ROAD_STEP = 8;       // metres between road-ribbon samples
 const RPM_HZ = 30;         // rev-arc redraw rate
+
+/* What "fire" is called on each input method. A player holding a pad must not
+   be told to press F — which is exactly what the game did, in the one place
+   it mentioned firing at all, which was nowhere. */
+const FIRE_KEY = { kb: 'F', pad: 'X', touch: 'FIRE' };
+
+/* Mini-turbo tier colours, matched to the tyre dust the drift throws so the
+   ring and the world are telling you the same thing. */
+const TIER_COL = ['#4fd8e8', '#ff7a1a', '#c46bff'];
+/* Trick tier colours: white, cyan, orange, violet as the rotation gets bigger. */
+const TRICK_COL = ['#f3f0ea', '#4fd8e8', '#ff7a1a', '#c46bff'];
 
 /** m:ss.cc — the only string the HUD builds per frame, and only on change. */
 function fmtTime(t) {
@@ -55,8 +73,9 @@ export class HUD {
       hud: $('hud'),
       pos: $('hPos'), posN: $('hPosN'), posT: $('hPosT'), rival: $('hRival'),
       lapN: $('hLapN'), lapT: $('hLapT'), track: $('hTrack'),
-      time: $('hTime'), last: $('hLast'), best: $('hBest'),
+      time: $('hTime'), last: $('hLast'), best: $('hBest'), style: $('hStyle'),
       kmh: $('hKmh'), gear: $('hGear'), air: $('hAir'), item: $('hItem'),
+      trick: $('hTrick'), tip: $('hTip'),
       banner: $('hBanner'), log: $('hLog'),
       count: $('hCount'), countN: $('hCountN'),
       wrong: $('hWrong'), off: $('hOff'), reset: $('hReset'),
@@ -79,14 +98,31 @@ export class HUD {
     this._cdT = 0;
     this._lastCd = null;
     this._airT = 0;
+    this._trickT = 0;
+    this._tipT = 0;
     this._posFlashT = 0;
+    this._method = 'kb';
     this._holdTime = (TUNE && TUNE.reset && TUNE.reset.holdTime) || 0.8;
+
+    /* Event sequence numbers we have already acted on. -1 means "nothing
+       yet", and every one is reset by _clearTransients so a restart cannot
+       replay the last race's last hit. */
+    this._seq = { item: -1, trick: -1, hit: -1, land: -1, pad: -1 };
+    this._tipSeen = null;              // ids already shown, this session
+
+    /* The rev arc repaints at 30 Hz but the payload arrives at 60, so the
+       drift state is latched every frame and read by the draw: sampling it
+       only on the frames that happen to redraw makes the charge arc stutter. */
+    this._drift = 0; this._driftTier = 0; this._boost = 0; this._boostTier = 0;
 
     // last-rendered cache — the whole point of update() being free
     this._c = {
       pos: -1, total: -1, lap: -1, lapT: -1, time: '', last: '', best: '',
       kmh: -1, gear: '', rival: '', wrong: null, off: null, reset: -1,
-      /* One string covering name + charges + rolling. An item you are holding
+      style: -1, finalLap: null,
+      /* One string covering name + charges + rolling + icon + input method
+         (the card carries the FIRE glyph, and picking up a pad mid-race has
+         to change it). An item you are holding
          is static for seconds at a time, so the common case must cost zero
          DOM writes — same discipline as every other field here. */
       item: '\u0000',
@@ -120,6 +156,7 @@ export class HUD {
     c.pos = -1; c.total = -1; c.lap = -1; c.kmh = -1; c.gear = '';
     c.time = ''; c.last = ''; c.best = ''; c.rival = '';
     c.wrong = null; c.off = null; c.reset = -1;
+    c.style = -1; c.finalLap = null;
     if (this.el.pos) this.el.pos.classList.remove('up', 'down', 'bump');
 
     if (this.el.hud) { this.el.hud.classList.remove('hidden'); this.el.hud.setAttribute('aria-hidden', 'false'); }
@@ -131,10 +168,16 @@ export class HUD {
     this._clearTransients();
   }
 
+  /* EVERY transient field this file owns is wiped here, including all the
+     wave-6 ones. A field added above and forgotten here is a stale trick pop
+     sitting on the grid of the next race. */
   _clearTransients() {
     if (this.el.banner) this.el.banner.innerHTML = '';
     if (this.el.log) this.el.log.innerHTML = '';
     if (this.el.air) this.el.air.innerHTML = '';
+    if (this.el.trick) this.el.trick.innerHTML = '';
+    if (this.el.tip) this.el.tip.innerHTML = '';
+    if (this.el.style) { this.el.style.innerHTML = ''; this.el.style.classList.add('off'); }
     if (this.el.item) this.el.item.innerHTML = '';
     this._c.item = '\u0000';
     if (this.el.count) this.el.count.classList.add('hidden');
@@ -143,7 +186,26 @@ export class HUD {
     if (this.el.reset) this.el.reset.classList.add('hidden');
     this._banners.length = 0;
     this._logs.length = 0;
-    this._cdT = 0; this._airT = 0; this._lastCd = null;
+    this._cdT = 0; this._airT = 0; this._trickT = 0; this._tipT = 0; this._lastCd = null;
+    this._c.style = -1;
+    this._c.finalLap = null;
+    this._drift = 0; this._driftTier = 0; this._boost = 0; this._boostTier = 0;
+    const s = this._seq;
+    s.item = -1; s.trick = -1; s.hit = -1; s.land = -1; s.pad = -1;
+  }
+
+  /**
+   * 'kb' | 'pad' | 'touch'. Called beside ui.setInputMethod (§6.6). The item
+   * card is the only thing that reads it, and the card is rebuilt lazily, so
+   * dropping the cache key IS the implementation.
+   */
+  setInputMethod(m) {
+    if (m !== 'kb' && m !== 'pad' && m !== 'touch') return;
+    if (m === this._method) return;
+    this._method = m;
+    // A single space is a key no real item can produce, and it is NOT '' —
+    // which is the legitimate "no card" key and would suppress the rebuild.
+    this._c.item = ' ';
   }
 
   /* ============================================================
@@ -359,8 +421,12 @@ export class HUD {
   _drawItem(it) {
     const host = this.el.item;
     if (!host) return;
+    /* The key gained `icon` and `method` in wave 6 — the card now carries a
+       glyph and the FIRE key, and both can change without the name doing so
+       (a pad plugged in mid-race changes only the method). */
     const key = !it || !it.enabled || (!it.name && !it.rolling)
-      ? '' : it.name + '|' + it.charges + '|' + (it.rolling ? 1 : 0);
+      ? '' : it.name + '|' + it.charges + '|' + (it.rolling ? 1 : 0) +
+        '|' + (it.icon || '') + '|' + this._method;
     if (key === this._c.item) return;
     this._c.item = key;
     if (!key) { host.innerHTML = ''; return; }
@@ -369,6 +435,7 @@ export class HUD {
     const d = document.createElement('div');
     d.className = 'itemcard' + (it.rolling ? ' rolling' : '');
     d.style.setProperty('--ic', toCss(it.col, '#ff7a1a'));
+    if (it.icon) d.appendChild(iconCanvas(it.icon, 20, toCss(it.col, '#ff7a1a')));
     const n = document.createElement('b');
     n.textContent = it.name || '—';
     d.appendChild(n);
@@ -378,7 +445,102 @@ export class HUD {
       for (let i = 0; i < it.charges; i++) pips.appendChild(document.createElement('i'));
       d.appendChild(pips);
     }
+    /* The key glyph. Not decoration: before this the game had a full item
+       system and did not say, anywhere, which button fires one. Suppressed
+       while the roulette is still spinning, because it is not yours yet. */
+    if (!it.rolling) {
+      const k = document.createElement('i');
+      k.className = 'firekey';
+      k.textContent = FIRE_KEY[this._method] || 'F';
+      d.appendChild(k);
+    }
     host.appendChild(d);
+  }
+
+  /**
+   * The pickup callout. `item.seq` is bumped by race.js when a box is
+   * collected; the card alone is easy to miss at 40 m/s in the corner of the
+   * screen, and the name plus the key is the whole tutorial for the item
+   * system.
+   */
+  _itemEvent(it) {
+    if (!it || !it.enabled) return;
+    const seq = it.seq | 0;
+    if (seq === this._seq.item) return;
+    const first = this._seq.item < 0;
+    this._seq.item = seq;
+    if (first || it.rolling || !it.name) return;   // wait for the roulette to land
+    this.banner(`${it.name} — ${FIRE_KEY[this._method] || 'F'} TO FIRE`, 'item', 2.0);
+  }
+
+  /**
+   * The trick pop. Coloured by tier, 1.6 s, one at a time — a queue of these
+   * would still be draining while you were setting up the next jump.
+   */
+  _trickPop(tr) {
+    const host = this.el.trick;
+    if (!host || !tr) return;
+    const seq = tr.seq | 0;
+    if (seq === this._seq.trick) return;
+    const first = this._seq.trick < 0;
+    this._seq.trick = seq;
+    if (first || !tr.name) return;
+    host.innerHTML = '';
+    const d = document.createElement('div');
+    d.className = 'trickpop';
+    d.style.setProperty('--tc', TRICK_COL[clamp(tr.tier | 0, 0, 3)]);
+    d.textContent = tr.pts > 0 ? `${tr.name} +${tr.pts | 0}` : String(tr.name);
+    host.appendChild(d);
+    this._trickT = 1.6;
+  }
+
+  /**
+   * A first-run tip. `id` is progression.js's tip id and is used here only to
+   * stop the same card firing twice in one session — the PROFILE flag is
+   * race.js's business (progression.markTip), because only it knows whether
+   * the tip was actually seen or the player was mid-crash.
+   */
+  tip(id, text, ttl) {
+    const host = this.el.tip;
+    if (!host || !text) return;
+    if (!this._tipSeen) this._tipSeen = Object.create(null);
+    if (id) {
+      if (this._tipSeen[id]) return;
+      this._tipSeen[id] = 1;
+    }
+    host.innerHTML = '';
+    const d = document.createElement('div');
+    d.className = 'tipcard';
+    d.textContent = String(text);
+    host.appendChild(d);
+    this._tipT = ttl > 0 ? ttl : 5.0;
+  }
+
+  /**
+   * Hit / pad feedback, through log() — which was built in wave 5 and then
+   * called from precisely nowhere, so the race log has been an empty box in
+   * the bottom-left corner for two waves.
+   */
+  _raceEvents(ev) {
+    if (!ev) return;
+    const s = this._seq;
+    const hs = ev.hitSeq | 0;
+    if (hs !== s.hit) {
+      const first = s.hit < 0;
+      s.hit = hs;
+      if (!first) {
+        const by = ev.hitBy, wi = ev.hitWith;
+        this.log(by ? `HIT BY ${by}${wi ? ' · ' + wi : ''}` : (wi ? `HIT · ${wi}` : 'HIT'), 'bad');
+      }
+    }
+    const ps = ev.padSeq | 0;
+    if (ps !== s.pad) {
+      const first = s.pad < 0;
+      s.pad = ps;
+      if (!first) this.log('BOOST PAD', 'good');
+    }
+    const ls = ev.landSeq | 0;
+    if (ls !== s.land) s.land = ls;      // consumed by race.js's airtime() call
   }
 
   airtime(sec) {
@@ -408,7 +570,11 @@ export class HUD {
     const veh = (p && p.vehicle) || 0;
     const c = this._c;
 
-    this._drawItem(p && p.item);
+    const it = p && p.item;
+    this._drawItem(it);
+    this._itemEvent(it);
+    this._raceEvents(p && p.events);
+    if (veh) this._trickPop(veh.trick);
 
     /* ---- position ---- */
     if (race) {
@@ -439,6 +605,30 @@ export class HUD {
       if (ls !== c.last) { c.last = ls; if (this.el.last) this.el.last.textContent = ls; }
       const bs = fmtTime(race.bestLap);
       if (bs !== c.best) { c.best = bs; if (this.el.best) this.el.best.textContent = bs; }
+
+      /* ---- style total ----
+         Hidden entirely until the first trick lands: a permanent 0 in the lap
+         card reads as a broken instrument, and a player who never leaves the
+         ground should not have to look at one. */
+      const sty = race.style | 0;
+      if (sty !== c.style) {
+        c.style = sty;
+        const el = this.el.style;
+        if (el) {
+          el.classList.toggle('off', sty <= 0);
+          if (sty > 0) el.innerHTML = `<em>STYLE</em><b>${sty}</b>`;
+        }
+      }
+
+      /* ---- final lap ----
+         An edge, not a level: race.finalLap stays true for the whole lap and
+         a level test would re-banner it every frame. */
+      const fl = !!race.finalLap;
+      if (fl !== c.finalLap) {
+        const first = c.finalLap === null;
+        c.finalLap = fl;
+        if (fl && !first) this.banner('FINAL LAP', 'warn', 2.4);
+      }
 
       /* ---- countdown ----
          race.js pushes these with countdown(); this is the belt-and-braces
@@ -485,6 +675,11 @@ export class HUD {
       const gs = gearRaw == null ? 'N' : (typeof gearRaw === 'string' ? gearRaw
         : gearRaw < 0 ? 'R' : gearRaw === 0 ? 'N' : String(gearRaw));
       if (gs !== c.gear) { c.gear = gs; if (this.el.gear) this.el.gear.textContent = gs; }
+      // Latched every frame, drawn at 30 Hz — see the constructor.
+      this._drift = +veh.drift || 0;
+      this._driftTier = veh.driftTier | 0;
+      this._boost = +veh.boost || 0;
+      this._boostTier = veh.boostTier | 0;
     }
 
     /* ---- rival gap ---- */
@@ -509,6 +704,17 @@ export class HUD {
     if (this._airT > 0) {
       this._airT -= d;
       if (this._airT <= 0 && this.el.air) this.el.air.innerHTML = '';
+    }
+    if (this._trickT > 0) {
+      this._trickT -= d;
+      if (this._trickT <= 0 && this.el.trick) this.el.trick.innerHTML = '';
+    }
+    if (this._tipT > 0) {
+      this._tipT -= d;
+      if (this._tipT <= 0.4 && this.el.tip && this.el.tip.firstChild) {
+        this.el.tip.firstChild.classList.add('out');
+      }
+      if (this._tipT <= 0 && this.el.tip) this.el.tip.innerHTML = '';
     }
     if (this._posFlashT > 0) {
       this._posFlashT -= d;
@@ -549,7 +755,13 @@ export class HUD {
   /* ---------------- rev arc ----------------
      A shallow arc across the top of the speed plate. Redline is the last
      18 %: it is drawn dim always and hot once you are in it, so the shift
-     point is visible in peripheral vision. */
+     point is visible in peripheral vision.
+
+     Wave 6 adds the mini-turbo to the same instrument rather than a new one:
+     a CHARGE arc a little outside the rev arc while a drift is building, and
+     a BURN bar under it while the boost is spending. Both are coloured by
+     tier, matching the tyre dust — which is the only feedback the drift had,
+     and is behind the car where you cannot see it in a corner. */
   _drawRpm(rpmNorm) {
     const g = this.ctx.rpm, cv = this.cv.rpm;
     if (!g || !cv || !cv.width) return;
@@ -580,6 +792,47 @@ export class HUD {
       const c1 = Math.cos(a), s1 = Math.sin(a);
       const r0 = R + lw * 0.62, r1 = R + lw * (i % 4 === 0 ? 1.25 : 0.95);
       g.beginPath(); g.moveTo(cx + c1 * r0, cy + s1 * r0); g.lineTo(cx + c1 * r1, cy + s1 * r1); g.stroke();
+    }
+
+    /* ---- mini-turbo charge, outside the rev arc ---- */
+    const dr = clamp(this._drift, 0, 1);
+    if (dr > 0.004) {
+      const Rc = R + lw * 1.75;
+      const cw = Math.max(2, H * 0.10);
+      g.lineCap = 'round';
+      g.lineWidth = cw;
+      g.strokeStyle = 'rgba(255,255,255,.14)';
+      g.beginPath(); g.arc(cx, cy, Rc, a0, a1); g.stroke();
+      g.strokeStyle = TIER_COL[clamp(this._driftTier - 1, 0, 2)];
+      g.beginPath(); g.arc(cx, cy, Rc, a0, a0 + dr * (a1 - a0)); g.stroke();
+      /* Tier ticks at a third and two thirds, so a player can see WHICH tier
+         they are banking rather than only how full the bar is. */
+      g.strokeStyle = 'rgba(0,0,0,.55)';
+      g.lineWidth = Math.max(1, H * 0.03);
+      for (let i = 1; i < 3; i++) {
+        const a = a0 + (i / 3) * (a1 - a0);
+        const c1 = Math.cos(a), s1 = Math.sin(a);
+        g.beginPath();
+        g.moveTo(cx + c1 * (Rc - cw * 0.6), cy + s1 * (Rc - cw * 0.6));
+        g.lineTo(cx + c1 * (Rc + cw * 0.6), cy + s1 * (Rc + cw * 0.6));
+        g.stroke();
+      }
+      g.lineCap = 'butt';
+    }
+
+    /* ---- boost burn, a straight bar across the bottom of the plate ---- */
+    const bo = clamp(this._boost, 0, 1);
+    if (bo > 0.004) {
+      const bh = Math.max(2, H * 0.085);
+      const y = H - bh * 0.5 - 1;
+      const x0 = W * 0.10, x1 = W * 0.90;
+      g.lineCap = 'round';
+      g.lineWidth = bh;
+      g.strokeStyle = 'rgba(255,255,255,.12)';
+      g.beginPath(); g.moveTo(x0, y); g.lineTo(x1, y); g.stroke();
+      g.strokeStyle = TIER_COL[clamp(this._boostTier - 1, 0, 2)];
+      g.beginPath(); g.moveTo(x0, y); g.lineTo(x0 + (x1 - x0) * bo, y); g.stroke();
+      g.lineCap = 'butt';
     }
   }
 
