@@ -42,7 +42,9 @@
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --mono:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 
-  --z-hud:20; --z-touch:26; --z-rotate:34; --z-screen:40; --z-boot:60;
+  /* The hero sits between the WebGL canvas and everything else: it is the
+     backdrop, so it must be under the HUD and under the screens. */
+  --z-hero:10; --z-hud:20; --z-touch:26; --z-rotate:34; --z-screen:40; --z-boot:60;
 
   --hud-k:1;
   /* Height the touch furniture claims off the bottom of the screen. The HUD's
@@ -80,10 +82,56 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
 @media print{body{display:none}}
 
 /* ============================================================
-   WORDMARK — condensed italic, faked out of the system stack:
-   there are no webfonts in this project and no condensed face is
-   guaranteed anywhere, so the squeeze is a transform.
+   MENU HERO — the layer between the canvas and the screens
+   ------------------------------------------------------------
+   ui/menuscene.js puts a live 3D backdrop in the CANVAS. This layer is what
+   the menu looks like when it does not: a deliberate graphic rather than the
+   black the right-hand half would otherwise be. It carries the optional title
+   key art when there is any, and a procedural fallback when there is not —
+   which is the normal case.
+
+   `body.menu3d` is set by menuscene when the live scene is up; the art and
+   the fallback both fade out then, because the scene IS the backdrop.
    ============================================================ */
+.hero{position:fixed;inset:0;z-index:var(--z-hero);pointer-events:none;overflow:hidden}
+.hero-art{
+  position:absolute;inset:0;
+  background-position:center;background-size:cover;background-repeat:no-repeat;
+  transition:opacity .35s ease;
+}
+/* No key art: a stage-light wash plus one chequer band, so the empty half of
+   the screen is a graphic and not a hole. Cheap — two gradients, no repaint. */
+.hero-art:not(.has-art){
+  background-image:
+    radial-gradient(58% 62% at 74% 34%, rgba(255,122,26,.20), transparent 62%),
+    radial-gradient(46% 50% at 96% 88%, rgba(79,216,232,.10), transparent 64%),
+    linear-gradient(160deg,#101218 0%,#0a0a0d 58%,#070709 100%);
+}
+.hero-veil{
+  position:absolute;inset:0;
+  background:
+    repeating-linear-gradient(115deg, rgba(255,255,255,.022) 0 2px, transparent 2px 9px),
+    linear-gradient(90deg, rgba(6,6,9,.72) 0%, rgba(6,6,9,.10) 52%, rgba(6,6,9,.55) 100%);
+}
+body.menu3d .hero-art{opacity:0}
+body.menu3d .hero-veil{
+  background:linear-gradient(90deg, rgba(6,6,9,.55) 0%, rgba(6,6,9,0) 55%, rgba(6,6,9,.30) 100%);
+}
+
+/* ============================================================
+   WORDMARK
+   ------------------------------------------------------------
+   The canvas mark (ui/logo.js) is the real one — a system font is only
+   `font-weight:900` on machines that have a 900 weight, and the "logo" of the
+   game was otherwise whatever the OS felt like. The CSS mark below is kept
+   for <noscript>, which by definition cannot run the canvas one.
+   ============================================================ */
+canvas.logo{
+  display:block;width:100%;height:auto;max-width:520px;
+  aspect-ratio:1000/340;filter:drop-shadow(0 3px 0 rgba(0,0,0,.45));
+}
+canvas.logo.big{max-width:640px}
+
 .wordmark{
   font-weight:900;font-style:italic;letter-spacing:-.035em;line-height:.86;
   /* Two lines ("RALLY ROAD" / "RASH"), so the sizing is set by the 10-char
@@ -112,7 +160,20 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
     radial-gradient(90% 70% at 50% 8%, rgba(255,122,26,.11), transparent 60%),
     linear-gradient(180deg,#0b0b0e 0%,#07070a 100%);
 }
-.boot-inner{width:min(620px,92vw);text-align:left}
+/* Stage key art behind the bake bar. Empty and invisible unless assets/ has
+   art for this stage, which is the normal case — then the boot screen is the
+   gradient on .overlay above and nothing here paints at all. */
+.boot-art{
+  position:absolute;inset:0;opacity:0;pointer-events:none;
+  background-position:center;background-size:cover;background-repeat:no-repeat;
+  transition:opacity .5s ease;
+}
+.boot-art.on{opacity:.42}
+.boot-art.on::after{
+  content:"";position:absolute;inset:0;
+  background:linear-gradient(90deg,rgba(7,7,10,.94) 0%,rgba(7,7,10,.55) 46%,rgba(7,7,10,.30) 100%);
+}
+.boot-inner{position:relative;width:min(620px,92vw);text-align:left}
 .loadbar{
   margin:clamp(26px,5vh,48px) 0 12px;height:6px;width:100%;
   background:rgba(255,255,255,.09);border-radius:3px;overflow:hidden;
@@ -133,20 +194,65 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
 
 /* ============================================================
    SCREEN SHELL
+   ------------------------------------------------------------
+   A screen is a PLATE, not a page. It occupies the left --plate-w of the
+   viewport and the rest is left transparent for the hero — a menu that
+   blacks out the whole screen to show four lines of text is throwing away
+   the only thing the renderer is doing at that moment.
+
+   --plate-w is per screen, because the amount of room a screen needs is not
+   a constant: a two-column settings sheet is not a four-line main menu, and
+   PAUSE and RESULTS sit over a LIVE RACE and want the whole frame dimmed.
+   Every responsive query below widens it, and the phone ones take it to
+   100% — a 46% plate on a 390 px phone is a column of hyphens.
    ============================================================ */
 .screens{position:fixed;inset:0;z-index:var(--z-screen)}
 .screen{
+  --plate-w:46%;
   position:absolute;inset:0;display:flex;flex-direction:column;
-  background:
-    radial-gradient(120% 90% at 50% 0%, rgba(255,122,26,.09), transparent 55%),
-    linear-gradient(180deg,rgba(8,8,11,.90),rgba(6,6,9,.97));
-  backdrop-filter:blur(9px) saturate(.85);
-  -webkit-backdrop-filter:blur(9px) saturate(.85);
   animation:scr-in .18s ease-out;
   padding:env(safe-area-inset-top) env(safe-area-inset-right)
           env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
+/* The plate itself: one element so the blur is paid for once and the right
+   edge can feather out rather than ending in a ruled line. */
+.screen::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:var(--plate-w);
+  pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 12% 0%, rgba(255,122,26,.10), transparent 58%),
+    linear-gradient(180deg,rgba(8,8,11,.93),rgba(6,6,9,.97));
+  backdrop-filter:blur(9px) saturate(.85);
+  -webkit-backdrop-filter:blur(9px) saturate(.85);
+  -webkit-mask-image:linear-gradient(90deg,#000 0,#000 84%,transparent 100%);
+  mask-image:linear-gradient(90deg,#000 0,#000 84%,transparent 100%);
+}
+/* One hairline of accent down the plate's right edge, sweeping slowly. It is
+   the only thing on these screens that moves on its own, which is exactly why
+   it is one hairline and not a background. */
+.screen::after{
+  content:"";position:absolute;left:calc(var(--plate-w) - 2px);top:0;bottom:0;width:2px;
+  pointer-events:none;
+  background:linear-gradient(180deg,transparent,var(--acc) 22%,var(--acc-hot) 50%,var(--acc) 78%,transparent);
+  opacity:.55;
+  animation:accbar 5.5s ease-in-out infinite;
+}
+@keyframes accbar{0%,100%{transform:translateY(-12%) scaleY(.72);opacity:.35}
+                  50%{transform:translateY(12%) scaleY(1);opacity:.7}}
 @keyframes scr-in{from{opacity:0}to{opacity:1}}
+
+/* Per-screen plate widths. */
+#scr-tracks,#scr-garage{--plate-w:min(62%,880px)}
+#scr-playbook,#scr-settings{--plate-w:min(76%,1120px)}
+/* Over a live race: dim everything, no plate edge, no feathered mask —
+   a fade across the right sixth of a full-width sheet just looks like a bug. */
+#scr-pause,#scr-results{--plate-w:100%}
+#scr-pause::after,#scr-results::after{display:none}
+#scr-pause::before,#scr-results::before{-webkit-mask-image:none;mask-image:none}
+
+.scr-head,.scr-body,.scr-foot{max-width:var(--plate-w)}
+/* The medal and the best trick stack rather than fighting for one line. */
+#resultsMedal{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 
 .scr-head{
   flex:0 0 auto;display:flex;align-items:flex-end;justify-content:space-between;gap:20px;
@@ -160,7 +266,8 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
 .scr-head h2::before{content:"";display:inline-block;width:.32em;height:.72em;margin-right:.42em;
   background:var(--acc);transform:skewX(-12deg);vertical-align:baseline}
 .scr-sub{margin-top:5px;font-size:12px;color:var(--fg-3);letter-spacing:.02em}
-.scr-head-right{font-size:11px;letter-spacing:.16em;color:var(--fg-3);text-align:right;font-weight:700}
+.scr-head-right{font-size:11px;letter-spacing:.16em;color:var(--fg-3);text-align:right;font-weight:700;
+  display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 
 .scr-body{flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;
   padding:clamp(14px,2.6vh,26px) clamp(18px,3.4vw,44px)}
@@ -172,30 +279,45 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
 .foot-spacer{flex:1 1 auto}
 .foot-note{font-size:11px;color:var(--fg-3);letter-spacing:.06em}
 
-/* ---------------- buttons ---------------- */
+/* ---------------- buttons ----------------
+   Chamfered bottom-right corner via clip-path — the arcade-panel cue, and it
+   costs nothing because the shape is the clip, not a border image.
+
+   THE CATCH, and why the focus ring below is INSET: clip-path clips the
+   element's outline too, so the shared `:focus-visible,.focus{outline}` rule
+   would be silently cut off on every button. The focus ring is the whole
+   affordance for the d-pad focus manager, so buttons get an inset ring that
+   the clip cannot eat. Do not "tidy" this back to an outline. */
 .btn{
   position:relative;display:inline-flex;align-items:center;gap:10px;
   min-height:44px;padding:12px 20px;
   font-size:13px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;
   color:var(--fg);background:rgba(255,255,255,.045);
-  border:1px solid var(--line-2);border-radius:2px;
-  transition:background .14s ease,border-color .14s ease,transform .1s ease;
+  border:1px solid var(--line-2);border-radius:0;
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 11px),calc(100% - 11px) 100%,0 100%);
+  transition:background .14s ease,border-color .14s ease,transform .1s ease,box-shadow .14s ease;
 }
 .btn::after{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--acc);
-  opacity:0;transition:opacity .14s ease}
+  opacity:0;transform:scaleY(.2);transform-origin:center;
+  transition:opacity .14s ease,transform .18s cubic-bezier(.2,1.2,.3,1)}
 .btn:hover{background:rgba(255,255,255,.09)}
-.btn.focus,.btn:focus-visible{border-color:var(--acc);background:rgba(255,122,26,.14)}
-.btn.focus::after,.btn:focus-visible::after{opacity:1}
+.btn.focus,.btn:focus-visible{
+  outline:none;border-color:var(--acc);background:rgba(255,122,26,.14);
+  box-shadow:inset 0 0 0 2px var(--acc);
+}
+.btn.focus::after,.btn:focus-visible::after{opacity:1;transform:scaleY(1)}
 .btn:active{transform:translateY(1px)}
 .btn.primary{
   color:#140a02;border-color:transparent;
   background:linear-gradient(180deg,var(--acc-hot),var(--acc));
 }
 .btn.primary:hover{background:linear-gradient(180deg,#ffb268,var(--acc-hot))}
-.btn.primary.focus,.btn.primary:focus-visible{box-shadow:0 0 0 2px var(--ink),0 0 0 4px var(--acc)}
+.btn.primary.focus,.btn.primary:focus-visible{box-shadow:inset 0 0 0 3px rgba(10,10,12,.85)}
+.btn.primary.focus::after,.btn.primary:focus-visible::after{background:var(--ink)}
 .btn.ghost{background:none;border-color:var(--line);color:var(--fg-2)}
 .btn.ghost:hover{color:var(--fg);border-color:var(--line-2)}
 .btn.danger.focus,.btn.danger:hover{border-color:var(--bad);color:#ffb4ae;background:rgba(255,83,71,.12)}
+.btn.danger.focus{box-shadow:inset 0 0 0 2px var(--bad)}
 .btn[disabled],.btn.off{opacity:.42;pointer-events:none}
 
 /* ============================================================
@@ -203,7 +325,7 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
    ============================================================ */
 .screen.main{justify-content:center}
 .main-wrap{
-  width:min(1100px,92vw);margin:0 auto;
+  width:100%;max-width:var(--plate-w);margin:0;
   padding:clamp(16px,4vh,40px) clamp(18px,3.4vw,44px);
 }
 .main-brand{margin-bottom:clamp(20px,5vh,54px)}
@@ -262,19 +384,43 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
 .card-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(272px,1fr));align-content:start}
 .card-grid.cars{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
 
+/* Same chamfer and the same inset-ring rule as .btn — see the note there. */
 .pick{
   position:relative;display:flex;flex-direction:column;gap:10px;
-  padding:16px 16px 14px;border:1px solid var(--line);border-radius:3px;
+  padding:16px 16px 14px;border:1px solid var(--line);border-radius:0;
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%);
   background:linear-gradient(180deg,var(--plate-3),rgba(9,10,13,.86));
-  transition:border-color .14s ease,background .14s ease,transform .1s ease;
+  transition:border-color .14s ease,background .14s ease,transform .16s cubic-bezier(.2,1.1,.3,1),
+             box-shadow .16s ease;
   min-height:64px;width:100%;overflow:hidden;
 }
-.pick:hover{border-color:var(--line-2)}
-.pick.focus,.pick:focus-visible{border-color:var(--acc);background:linear-gradient(180deg,rgba(255,122,26,.14),rgba(9,10,13,.9))}
+.pick:hover{border-color:var(--line-2);transform:translateY(-2px)}
+.pick.focus,.pick:focus-visible{
+  outline:none;border-color:var(--acc);transform:translateY(-2px);
+  background:linear-gradient(180deg,rgba(255,122,26,.14),rgba(9,10,13,.9));
+  box-shadow:inset 0 0 0 2px var(--acc);
+}
 .pick.sel{border-color:var(--acc)}
-.pick.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--acc)}
+.pick.sel::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--acc);
+  animation:sel-bar .30s cubic-bezier(.2,1.4,.3,1) both;transform-origin:top;
+}
+@keyframes sel-bar{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+/* One sweep across the card the moment it is selected — long enough to see,
+   short enough that a d-pad walk down the grid does not strobe. */
+.pick.sel::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(100deg,transparent 30%,rgba(255,122,26,.20) 50%,transparent 70%);
+  background-size:280% 100%;
+  animation:sel-sweep .55s ease-out both;
+}
+@keyframes sel-sweep{from{background-position:120% 0;opacity:1}to{background-position:-60% 0;opacity:0}}
 .pick.locked{opacity:.44}
 .pick.locked .pick-name{color:var(--fg-2)}
+/* A bonus stage is not part of the championship, and the card says so before
+   you read a word of it. */
+.pick.bonus{border-color:rgba(196,107,255,.42)}
+.pick.bonus .pick-name{color:#e0c2ff}
 .pick-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .pick-name{font-size:17px;font-weight:900;font-style:italic;letter-spacing:.01em;text-transform:uppercase}
 .pick-tag{font-size:11.5px;color:var(--fg-3);line-height:1.45}
@@ -284,9 +430,32 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;tex
   border:1px solid var(--line);color:var(--fg-2);background:rgba(255,255,255,.04);white-space:nowrap;
 }
 .chip.info{border-color:rgba(79,216,232,.4);color:var(--cyan);background:rgba(79,216,232,.08)}
+/* A named set piece or a savage difficulty rating — the two things on a stage
+   card worth reading before the lap shape. */
+.chip.hot{border-color:rgba(255,122,26,.5);color:var(--acc-hot);background:rgba(255,122,26,.10)}
+.chip.bonus{border-color:rgba(196,107,255,.55);color:#d5aaff;background:rgba(196,107,255,.12)}
 .chip.gold{border-color:rgba(255,199,74,.55);color:var(--gold);background:rgba(255,199,74,.10)}
 .chip.silver{border-color:rgba(211,216,222,.45);color:var(--silver);background:rgba(211,216,222,.08)}
 .chip.bronze{border-color:rgba(205,129,68,.5);color:var(--bronze);background:rgba(205,129,68,.10)}
+
+/* ---------------- medal shimmer ----------------
+   A medal is the only thing in this UI that is allowed to look precious. One
+   slow sheen across the fill; masked to the element so it cannot bleed.
+   The reduced-motion rule at the top of this file kills it wholesale. */
+.chip.gold,.chip.silver,.chip.bronze,.medal-award,.prog-step.gold i,
+.prog-step.silver i,.prog-step.bronze i{position:relative;overflow:hidden}
+.chip.gold::after,.chip.silver::after,.chip.bronze::after,.medal-award::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(105deg,transparent 38%,rgba(255,255,255,.42) 50%,transparent 62%);
+  background-size:300% 100%;
+  animation:shimmer 3.6s ease-in-out infinite;
+}
+.chip.silver::after{animation-delay:.5s}
+.chip.bronze::after{animation-delay:1s}
+@keyframes shimmer{
+  0%{background-position:150% 0}
+  55%,100%{background-position:-70% 0}
+}
 .lock{
   display:inline-flex;align-items:center;gap:6px;font-size:10.5px;letter-spacing:.14em;
   color:var(--warn);font-weight:700;
@@ -354,6 +523,80 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:2px solid #1a0
 .keyrow:last-child{border-bottom:none}
 .keyrow span{color:var(--fg-3);letter-spacing:.06em}
 .keyrow b{font-weight:700;color:var(--fg-2);font-family:var(--mono);font-size:11px;text-align:right}
+.ctl-more{margin-top:12px;font-size:10.5px;letter-spacing:.1em;color:var(--acc);font-weight:700}
+
+/* ============================================================
+   PLAYBOOK
+   ------------------------------------------------------------
+   The screen that explains the game. The tab strip is one focus target and
+   steps with left/right, exactly like a settings segment — see ui.js.
+   ============================================================ */
+/* The strip also carries `seg` so the focus manager steps it with left/right
+   (see index.html), which means every .seg paint rule has to be undone here.
+   This block MUST stay after the .seg rules in the settings section. */
+.tabs.seg{
+  display:flex;gap:2px;margin-bottom:16px;flex-wrap:wrap;
+  border:none;border-bottom:1px solid var(--line);border-radius:0;overflow:visible;
+}
+.tabs button{
+  padding:11px 16px;min-height:44px;
+  font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--fg-3);border-bottom:2px solid transparent;background:none;
+  transition:color .12s ease,border-color .12s ease,background .12s ease;
+}
+.tabs button:hover{color:var(--fg-2);background:rgba(255,255,255,.04)}
+.tabs.seg button.on{color:var(--acc);border-bottom-color:var(--acc);background:rgba(255,122,26,.07)}
+.tabs.focus{outline-offset:4px}
+
+.pb-body{display:block}
+.pb-lead{font-size:12px;line-height:1.65;color:var(--fg-2);max-width:74ch;margin-bottom:16px}
+.pb-lead code{font-family:var(--mono);font-size:11px;color:var(--cyan)}
+
+.pb-notes{display:grid;gap:10px}
+.pb-note{
+  display:flex;gap:14px;align-items:flex-start;
+  padding:14px 16px;border:1px solid var(--line);background:rgba(255,255,255,.022);
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%);
+}
+.pb-note canvas.ico{flex:0 0 auto;margin-top:2px}
+.pb-note h4{font-size:12px;font-weight:900;letter-spacing:.12em;color:var(--fg);margin-bottom:5px}
+.pb-note p{font-size:12px;line-height:1.62;color:var(--fg-3);max-width:70ch}
+
+.pb-items{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.pb-item{
+  display:flex;gap:14px;align-items:flex-start;padding:14px 16px;
+  border:1px solid var(--line);border-left:3px solid var(--ic,var(--acc));
+  background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(9,10,13,.5));
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%);
+}
+.pb-item canvas.ico{flex:0 0 auto;margin-top:2px}
+.pb-item-body{min-width:0}
+.pb-item h4{
+  font-size:13px;font-weight:900;font-style:italic;letter-spacing:.10em;
+  color:var(--ic,var(--acc));margin-bottom:6px;
+}
+.pb-charges{
+  margin-left:8px;font-style:normal;font-size:10px;letter-spacing:.08em;
+  color:var(--fg-3);font-family:var(--mono);
+}
+.pb-item p{font-size:11.5px;line-height:1.58;color:var(--fg-2)}
+.pb-tip,.pb-who{margin-top:7px;color:var(--fg-3) !important;font-size:11px !important}
+.pb-tip b,.pb-who b{
+  display:inline-block;margin-right:8px;font-size:9px;letter-spacing:.2em;
+  color:var(--cyan);font-weight:800;
+}
+.pb-who b{color:var(--warn)}
+.pb-who{font-family:var(--mono)}
+
+.pb-ctl{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-bottom:16px}
+.pb-table{border:1px solid var(--line);padding:12px 15px;background:rgba(255,255,255,.02)}
+.pb-table.lead{border-color:rgba(255,122,26,.4);background:rgba(255,122,26,.05)}
+.pb-table h4{font-size:10.5px;letter-spacing:.24em;color:var(--fg-3);font-weight:800;margin-bottom:9px}
+.pb-table.lead h4{color:var(--acc)}
+/* The rows the tables never had. Marked so a returning player can see at a
+   glance which bindings are the new ones. */
+.pb-table .keyrow.extra span{color:var(--fg-2)}
+.pb-table .keyrow.extra b{color:var(--acc)}
 
 /* ============================================================
    PAUSE
@@ -392,10 +635,15 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:2px solid #1a0
 .riser.me .who{color:var(--acc)}
 
 .classification{border:1px solid var(--line);border-radius:3px;overflow:hidden}
+/* Five columns since wave 6: STYLE is the trick total, and on this game it is
+   half the reason anybody replays a stage. Every media query below re-states
+   these tracks — a five-column head over a four-column row is a shear. */
 .class-head,.class-row{
-  display:grid;grid-template-columns:46px minmax(0,1fr) 92px 92px;gap:8px;align-items:center;
+  display:grid;grid-template-columns:46px minmax(0,1fr) 92px 92px 62px;gap:8px;align-items:center;
   padding:9px 12px;font-family:var(--mono);font-size:12px;
 }
+.class-row .sty{color:var(--acc);font-weight:700}
+.class-head span:last-child,.class-row span:last-child{text-align:right}
 .class-head{background:rgba(255,255,255,.05);font-size:9.5px;letter-spacing:.18em;color:var(--fg-3)}
 .class-head span:nth-child(n+3),.class-row span:nth-child(n+3){text-align:right}
 .class-row{border-top:1px solid var(--line);color:var(--fg-2)}
@@ -439,6 +687,12 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:2px solid #1a0
 .medal-award.gold{color:var(--gold);border-color:rgba(255,199,74,.6);background:rgba(255,199,74,.12)}
 .medal-award.silver{color:var(--silver);border-color:rgba(211,216,222,.5);background:rgba(211,216,222,.10)}
 .medal-award.bronze{color:var(--bronze);border-color:rgba(205,129,68,.55);background:rgba(205,129,68,.12)}
+/* Beside the medal: what you did, as opposed to where you finished. */
+.best-trick{
+  display:inline-flex;align-items:center;font-size:10.5px;font-weight:800;letter-spacing:.16em;
+  padding:6px 11px;color:var(--cyan);border:1px solid rgba(79,216,232,.42);
+  background:rgba(79,216,232,.08);
+}
 
 /* ============================================================
    HUD
@@ -531,6 +785,10 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
 .splits .best b{color:var(--cyan)}
 .splits b{font-weight:600;color:var(--fg-2)}
 .splits b.hot{color:var(--acc)}
+/* Style total. Hidden entirely until the first trick lands — a permanent 0
+   in the lap card reads as a broken instrument. */
+.splits .style b{color:var(--acc);font-weight:800}
+.splits .style.off{display:none}
 
 /* ---- minimap ---- */
 .map{padding:calc(6 * var(--s))}
@@ -582,6 +840,61 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   width:calc(5 * var(--s));height:calc(5 * var(--s));border-radius:50%;
   background:var(--ic,var(--acc));
 }
+/* The glyph. Painted by ui/icons.js at 20 CSS px and then scaled by --s with
+   everything else, so HUD SIZE moves it too. */
+.itemcard canvas.ico{
+  display:block;flex:0 0 auto;
+  width:calc(19 * var(--s)) !important;height:calc(19 * var(--s)) !important;
+}
+/* WHICH BUTTON FIRES IT. The game had a whole item system and did not say,
+   anywhere, that F throws one. */
+.itemcard .firekey{
+  font-style:normal;font-family:var(--mono);font-weight:800;
+  font-size:max(8px,calc(9.5 * var(--s)));letter-spacing:.06em;color:var(--fg-2);
+  padding:calc(2 * var(--s)) calc(5 * var(--s));
+  border:1px solid var(--line-2);border-bottom-width:calc(2 * var(--s));
+  border-radius:calc(2 * var(--s));background:rgba(255,255,255,.06);
+  margin-left:calc(2 * var(--s));
+}
+
+/* ---------------- trick pop ----------------
+   Lands with the car, coloured by tier, one at a time. Sits above the item
+   card in the same right-hand column. */
+.trick-slot{min-height:0}
+.trickpop{
+  font-size:max(12px,calc(16 * var(--s)));font-weight:900;font-style:italic;letter-spacing:.10em;
+  color:var(--tc,var(--acc));white-space:nowrap;
+  padding:calc(3 * var(--s)) calc(10 * var(--s));
+  border:1px solid var(--tc,var(--acc));border-radius:calc(2 * var(--s));
+  background:rgba(10,11,14,.80);
+  text-shadow:0 0 calc(12 * var(--s)) var(--tc,var(--acc));
+  animation:trick-pop .5s cubic-bezier(.15,1.5,.3,1);
+}
+@keyframes trick-pop{
+  0%{transform:scale(.5) translateY(14px);opacity:0}
+  40%{transform:scale(1.12);opacity:1}
+  100%{transform:scale(1);opacity:1}
+}
+
+/* ---------------- first-run tip ----------------
+   Centre-top, above the wrong-way flag's band so the two never collide, and
+   wide enough for a full sentence — this is the one place the HUD explains
+   rather than reports. */
+.tip-slot{
+  position:absolute;left:50%;top:12%;transform:translateX(-50%);
+  max-width:min(80vw,calc(420 * var(--s)));pointer-events:none;
+}
+.tipcard{
+  padding:calc(9 * var(--s)) calc(15 * var(--s));
+  border:1px solid rgba(79,216,232,.5);border-left:calc(3 * var(--s)) solid var(--cyan);
+  background:rgba(8,9,12,.90);
+  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
+  font-size:max(11px,calc(12.5 * var(--s)));line-height:1.5;color:var(--fg-2);
+  letter-spacing:.02em;text-align:left;
+  animation:tip-in .32s cubic-bezier(.2,1.2,.3,1);
+}
+@keyframes tip-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
+.tipcard.out{opacity:0;transform:translateY(-8px);transition:opacity .38s ease,transform .38s ease}
 /* The roulette: still spinning, not yours yet, and not usable yet either. */
 .itemcard.rolling{animation:none;opacity:.86}
 .itemcard.rolling b{color:var(--fg-2)}
@@ -613,6 +926,9 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
 .banner.good{border-color:rgba(99,217,138,.6);color:var(--good)}
 .banner.warn{border-color:rgba(255,194,71,.6);color:var(--warn)}
 .banner.bad{border-color:rgba(255,83,71,.6);color:var(--bad)}
+/* The pickup callout reuses the banner machinery rather than inventing a
+   fourth transient with its own timer. */
+.banner.item{border-color:rgba(255,122,26,.65);color:var(--acc-hot);letter-spacing:.14em}
 .banner.out{opacity:0;transform:translateY(-8px);transition:opacity .3s ease,transform .3s ease}
 
 /* ---- race log ---- */
@@ -772,6 +1088,10 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
    ============================================================ */
 @media (max-width:1099px){
   .hud{--u:.94px}
+  /* The hero has less room to be worth looking at; the plate takes more. */
+  .screen{--plate-w:58%}
+  #scr-tracks,#scr-garage{--plate-w:72%}
+  #scr-playbook,#scr-settings{--plate-w:88%}
   .settings-cols{grid-template-columns:1fr}
   .results-grid{grid-template-columns:1fr}
   .podium{min-height:170px}
@@ -780,23 +1100,33 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
 /* ---- tablet ---- */
 @media (max-width:860px){
   .hud{--u:.90px}
+  /* Below here the plate is the whole screen: a 46 % column on a phone is a
+     column of hyphens. The hero stays, dimmed, as a backdrop under it. */
+  .screen,#scr-tracks,#scr-garage,#scr-playbook,#scr-settings{--plate-w:100%}
+  .screen::after{display:none}
+  .screen::before{-webkit-mask-image:none;mask-image:none}
+  .hero{opacity:.30}
   .card-grid{grid-template-columns:1fr 1fr}
   .card-grid.cars{grid-template-columns:1fr}
-  .class-head,.class-row{grid-template-columns:38px minmax(0,1fr) 80px 80px;font-size:11px}
+  .class-head,.class-row{grid-template-columns:38px minmax(0,1fr) 80px 80px 54px;font-size:11px}
+  .pb-items{grid-template-columns:1fr}
+  .pb-ctl{grid-template-columns:1fr}
 }
 
 /* ---- phone-ish width ---- */
 @media (max-width:620px){
   .card-grid,.card-grid.cars{grid-template-columns:1fr}
   .scr-head{flex-direction:column;align-items:flex-start;gap:6px}
-  .scr-head-right{text-align:left}
+  .scr-head-right{text-align:left;align-items:flex-start}
   .btn{min-height:52px;font-size:12px;padding:12px 16px}
   .main-actions{max-width:none}
-  .class-head,.class-row{grid-template-columns:32px minmax(0,1fr) 72px 72px;gap:6px;padding:8px;font-size:10.5px}
+  .class-head,.class-row{grid-template-columns:30px minmax(0,1fr) 68px 68px 46px;gap:5px;padding:8px;font-size:10.5px}
   .riser{max-width:none}
   .set-row{flex-wrap:wrap;gap:8px}
   .set-ctl{width:100%;justify-content:space-between}
   input[type=range]{flex:1 1 auto;width:auto}
+  .tabs button{padding:11px 11px;font-size:10px;letter-spacing:.1em}
+  .pb-note,.pb-item{gap:11px;padding:12px 13px}
 }
 
 /* ---- landscape phone: HUD collapses into a top strip ----
@@ -841,8 +1171,14 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   .scr-sub{display:none}
   .main-actions .btn{min-height:48px}
   .wordmark.big{font-size:clamp(26px,5.2vh,44px)}
+  canvas.logo.big{max-width:min(360px,52vw)}
   .podium{min-height:132px}
   .riser.p1 .block{height:80px}.riser.p2 .block{height:58px}.riser.p3 .block{height:42px}
+  /* Vertical room is the scarce thing here; the tip card would sit on top of
+     the wrong-way flag, and the flag is the one that stops you losing a lap. */
+  .tip-slot{top:6%;max-width:min(70vw,calc(340 * var(--s)))}
+  .tabs{margin-bottom:10px}
+  .pb-note p,.pb-item p{font-size:11px}
 }
 
 /* ---- portrait phone: playable, but the HUD stacks and the toast fires ---- */
@@ -870,7 +1206,10 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   .z-speed{display:flex;position:fixed;left:50%;right:auto;transform:translateX(-50%);
     bottom:calc(max(12px,env(safe-area-inset-bottom)) + 12px);
     margin-right:0;align-items:center;z-index:6;pointer-events:none}
-  .z-speed > :not(.item-slot){display:none}
+  /* …and the trick pop, which joined it in wave 6 for the same reason: it is
+     a moment, not an instrument, and there is no cost to a portrait player
+     seeing it. */
+  .z-speed > :not(.item-slot):not(.trick-slot){display:none}
   body.touch-controls .z-speed{margin-right:0;
     bottom:calc(max(12px,env(safe-area-inset-bottom)) + 300px)}
   .map canvas{width:calc(104 * var(--s));height:calc(104 * var(--s))}
@@ -912,13 +1251,18 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
 @media (pointer:coarse){
   .btn:hover{background:rgba(255,255,255,.045)}
   .btn.primary:hover{background:linear-gradient(180deg,var(--acc-hot),var(--acc))}
-  .pick:hover{border-color:var(--line)}
-  .btn,.seg button,.pick{min-height:64px}
+  .pick:hover{border-color:var(--line);transform:none}
+  .btn,.seg button,.pick,.tabs button{min-height:64px}
   .seg button{padding:12px 14px;min-width:56px;text-align:center;justify-content:center}
 }
 
 /* ---- big screens: stop the menu from becoming a poster ---- */
 @media (min-width:1700px){
   .hud{--u:1.08px}
-  .main-wrap{width:min(1280px,86vw)}
+  /* The plate is a fraction of the viewport, so on a 2560 px monitor 46 % is
+     1180 px of text column. Cap it and let the hero take the rest. */
+  .screen{--plate-w:min(42%,760px)}
+  #scr-tracks,#scr-garage{--plate-w:min(56%,1000px)}
+  #scr-playbook,#scr-settings{--plate-w:min(66%,1280px)}
+  .main-wrap{max-width:min(var(--plate-w),760px)}
 }

@@ -12,7 +12,7 @@
 <!-- ?v= is a cache buster: static hosts serve assets with max-age=600, so a
      returning player keeps the old layout for ten minutes after a deploy.
      Bump this whenever styles.css changes in a way players must see. -->
-<link rel="stylesheet" href="src/ui/styles.css?v=9" />
+<link rel="stylesheet" href="src/ui/styles.css?v=10" />
 <script type="importmap">
 {
   "imports": {
@@ -26,13 +26,25 @@
 
 <canvas id="stage" aria-label="Game viewport"></canvas>
 
+<!-- ============ MENU HERO ============
+     The layer between the WebGL canvas and the screens. ui/menuscene.js puts
+     the live 3D backdrop in the CANVAS; this carries the key art (or the CSS
+     fallback that stands in for art nobody has) and dims the right-hand half
+     behind the plate. Empty and inert until a menu screen is shown. -->
+<div id="hero" class="hero hidden" aria-hidden="true">
+  <div class="hero-art" id="heroArt"></div>
+  <div class="hero-veil"></div>
+</div>
+
 <!-- ============ BOOT / LOADING ============
      Also reused as the per-race bake progress screen: UI.boot(p, msg). -->
 <div id="boot" class="overlay boot">
+  <!-- Stage key art behind the bake bar when assets/ has any; empty and
+       invisible otherwise, which is the normal case (ARCHITECTURE §6.11). -->
+  <div class="boot-art" id="bootArt"></div>
   <div class="boot-inner">
-    <div class="wordmark" aria-label="RALLY ROAD RASH">
-      <span class="wm-r">R</span><span>ALLY ROAD</span><br /><span>RASH</span>
-    </div>
+    <canvas class="logo" id="bootLogo" width="620" height="210"
+            data-lines="RALLY ROAD|RASH" aria-label="RALLY ROAD RASH"></canvas>
     <p class="strap">OFF-ROAD CHAMPIONSHIP</p>
     <div class="loadbar"><i id="bootBar"></i></div>
     <p class="loadmsg" id="bootMsg">warming up the engine…</p>
@@ -49,9 +61,8 @@
   <section id="scr-main" class="screen main hidden">
     <div class="main-wrap">
       <div class="main-brand">
-        <div class="wordmark big" aria-label="RALLY ROAD RASH">
-          <span class="wm-r">R</span><span>ALLY ROAD</span><br /><span>RASH</span>
-        </div>
+        <canvas class="logo big" id="mainLogo" width="900" height="306"
+                data-lines="RALLY ROAD|RASH" aria-label="RALLY ROAD RASH"></canvas>
         <p class="strap">OFF-ROAD CHAMPIONSHIP</p>
         <div class="badge-slot" id="mainBadge"></div>
         <!-- Career strip: one step per stage, filled in by ui.js from the
@@ -61,6 +72,7 @@
       </div>
       <nav class="main-actions">
         <button class="btn primary" data-focus data-act="main-race">RACE</button>
+        <button class="btn" data-focus data-act="main-playbook">HOW TO PLAY</button>
         <button class="btn" data-focus data-act="main-settings">SETTINGS</button>
       </nav>
       <p class="hintline" id="mainHints"></p>
@@ -113,6 +125,29 @@
     </footer>
   </section>
 
+  <!-- ---- playbook (how to play) ----
+       Reachable from MAIN and from PAUSE. The tab strip handles `ui-step`
+       exactly the way a settings segment does, so the focus manager needs no
+       change: one [data-focus] on the strip, left/right inside it. -->
+  <section id="scr-playbook" class="screen sheet hidden">
+    <header class="scr-head">
+      <div><h2>PLAYBOOK</h2><p class="scr-sub">Everything the game does, and when to do it.</p></div>
+      <div class="scr-head-right" id="playbookHint"></div>
+    </header>
+    <div class="scr-body">
+      <!-- `seg` is load-bearing, not styling: the focus manager routes a
+           horizontal d-pad press into a `ui-step` event for elements carrying
+           that class, and the tab strip wants exactly that behaviour. It is
+           the reason the focus manager needs no change for this screen.
+           styles.css resets everything .seg would otherwise paint. -->
+      <div class="tabs seg" id="playbookTabs" data-focus tabindex="-1" role="tablist"></div>
+      <div class="pb-body" id="playbookBody"></div>
+    </div>
+    <footer class="scr-foot">
+      <button class="btn ghost" data-focus data-act="playbook-back">BACK</button>
+    </footer>
+  </section>
+
   <!-- ---- pause ---- -->
   <section id="scr-pause" class="screen pause hidden">
     <div class="pause-card">
@@ -121,6 +156,7 @@
       <nav class="pause-actions">
         <button class="btn primary" data-focus data-act="pause-resume">RESUME</button>
         <button class="btn" data-focus data-act="pause-restart">RESTART STAGE</button>
+        <button class="btn" data-focus data-act="pause-playbook">HOW TO PLAY</button>
         <button class="btn" data-focus data-act="pause-settings">SETTINGS</button>
         <button class="btn ghost danger" data-focus data-act="pause-quit">QUIT TO MENU</button>
       </nav>
@@ -137,7 +173,7 @@
       <div class="results-grid">
         <div class="podium" id="podium"></div>
         <div class="classification">
-          <div class="class-head"><span>POS</span><span>DRIVER</span><span>TOTAL</span><span>BEST LAP</span></div>
+          <div class="class-head"><span>POS</span><span>DRIVER</span><span>TOTAL</span><span>BEST LAP</span><span>STYLE</span></div>
           <div id="resultsTable"></div>
           <div class="records" id="resultsRecord"></div>
         </div>
@@ -173,6 +209,9 @@
       <div class="splits">
         <span><em>LAST</em><b id="hLast">--:--.--</b></span>
         <span class="best"><em>BEST</em><b id="hBest">--:--.--</b></span>
+        <!-- Style total. Empty (and display:none) until the first trick
+             lands, so a clean-driving player never sees a zero. -->
+        <span class="style" id="hStyle"></span>
       </div>
     </div>
   </div>
@@ -186,6 +225,8 @@
 
   <!-- ── bottom-right: speed cluster ─────────────────────── -->
   <div class="z-speed">
+    <!-- Trick pop: lands with the car, one at a time, coloured by tier. -->
+    <div class="trick-slot" id="hTrick"></div>
     <!-- Item slot: a sibling of the air tag inside .z-speed, so it needs no
          grid change and is hidden with the rest of the cluster in portrait. -->
     <div class="item-slot" id="hItem"></div>
@@ -205,6 +246,10 @@
 
   <!-- ── bottom-left: race log ───────────────────────────── -->
   <div class="z-log" id="hLog"></div>
+
+  <!-- First-run tip card: hud.tip(id, text, ttl). One at a time, centre-top,
+       and never during the countdown — see hud.js. -->
+  <div class="tip-slot" id="hTip"></div>
 
   <!-- ── centre overlays ─────────────────────────────────── -->
   <div class="countdown hidden" id="hCount"><b id="hCountN">3</b></div>
