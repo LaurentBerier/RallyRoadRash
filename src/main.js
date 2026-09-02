@@ -26,6 +26,8 @@ import { bakeTrack, Terrain } from './world/terrain.js';
 import { Sky, SKY_THEMES } from './world/sky.js';
 import { Props } from './world/props.js';
 import { Dust } from './world/dust.js';
+import { VFX } from './world/vfx.js';
+import { setGroundTexture } from './world/terrain-shader.js';
 import { TRACKS, getTrack } from './world/tracks/index.js';
 import { VEHICLES, VEHICLE_BY_ID, statBars } from './game/vehicles.js';
 import { CameraRig } from './game/camera.js';
@@ -482,18 +484,30 @@ function buildWorld(def, baked) {
   const terrain = new Terrain(engine.renderer, baked, engine.quality, engine.caps, def);
   engine.scene.add(terrain.group);
 
+  /* The terrain GLSL has always had a dynamic-shadow path and nothing ever
+     enabled it, which is why cars appeared to hover. One line. */
+  engine.attachTerrain(terrain);
+  /* Optional photographic ground detail. Null is the normal case and the
+     shader's own grain is the fallback; see core/assets.js. */
+  setGroundTexture(terrain, App.assets.get('ground'));
+
   const sky = new Sky(engine.renderer, engine.scene, engine.quality, theme);
+  /* Optional skyline panorama. When there is one it replaces the procedural
+     vista ring; when there is not, the ring IS the horizon. */
+  sky.setSkyline(App.assets.get('sky/' + theme));
   engine.setLightTheme(SKY_THEMES[theme]);
   syncSun(terrain, sky);
 
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData);
   const dust = new Dust(engine.scene, terrain, sky.sunDir, engine.quality.dust, theme);
+  const vfx = new VFX(engine.scene, dust, engine.quality, theme);
+  props.setVfx(vfx, dust);
 
   // The rig samples ground height for its boom and its collision avoidance,
   // so it needs THIS track's terrain before the first rig.update().
   App.rig.terrain = terrain;
 
-  App.world = { terrain, sky, props, dust };
+  App.world = { terrain, sky, props, dust, vfx };
   syncViewport();
 }
 

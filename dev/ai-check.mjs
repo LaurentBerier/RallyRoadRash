@@ -272,11 +272,21 @@ function runRace(td, profiles, seed, laps, opts) {
         s.cross++;
         if (d > CROSS_LIMIT) s.crossOver++;
         if (d > s.crossMax) s.crossMax = d;
-      } else if (drv[i].onShortcut && td.shortcutSpline) {
-        // …but the detour has to be tracked just as tightly
-        s.scFrames++;
-        const d = td.shortcutSpline.nearest(cars[i].pos.x, cars[i].pos.z, SCOUT).d;
-        if (d > s.scMaxD) s.scMaxD = d;
+      } else if (drv[i].onShortcut) {
+        /* …but the detour has to be tracked just as tightly — against the
+           route the driver actually committed to, which since wave 6 is one
+           of several. Measuring against td.shortcutSpline (routes[0]) while
+           the car was on canyon's MESA TOP read 241 m off a centreline the
+           driver was never on. scIdx is the index it chose; fall back to the
+           legacy alias only when there is no index to read. */
+        const alt = drv[i].scIdx >= 0 && drv[i].R && drv[i].R.alts
+          ? drv[i].R.alts[drv[i].scIdx] : null;
+        const sp = (alt && alt.spline) || td.shortcutSpline;
+        if (sp) {
+          s.scFrames++;
+          const d = sp.nearest(cars[i].pos.x, cars[i].pos.z, SCOUT).d;
+          if (d > s.scMaxD) s.scMaxD = d;
+        }
       }
 
       // lateral offset telemetry (test f)

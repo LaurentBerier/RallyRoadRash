@@ -388,6 +388,11 @@ function buildAlt(trackData, rl, gapFloor, step, L, rd) {
 
   return {
     id: rd.id, route: makeRoute(alt, altFloor),
+    /* The detour's OWN centreline, carried through so the alt can say which
+       road it is. Without it the only spline anyone could ask for was
+       trackData.shortcutSpline — routes[0] — and anything measuring a driver
+       on routes[1] was measuring it against a road it had never been on. */
+    spline: rd.spline,
     e0, e1, scN, entryS, exitS,
     aiBias: (rd.aiBias === undefined || rd.aiBias === null) ? null : rd.aiBias,
   };
@@ -1357,8 +1362,15 @@ export class AIDriver {
 
       this._scDone[k] = 1;
       decidedHere = true;
-      const bias = a.aiBias === null ? AI_SHORTCUT.skill : a.aiBias;
-      if (this.rng() < AI_SHORTCUT.base + bias * this.skill) {
+      /* An authored aiBias is a MULTIPLIER on the global skill knob, not a
+         replacement for it. Reading it as a replacement made AI_SHORTCUT a
+         half-switch: zeroing base and skill silenced the legacy shortcut but
+         left every authored route firing at its own bias, so "route off" was
+         not off and ai-check's gap test drove a detour it had disabled. A
+         route with no authored bias behaves exactly as the single shortcut
+         always did, because its multiplier is 1. */
+      const bias = a.aiBias === null ? 1 : a.aiBias;
+      if (this.rng() < AI_SHORTCUT.base + bias * AI_SHORTCUT.skill * this.skill) {
         this.scCommitted = true;
         this.scIdx = k;
         this.route = a.route;                  // indices below e0 are shared
