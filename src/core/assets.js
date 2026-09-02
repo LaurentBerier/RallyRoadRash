@@ -123,22 +123,31 @@ async function loadLayers(base, spec) {
     const img = imgs[i];
     g.clearRect(0, 0, S, S);
     if (img) {
-      /* Four copies offset by half a tile, cross-faded by the same weights in
-         both axes. What is a seam in one copy is the middle of another, and
-         the weights sum to 1 everywhere, so nothing darkens. */
+      /* Four copies offset by half a tile, cross-faded: what is a seam in one
+         copy is the middle of another.
+
+         The weights have to SUM TO ONE, because this is a MEAN and not a
+         stack. Drawing the three offset copies with 'lighter' adds them
+         instead, at a total weight of 2.34 — which came back as a solid 255
+         slab for dirt, sand and road, took the shader's `gt` from about 1 to
+         4.6, and left the near ground with an albedo of 1.7. Ground that
+         reflects 170 % of the light falling on it renders at 2.5 in linear:
+         through the tone curve that is white, and it is also well past the
+         bloom threshold, so the ground itself veiled the whole frame. Drawing
+         with 'source-over' at 1/2, 1/3, 1/4 leaves the running result the
+         plain average of the four copies at every pixel. */
       g.globalCompositeOperation = 'source-over';
       g.globalAlpha = 1;
       g.drawImage(img, 0, 0, S, S);
-      g.globalCompositeOperation = 'lighter';
       const h = S * 0.5;
-      for (const [ox, oy, a] of [[h, 0, 0.5], [0, h, 0.5], [h, h, 0.34]]) {
-        g.globalAlpha = a;
+      let k = 1;
+      for (const [ox, oy] of [[h, 0], [0, h], [h, h]]) {
+        g.globalAlpha = 1 / ++k;
         g.drawImage(img, ox - S, oy - S, S, S);
         g.drawImage(img, ox, oy - S, S, S);
         g.drawImage(img, ox - S, oy, S, S);
         g.drawImage(img, ox, oy, S, S);
       }
-      g.globalCompositeOperation = 'source-over';
       g.globalAlpha = 1;
     } else {
       // A hole in the set is mid grey, not black: the shader multiplies this
@@ -146,7 +155,9 @@ async function loadLayers(base, spec) {
       g.fillStyle = '#808080';
       g.fillRect(0, 0, S, S);
     }
-    data.set(g.getImageData(0, 0, S, S).data, S * S * 4 * i);
+    const px = g.getImageData(0, 0, S, S);
+    if (img) reexpose(px.data);
+    data.set(px.data, S * S * 4 * i);
   }
 
   const t = new THREE.DataArrayTexture(data, S, S, N);
@@ -159,6 +170,63 @@ async function loadLayers(base, spec) {
   t.generateMipmaps = true;
   t.needsUpdate = true;
   return t;
+}
+
+/* 8-bit sRGB <-> linear. A 256-entry table because re-exposing six 512 x 512
+   tiles is 1.6 M pixels and Math.pow on every one of them is a visible hitch
+   on the boot thread. */
+const SRGB_TO_LINEAR = (() => {
+  const t = new Float32Array(256);
+  for (let i = 0; i < 256; i++) {
+    const v = i / 255;
+    t[i] = v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+  }
+  return t;
+})();
+
+/** 50 % sRGB grey in linear. Must stay equal to the terrain shader's divisor. */
+const MID_GREY = 0.2158;
+
+function linearToByte(v) {
+  if (!(v > 0)) return 0;
+  if (v >= 1) return 255;
+  const s = v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+  return Math.round(s * 255);
+}
+
+/**
+ * Re-expose one tile in place so that each channel averages mid grey.
+ *
+ * The terrain shader divides this texture by that same MID_GREY and
+ * multiplies the theme palette by the result, so the tile only behaves —
+ * modulating around 1.0 — if it is genuinely exposed there. Photographs are
+ * not, and there is no exposure a set of six can share: of the ones shipped
+ * here sand averages 0.74 in linear and mud 0.09, three stops apart. Sand on
+ * its own would put the ground's albedo past 2 even with the compositing
+ * above fixed, which is the same failure by a slower road.
+ *
+ * Per CHANNEL rather than per luminance, which also neutralises each tile's
+ * average colour cast. That is deliberate and it is the shader's stated
+ * contract: the theme palette decides what a stage is made of, the photograph
+ * supplies only its variation. This is the half of that contract that has to
+ * live at load time — the shader cannot know what it was handed.
+ */
+function reexpose(d) {
+  const n = d.length / 4;
+  let r = 0, g = 0, b = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    r += SRGB_TO_LINEAR[d[i]];
+    g += SRGB_TO_LINEAR[d[i + 1]];
+    b += SRGB_TO_LINEAR[d[i + 2]];
+  }
+  const kr = MID_GREY / Math.max(r / n, 1e-4);
+  const kg = MID_GREY / Math.max(g / n, 1e-4);
+  const kb = MID_GREY / Math.max(b / n, 1e-4);
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = linearToByte(SRGB_TO_LINEAR[d[i]] * kr);
+    d[i + 1] = linearToByte(SRGB_TO_LINEAR[d[i + 1]] * kg);
+    d[i + 2] = linearToByte(SRGB_TO_LINEAR[d[i + 2]] * kb);
+  }
 }
 
 /* ------------------------------------------------------------------

@@ -508,9 +508,20 @@ export function buildTerrainMaterial(t) {
       if (gnear > 0.004 && sid != 6) {
         float lay = sid == 0 ? 5.0 : sid == 1 ? 0.0 : sid == 2 ? 1.0
                   : sid == 3 ? 3.0 : sid == 4 ? 2.0 : 4.0;
-        // 0.2158 is 50 % sRGB grey in linear: dividing by it keeps a normally
-        // exposed tile centred on 1.0, so a missing layer changes nothing.
-        vec3 gt = texture(uGround, vec3(vW.xz * 0.31, lay)).rgb * (1.0 / 0.2158);
+        /* 0.2158 is 50 % sRGB grey in linear: dividing by it keeps a
+           normally exposed tile centred on 1.0, so a missing layer changes
+           nothing. core/assets.js re-exposes every layer to exactly that on
+           the way in, which is the only reason the constant can be trusted.
+
+           Clamped anyway. This term MULTIPLIES the palette, so a tile that
+           arrives brighter than it should is not a slightly-too-pale ground:
+           it is ground with an albedo over 1, which out-runs the tone curve,
+           crosses the bloom threshold and veils the whole frame from the
+           middle out. That is exactly what a mis-composited set of tiles did
+           here once. Two stops of headroom either side is all a photograph
+           needs, and the ground can never again be a light source. */
+        vec3 gt = clamp(texture(uGround, vec3(vW.xz * 0.31, lay)).rgb * (1.0 / 0.2158),
+                        0.25, 2.0);
         albedo *= mix(vec3(1.0), gt, gnear * uGroundOn * 0.70);
       }
       #endif
