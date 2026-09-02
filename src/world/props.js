@@ -14,33 +14,50 @@
      gates, barrier runs along the authored wall spans, arrow boards
      before hairpins and jumps, and the finish stripe on the ground.
 
+   • HEROES — the two or three landmarks per stage that are placed at a
+     NAMED point on the spline rather than sampled: the arch over the
+     canyon wash, the falls above the timberline, the vent field in the
+     caldera, the arch and the bunting over Thunder Mesa. A landmark that
+     lands somewhere different every build is not a landmark.
+
    Collision is a 24 m bucket grid over circles and segments. resolve()
    pushes the car out and returns the impact speed so race.js can route
    it to damage and audio with one call.
+
+   Two sibling files carry what used to be in here, because this one was
+   doing three jobs and had grown past the house line limit:
+   props-recipes.js is WHAT a stage is made of (the tables and the
+   signage), props-shapes.js is the scatter geometry and the rock shader.
    ============================================================ */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { makeRNG, vnoise, fbm, clamp, sstep } from '../core/rng.js';
+import { makeRNG, clamp } from '../core/rng.js';
 import { PLAYABLE_EXT } from './terrain.js';
+import { DUST_KIND } from './dust.js';
+import { makeStreakSprite } from './textures.js';
 import {
   kitPalette, cactusGeo, agaveGeo, bushGeo, snagGeo, broadleafGeo, stumpGeo,
   shardGeo, drumGeo, crateGeo, baleGeo, wreckGeo, pipeStackGeo, shedGeo,
   containerGeo, towerGeo, waterTankGeo, hangarGeo, grandstandGeo, canopyGeo,
   personGeo, poleGeo, culvertGeo, pipeworkGeo, logStackGeo, wireGeo,
+  floodlightGeo, billboardGeo, buntingGeo, tyreWallGeo, rockArchGeo,
+  waterfallSheetGeo, geyserVentGeo,
 } from './kit.js';
+import {
+  RECIPES, DRESSING, KIT_KINDS, UPRIGHT_KINDS, BOUNCE_FOR,
+  gantryTex, bannerTex, sponsorTex, arrowTex, checkerTex, railTex,
+  waterfallMaterial,
+} from './props-recipes.js';
+import {
+  hash2, boulderGeo, hoodooGeo, pineGeo, logGeo, basaltGeo, ventGeo,
+  coneGeo, tyreStackGeo, railQuad, rockMaterial,
+} from './props-shapes.js';
 
 /* Placement is always done for the densest tier. Keep in step with
    QUALITY.ultra.boulders in core/engine.js. */
 const MAX_SCATTER = 2900;
 const GRID_CELL = 24, GRID_HALF = 640;
 const CAR_R = 1.15;              // fallback body radius if a vehicle has none
-
-/** Deterministic 0..1 from a world point. Cheap, uncorrelated on a lattice. */
-function hash2(x, z) {
-  let h = Math.imul((x * 8192) | 0, 0x27d4eb2d) ^ Math.imul((z * 8192) | 0, 0x165667b1);
-  h = Math.imul(h ^ (h >>> 15), 0x2545f491);
-  return ((h ^ (h >>> 13)) >>> 0) / 4294967296;
-}
 
 /* ---------------- module scratch (no per-frame allocation) ---------------- */
 const _dummy = new THREE.Object3D();
@@ -52,477 +69,7 @@ const _pp2 = { x: 0, y: 0, z: 0 };
 const _dd = { x: 0, z: 0 };
 
 /* ============================================================
-   1.  PROCEDURAL GEOMETRY
-   ============================================================ */
-
-/** Irregular rock. Three octaves of displacement then a radius quantise, so
-    the silhouette is angular at every scale you can see it at. */
-function boulderGeo(seed, detail = 2, squash = 0.76) {
-  const g = new THREE.IcosahedronGeometry(1, detail);
-  const p = g.attributes.position;
-  const v = new THREE.Vector3(), n = new THREE.Vector3();
-  for (let i = 0; i < p.count; i++) {
-    v.fromBufferAttribute(p, i);
-    n.copy(v).normalize();
-    let d = 1.0;
-    d += (fbm(n.x * 1.7 + seed, n.z * 1.7 - seed, 2, 2.1, 0.5, seed | 0) - 0.5) * 0.66;
-    d += (fbm(n.x * 4.3 + seed * 2, n.y * 4.3 - seed, 3, 2.1, 0.5, (seed * 13) | 0) - 0.5) * 0.30;
-    d += (vnoise(n.x * 11.0 + seed * 5, n.z * 11.0 - seed * 3, (seed * 31) | 0) - 0.5) * 0.11;
-    d = Math.round(d * 11) / 11 * 0.34 + d * 0.66;      // facet the fracture planes
-    d *= 1 - 0.32 * Math.max(0, -n.y);                  // flatter where it meets the ground
-    v.copy(n).multiplyScalar(d);
-    v.y *= squash;
-    p.setXYZ(i, v.x, v.y, v.z);
-  }
-  g.computeVertexNormals();
-  g.deleteAttribute('uv');                              // triplanar in the shader
-  return g;
-}
-
-/** A hoodoo: stacked resistant caps on a soft column, which is exactly how the
-    real ones form and the only reason they read at 200 m. */
-function hoodooGeo(seed) {
-  const rng = makeRNG((seed * 7919) | 1);
-  const parts = [];
-  let y = 0;
-  const n = 3 + Math.floor(rng() * 3);
-  let r = 0.9 + rng() * 0.5;
-  for (let i = 0; i < n; i++) {
-    const hgt = 0.7 + rng() * 1.5;
-    const rTop = r * (0.55 + rng() * 0.30);
-    const seg = new THREE.CylinderGeometry(rTop, r, hgt, 9, 1);
-    seg.translate((rng() - 0.5) * 0.18, y + hgt * 0.5, (rng() - 0.5) * 0.18);
-    parts.push(seg);
-    y += hgt;
-    // the cap: a wider slab that shelters the column beneath it
-    if (rng() < 0.6 && i < n - 1) {
-      const cap = new THREE.CylinderGeometry(rTop * 1.35, rTop * 1.42, 0.26, 9, 1);
-      cap.translate(0, y + 0.13, 0);
-      parts.push(cap);
-      y += 0.26;
-    }
-    r = rTop;
-  }
-  const g = mergeGeometries(parts, false);
-  for (const p of parts) p.dispose();
-  g.computeVertexNormals();
-  g.deleteAttribute('uv');
-  return g;
-}
-
-/** Conifer: a trunk and three stacked skirts. Merged so one instanced draw
-    covers the whole tree. */
-function pineGeo(seed) {
-  const rng = makeRNG((seed * 104729) | 1);
-  const h = 5.5 + rng() * 5.0;
-  const parts = [];
-  const trunk = new THREE.CylinderGeometry(0.10, 0.20, h * 0.42, 6, 1);
-  trunk.translate(0, h * 0.21, 0);
-  parts.push(trunk);
-  const tiers = 3 + (rng() < 0.5 ? 1 : 0);
-  for (let i = 0; i < tiers; i++) {
-    const t = i / tiers;
-    const r = (1.55 - t * 0.85) * (0.85 + rng() * 0.3);
-    const ch = h * (0.42 - t * 0.09);
-    const cone = new THREE.ConeGeometry(r, ch, 7, 1);
-    cone.translate(0, h * (0.22 + t * 0.22) + ch * 0.5, 0);
-    parts.push(cone);
-  }
-  const g = mergeGeometries(parts, false);
-  for (const p of parts) p.dispose();
-  g.computeVertexNormals();
-  g.deleteAttribute('uv');
-  g.userData.height = h;
-  return g;
-}
-
-/** Fallen log, lying along X with a stub or two. */
-function logGeo(seed) {
-  const rng = makeRNG((seed * 15485863) | 1);
-  const len = 3.2 + rng() * 4.5, r = 0.22 + rng() * 0.18;
-  const parts = [];
-  const body = new THREE.CylinderGeometry(r * 0.8, r, len, 8, 1);
-  body.rotateZ(Math.PI / 2);
-  body.translate(0, r, 0);
-  parts.push(body);
-  for (let i = 0; i < 2; i++) {
-    if (rng() > 0.55) continue;
-    const s = new THREE.CylinderGeometry(0.05, 0.09, 0.5 + rng(), 5, 1);
-    s.rotateZ((rng() - 0.5) * 1.6);
-    s.translate((rng() - 0.5) * len * 0.7, r + 0.25, 0);
-    parts.push(s);
-  }
-  const g = mergeGeometries(parts, false);
-  for (const p of parts) p.dispose();
-  g.computeVertexNormals();
-  g.deleteAttribute('uv');
-  return g;
-}
-
-/** Columnar basalt: a hexagonal prism, snapped off at an angle. */
-function basaltGeo(seed) {
-  const rng = makeRNG((seed * 32452843) | 1);
-  const parts = [];
-  const n = 2 + Math.floor(rng() * 4);
-  for (let i = 0; i < n; i++) {
-    const h = 1.0 + rng() * 3.4;
-    const r = 0.35 + rng() * 0.4;
-    const c = new THREE.CylinderGeometry(r, r * 1.04, h, 6, 1);
-    c.rotateY(rng() * 6.283);
-    c.rotateZ((rng() - 0.5) * 0.42);
-    c.translate((rng() - 0.5) * 1.7, h * 0.46, (rng() - 0.5) * 1.7);
-    parts.push(c);
-  }
-  const g = mergeGeometries(parts, false);
-  for (const p of parts) p.dispose();
-  g.computeVertexNormals();
-  g.deleteAttribute('uv');
-  return g;
-}
-
-/** Spatter cone around a vent — open at the top so it reads as a hole. */
-function ventGeo(seed) {
-  const rng = makeRNG((seed * 49979687) | 1);
-  const h = 1.4 + rng() * 2.2;
-  const g = new THREE.CylinderGeometry(0.55 + rng() * 0.4, 2.1 + rng() * 1.4, h, 12, 1, true);
-  g.translate(0, h * 0.5, 0);
-  g.computeVertexNormals();
-  g.deleteAttribute('uv');
-  return g;
-}
-
-/** Marker cone with a base. */
-function coneGeo() {
-  const parts = [
-    new THREE.ConeGeometry(0.24, 0.68, 10, 1).translate(0, 0.36, 0),
-    new THREE.BoxGeometry(0.52, 0.05, 0.52).translate(0, 0.025, 0)
-  ];
-  const g = mergeGeometries(parts, false);
-  for (const p of parts) p.dispose();
-  g.computeVertexNormals();
-  g.deleteAttribute('uv');
-  return g;
-}
-
-/** Stack of three tyres. Open cylinders, not tori: a torus of any usable
-    smoothness is 170 triangles and there are four hundred of these — from a
-    moving car the silhouette is a stack of dark rings either way. */
-function tyreStackGeo() {
-  const parts = [];
-  for (let i = 0; i < 3; i++) {
-    const t = new THREE.CylinderGeometry(0.52, 0.52, 0.28, 11, 1, true);
-    t.translate(0, 0.16 + i * 0.29, 0);
-    parts.push(t);
-  }
-  const g = mergeGeometries(parts, false);
-  for (const p of parts) p.dispose();
-  g.computeVertexNormals();
-  g.deleteAttribute('uv');
-  return g;
-}
-
-/* ---------------- materials ---------------- */
-
-/** Triplanar rock surface injected into a standard material: no UVs needed on
-    an arbitrary lump, world-space so neighbouring rocks never repeat, and
-    faded with distance so a pebble at 80 m is not a pixel-sized noise
-    generator. */
-function rockMaterial(color, dustCol) {
-  const m = new THREE.MeshStandardMaterial({ color, roughness: 0.93, metalness: 0.0 });
-  const dc = new THREE.Color(dustCol);
-  m.onBeforeCompile = (sh) => {
-    sh.uniforms.uDustCol = { value: new THREE.Vector3(dc.r, dc.g, dc.b) };
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vRkW; varying vec3 vRkN;')
-      // After <begin_vertex> both `transformed` and `objectNormal` exist. The
-      // instance matrix has to be applied by hand — every rock carries its own
-      // rotation, and without it the detail sits in the wrong place.
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-        {
-          vec4 rkP = vec4(transformed, 1.0);
-          vec3 rkN = objectNormal;
-          #ifdef USE_INSTANCING
-            rkP = instanceMatrix * rkP;
-            rkN = mat3(instanceMatrix) * rkN;
-          #endif
-          vRkW = (modelMatrix * rkP).xyz;
-          vRkN = normalize(mat3(modelMatrix) * rkN);
-        }`);
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>
-        varying vec3 vRkW; varying vec3 vRkN; uniform vec3 uDustCol;
-        float rkH(vec2 p){ p = fract(p*vec2(0.1031,0.1030)); p += dot(p,p.yx+33.33); return fract((p.x+p.y)*p.x); }
-        float rkN2(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
-          return mix(mix(rkH(i),rkH(i+vec2(1,0)),f.x), mix(rkH(i+vec2(0,1)),rkH(i+vec2(1,1)),f.x), f.y); }
-        float rkF(vec2 p){ return rkN2(p)*0.55 + rkN2(p*2.13+7.7)*0.28 + rkN2(p*4.31+19.3)*0.17; }
-        float rkTri(vec3 w, vec3 n, float s){
-          vec3 b = pow(abs(n), vec3(4.0)); b /= (b.x+b.y+b.z);
-          return rkF(w.yz*s)*b.x + rkF(w.xz*s)*b.y + rkF(w.xy*s)*b.z;
-        }`)
-      .replace('#include <color_fragment>', `#include <color_fragment>
-        {
-          vec3 rn = normalize(vRkN);
-          float fade = 1.0 - smoothstep(25.0, 110.0, length(vViewPosition));
-          float coarse = rkTri(vRkW, rn, 1.7);
-          float fine   = mix(0.5, rkTri(vRkW, rn, 8.0), fade);
-          diffuseColor.rgb *= 0.72 + 0.34*coarse + 0.16*fine;
-          // dust settles on anything facing up
-          float up = smoothstep(0.15, 0.85, rn.y);
-          diffuseColor.rgb = mix(diffuseColor.rgb, uDustCol, up*(0.22 + 0.28*coarse));
-        }`)
-      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor *= 0.84 + 0.24*rkTri(vRkW, normalize(vRkN), 3.0);`);
-  };
-  m.customProgramCacheKey = () => 'rrr-rock-' + color.toString(16);
-  return m;
-}
-
-/* ---------------- canvas textures ---------------- */
-function canvasTex(w, h, draw, srgb = true) {
-  const c = document.createElement('canvas'); c.width = w; c.height = h;
-  draw(c.getContext('2d'), w, h);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  t.anisotropy = 4;
-  return t;
-}
-
-function gantryTex(accent) {
-  return canvasTex(1024, 160, (g, w, h) => {
-    g.fillStyle = '#14161c'; g.fillRect(0, 0, w, h);
-    g.fillStyle = accent; g.fillRect(0, 0, w, 10); g.fillRect(0, h - 10, w, 10);
-    // chevron run either side of the wordmark
-    g.fillStyle = 'rgba(255,255,255,0.10)';
-    for (let x = -40; x < w; x += 46) {
-      g.beginPath(); g.moveTo(x, 14); g.lineTo(x + 22, 14);
-      g.lineTo(x + 44, h - 14); g.lineTo(x + 22, h - 14); g.closePath(); g.fill();
-    }
-    g.fillStyle = '#0e1014'; g.fillRect(w * 0.26, 16, w * 0.48, h - 32);
-    // 72px, not 96: "ROAD RASH" is nine glyphs and has to sit inside the
-    // w*0.48 plate carved out above.
-    g.font = '800 72px ui-monospace, Menlo, monospace';
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillStyle = '#f2efe6'; g.fillText('ROAD RASH', w * 0.5, h * 0.5 + 4);
-    g.font = '600 22px ui-monospace, monospace';
-    g.fillStyle = accent; g.fillText('START / FINISH', w * 0.5, h - 26);
-  });
-}
-
-function bannerTex(label, accent) {
-  return canvasTex(512, 96, (g, w, h) => {
-    g.fillStyle = '#171a20'; g.fillRect(0, 0, w, h);
-    g.fillStyle = accent; g.fillRect(0, h - 8, w, 8);
-    g.font = '700 44px ui-monospace, monospace';
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillStyle = '#e8e4da'; g.fillText(label, w * 0.5, h * 0.46);
-  });
-}
-
-/** Chevron board. dir = -1 left, +1 right, 0 = caution (jump ahead). */
-function arrowTex(dir) {
-  return canvasTex(256, 256, (g, w, h) => {
-    g.fillStyle = dir === 0 ? '#d8231c' : '#f0b21a'; g.fillRect(0, 0, w, h);
-    g.fillStyle = '#14161c'; g.lineWidth = 0;
-    if (dir === 0) {
-      // exclamation slab: reads as "something is about to happen"
-      g.fillRect(w * 0.42, h * 0.16, w * 0.16, h * 0.44);
-      g.beginPath(); g.arc(w * 0.5, h * 0.76, w * 0.09, 0, 6.2832); g.fill();
-    } else {
-      for (let i = 0; i < 3; i++) {
-        const x0 = w * (0.10 + i * 0.26);
-        g.beginPath();
-        if (dir < 0) { g.moveTo(x0 + w * 0.22, h * 0.12); g.lineTo(x0, h * 0.5); g.lineTo(x0 + w * 0.22, h * 0.88); g.lineTo(x0 + w * 0.30, h * 0.88); g.lineTo(x0 + w * 0.08, h * 0.5); g.lineTo(x0 + w * 0.30, h * 0.12); }
-        else { g.moveTo(x0, h * 0.12); g.lineTo(x0 + w * 0.22, h * 0.5); g.lineTo(x0, h * 0.88); g.lineTo(x0 + w * 0.08, h * 0.88); g.lineTo(x0 + w * 0.30, h * 0.5); g.lineTo(x0 + w * 0.08, h * 0.12); }
-        g.closePath(); g.fill();
-      }
-    }
-  });
-}
-
-function checkerTex() {
-  return canvasTex(256, 64, (g, w, h) => {
-    const n = 16, cw = w / n, ch = h / 2;
-    for (let y = 0; y < 2; y++) for (let x = 0; x < n; x++) {
-      g.fillStyle = ((x + y) & 1) ? '#f0ede4' : '#16181d';
-      g.fillRect(x * cw, y * ch, cw + 1, ch + 1);
-    }
-  });
-}
-
-function railTex(accent) {
-  return canvasTex(256, 32, (g, w, h) => {
-    g.fillStyle = '#dedbd2'; g.fillRect(0, 0, w, h);
-    g.fillStyle = accent;
-    for (let x = 0; x < w; x += 64) g.fillRect(x, 0, 32, h);
-    g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(0, h - 6, w, 6);
-  });
-}
-
-/* ============================================================
-   2.  THEME RECIPES
-   ============================================================ */
-const RECIPES = {
-  training: {
-    accent: '#2ad2ff',
-    rock: 0x7a7166, dust: 0x8b8578,
-    kinds: [
-      { id: 'cone', share: 0.22, min: 0.9, max: 1.5, solid: false, slope: 22, clear: 1.35, shadow: false },
-      { id: 'tyre', share: 0.16, min: 0.9, max: 1.4, solid: true, r: 0.62, slope: 18, clear: 1.5, shadow: false },
-      { id: 'drum', share: 0.10, min: 0.9, max: 1.2, solid: true, r: 0.42, slope: 16, clear: 1.6, shadow: true },
-      { id: 'crate', share: 0.08, min: 0.9, max: 1.3, solid: true, r: 0.55, slope: 14, clear: 1.7, shadow: true },
-      { id: 'bale', share: 0.07, min: 0.9, max: 1.15, solid: true, r: 0.72, slope: 16, clear: 1.7, shadow: true },
-      { id: 'bush0', share: 0.19, min: 0.6, max: 1.5, solid: false, slope: 34, clear: 1.4, shadow: false },
-      { id: 'rock2', share: 0.18, min: 0.3, max: 0.9, solid: false, slope: 34, clear: 1.6, shadow: false }
-    ]
-  },
-  canyon: {
-    accent: '#ff7a1a',
-    rock: 0x8a4a30, dust: 0xb99a6a,
-    kinds: [
-      /* Hoodoos are down from 0.08 to 0.035. They were a tenth of the scatter
-         when the scatter was 2200 spread over a kilometre; at 2900 with 74 %
-         of it on the verge, the same share put 230 identical orange spires
-         along the racing line and SUNSTRIKE CANYON looked like a slalom
-         course. A hoodoo is a landmark — it wants to be rare. */
-      { id: 'hoodoo', share: 0.035, min: 1.4, max: 3.4, solid: true, r: 1.15, slope: 26, clear: 2.0, shadow: true },
-      { id: 'rock0', share: 0.10, min: 1.2, max: 4.4, solid: true, r: 0.72, slope: 32, clear: 1.7, shadow: true },
-      { id: 'rock1', share: 0.26, min: 0.7, max: 2.2, solid: true, r: 0.72, slope: 36, clear: 1.5, shadow: false },
-      { id: 'rock2', share: 0.30, min: 0.22, max: 0.9, solid: false, slope: 40, clear: 1.35, shadow: false },
-      { id: 'cactus0', share: 0.10, min: 0.8, max: 1.5, solid: true, r: 0.34, slope: 26, clear: 1.6, shadow: true },
-      { id: 'cactus1', share: 0.06, min: 0.7, max: 1.3, solid: true, r: 0.32, slope: 26, clear: 1.6, shadow: true },
-      { id: 'agave', share: 0.10, min: 0.7, max: 1.6, solid: false, slope: 32, clear: 1.4, shadow: false },
-      { id: 'bush0', share: 0.07, min: 0.6, max: 1.4, solid: false, slope: 34, clear: 1.4, shadow: false }
-    ]
-  },
-  forest: {
-    accent: '#4fd07a',
-    rock: 0x5f6357, dust: 0x6b6c56,
-    kinds: [
-      { id: 'pine0', share: 0.22, min: 0.75, max: 1.5, solid: true, r: 0.55, slope: 34, clear: 1.45, shadow: true },
-      { id: 'pine1', share: 0.18, min: 0.7, max: 1.4, solid: true, r: 0.5, slope: 36, clear: 1.45, shadow: true },
-      { id: 'pine2', share: 0.14, min: 0.6, max: 1.2, solid: true, r: 0.45, slope: 38, clear: 1.45, shadow: false },
-      { id: 'broadleaf', share: 0.07, min: 0.7, max: 1.4, solid: true, r: 0.5, slope: 30, clear: 1.6, shadow: true },
-      { id: 'snag', share: 0.08, min: 0.7, max: 1.4, solid: true, r: 0.32, slope: 38, clear: 1.5, shadow: true },
-      { id: 'log', share: 0.07, min: 0.8, max: 1.4, solid: true, r: 0.5, slope: 22, clear: 1.7, shadow: false },
-      { id: 'stump', share: 0.07, min: 0.8, max: 1.5, solid: true, r: 0.4, slope: 26, clear: 1.5, shadow: false },
-      { id: 'bush0', share: 0.09, min: 0.7, max: 1.7, solid: false, slope: 36, clear: 1.35, shadow: false },
-      { id: 'rock1', share: 0.08, min: 0.4, max: 1.5, solid: false, slope: 40, clear: 1.5, shadow: false }
-    ]
-  },
-  volcano: {
-    accent: '#ff5a2c',
-    rock: 0x3a3634, dust: 0x4a3c33,
-    kinds: [
-      { id: 'basalt', share: 0.20, min: 0.9, max: 2.4, solid: true, r: 1.0, slope: 30, clear: 1.9, shadow: true },
-      { id: 'vent', share: 0.06, min: 0.9, max: 1.8, solid: true, r: 1.6, slope: 18, clear: 2.2, shadow: true },
-      { id: 'shard0', share: 0.14, min: 0.7, max: 1.9, solid: true, r: 0.5, slope: 36, clear: 1.5, shadow: true },
-      { id: 'shard1', share: 0.10, min: 0.5, max: 1.4, solid: false, slope: 40, clear: 1.4, shadow: false },
-      { id: 'snag', share: 0.08, min: 0.6, max: 1.2, solid: true, r: 0.3, slope: 36, clear: 1.5, shadow: true },
-      { id: 'rock0', share: 0.10, min: 0.9, max: 3.2, solid: true, r: 0.72, slope: 34, clear: 1.7, shadow: false },
-      { id: 'rock2', share: 0.32, min: 0.25, max: 1.0, solid: false, slope: 42, clear: 1.4, shadow: false }
-    ]
-  }
-};
-
-/* ============================================================
-   2b. SET-DRESSING PLAN — what each stage is a picture OF
-   ------------------------------------------------------------
-   The scatter above is texture: it fills the middle distance and it is much
-   the same everywhere on a stage. This table is the opposite — a short list
-   of authored, one-off structures that give a stage a place and a story, and
-   the utility lines that tie them together across the map.
-
-   `landmarks` are placed by rejection sampling in a lateral BAND beside the
-   racing line, so they land where a driver will actually look: near enough
-   to read at 130 km/h, far enough out that they are never the reason you
-   lost the race. `lat` is that band in metres from the centreline; `r` is
-   the collision radius, and `size` the random scale range.
-
-   Everything here is merged into instanced meshes by id, so adding a
-   landmark costs one draw call for the whole stage, not one per building.
-   ============================================================ */
-const DRESSING = {
-  training: {
-    // An old airfield somebody bolted a rally school onto.
-    landmarks: [
-      { id: 'hangar', n: 1, lat: [95, 150], r: 12.0, size: [1.00, 1.00] },
-      { id: 'tower', n: 1, lat: [58, 95], r: 2.2, size: [0.95, 1.15] },
-      { id: 'grandstand', n: 2, lat: [26, 40], r: 7.0, size: [1.00, 1.00] },
-      { id: 'shed', n: 3, lat: [42, 110], r: 2.6, size: [0.90, 1.30] },
-      { id: 'container', n: 4, lat: [30, 90], r: 3.2, size: [1.00, 1.00] },
-      { id: 'wreck', n: 2, lat: [26, 55], r: 1.9, size: [1.00, 1.00] },
-    ],
-    lines: { runs: 2, poleH: 8.5, arms: 2, span: 46 },
-  },
-  canyon: {
-    // A worked-out mining claim in the wash: water tank, camp, dead machinery.
-    landmarks: [
-      { id: 'tank', n: 2, lat: [48, 110], r: 3.4, size: [0.90, 1.20] },
-      { id: 'shed', n: 4, lat: [30, 120], r: 2.6, size: [0.85, 1.25] },
-      { id: 'mast', n: 1, lat: [85, 160], r: 2.0, size: [1.00, 1.00] },
-      { id: 'pipes', n: 3, lat: [26, 60], r: 2.2, size: [1.00, 1.00] },
-      { id: 'wreck', n: 3, lat: [24, 48], r: 1.9, size: [1.00, 1.00] },
-      { id: 'culvert', n: 2, lat: [22, 34], r: 2.0, size: [1.00, 1.30] },
-      { id: 'container', n: 2, lat: [34, 80], r: 3.2, size: [1.00, 1.00] },
-    ],
-    lines: { runs: 2, poleH: 9.5, arms: 2, span: 52 },
-  },
-  forest: {
-    // An active logging show, and the fire lookout that watches it.
-    landmarks: [
-      { id: 'lookout', n: 1, lat: [62, 120], r: 2.4, size: [1.00, 1.00] },
-      { id: 'logstack', n: 5, lat: [24, 70], r: 3.0, size: [0.90, 1.20] },
-      { id: 'shed', n: 3, lat: [28, 90], r: 2.6, size: [0.85, 1.15] },
-      { id: 'container', n: 2, lat: [28, 60], r: 3.2, size: [1.00, 1.00] },
-      { id: 'wreck', n: 2, lat: [22, 44], r: 1.9, size: [1.00, 1.00] },
-      { id: 'grandstand', n: 1, lat: [24, 34], r: 7.0, size: [1.00, 1.00] },
-    ],
-    lines: { runs: 1, poleH: 10.0, arms: 1, span: 44 },
-  },
-  volcano: {
-    // A monitoring station nobody has staffed since the last eruption.
-    landmarks: [
-      { id: 'mast', n: 2, lat: [55, 130], r: 2.0, size: [1.00, 1.20] },
-      { id: 'shed', n: 4, lat: [26, 90], r: 2.6, size: [0.80, 1.20] },
-      { id: 'pipework', n: 5, lat: [22, 60], r: 1.6, size: [1.00, 1.40] },
-      { id: 'pipes', n: 3, lat: [24, 55], r: 2.2, size: [1.00, 1.00] },
-      { id: 'culvert', n: 3, lat: [20, 34], r: 2.0, size: [1.10, 1.50] },
-      { id: 'wreck', n: 2, lat: [22, 42], r: 1.9, size: [1.00, 1.00] },
-      { id: 'container', n: 2, lat: [30, 70], r: 3.2, size: [1.00, 1.00] },
-    ],
-    lines: { runs: 1, poleH: 9.0, arms: 2, span: 48 },
-  },
-};
-
-/** Scatter ids whose geometry comes from kit.js and is vertex-coloured. */
-const KIT_KINDS = new Set([
-  'cactus0', 'cactus1', 'agave', 'bush0', 'snag', 'broadleaf', 'stump',
-  'shard0', 'shard1', 'drum', 'crate', 'bale',
-]);
-
-/**
- * How hard a prop throws you back. This is the only thing that tells a player
- * what a shape is MADE of, so it is worth being deliberate: rock and steel
- * punish, wood is firm, and the soft stuff (bales, brush, cactus) barely
- * argues — a hay bale that fired a car back across the road would be a lie.
- */
-const BOUNCE_FOR = (id) =>
-  id === 'bale' ? 0.35
-    : id === 'bush0' || id === 'agave' ? 0.5
-      : id === 'cactus0' || id === 'cactus1' ? 0.7
-        : id === 'crate' || id === 'stump' ? 0.9
-          : id === 'drum' ? 1.0
-            : id.startsWith('pine') || id === 'snag' || id === 'broadleaf' ? 1.15
-              : 1.35;
-
-/** Kinds that must stand upright — a leaning cactus reads as a mistake. */
-const UPRIGHT_KINDS = new Set([
-  'cone', 'tyre', 'vent', 'cactus0', 'cactus1', 'agave', 'snag', 'broadleaf',
-  'stump', 'drum', 'crate', 'bale',
-]);
-
-/* ============================================================
-   3.  PROPS
+   PROPS
    ============================================================ */
 export class Props {
   constructor(scene, terrain, quality, trackDef, trackData) {
@@ -784,12 +331,14 @@ export class Props {
     this._crowdIds = new Set();        // ids the low tier drops
     this._claimed = [];                // {x,z,r} — landmark keep-out discs
 
+    this._planHeroes(rng, accent);     // first: a hero owns its ground outright
     this._planLandmarks(rng);
     this._planUtilityLines(rng);
     this._planPaddock(rng);
     this._planJumpFurniture(rng, accent);
     this._planCrowds(rng);
     this._flushDressing();
+    this._buildBillboards(accent);
   }
 
   /** Geometry for a dressing/kit id, built once and cached for the stage. */
@@ -827,6 +376,11 @@ export class Props {
       case 'pipework': g = pipeworkGeo(P, s + 113); break;
       case 'culvert': g = culvertGeo(P, s + 127); break;
       case 'logstack': g = logStackGeo(P, s + 131); break;
+      /* the event layer */
+      case 'floodlight': g = floodlightGeo(P, s + 163, 13); break;
+      case 'billboard': g = billboardGeo(P, s + 167); break;
+      case 'tyrewall': g = tyreWallGeo(P, s + 173, 6.5); break;
+      case 'geyservent': g = geyserVentGeo(P, s + 191); break;
       /* paddock and crowd */
       case 'canopy': g = canopyGeo(P, s + 137); break;
       case 'person0': g = personGeo(P, s + 139); break;
@@ -858,6 +412,180 @@ export class Props {
       if (dx * dx + dz * dz < rr * rr) return false;
     }
     return true;
+  }
+
+  /* ============================================================
+     HEROES
+     ------------------------------------------------------------
+     Everything else in this file is placed by rejection sampling, which is
+     right for texture and wrong for a landmark: a thing you are supposed to
+     remember has to be in the same place every time you drive the stage, or
+     it is not a landmark, it is weather.
+
+     So each of these is pinned to a NAMED arc-length on the spline, out of
+     props-recipes.js, and claims its ground before anything else gets a
+     look at the map.
+     ============================================================ */
+  _planHeroes(rng, accent) {
+    this.geysers = [];                 // world positions the update timer fires
+    this.waterfalls = [];              // { x, y, z } for the mist
+    for (const h of this.plan.heroes || []) {
+      if (h.kind === 'arch') this._buildRockArch(h.s, rng);
+      else if (h.kind === 'waterfall') this._buildWaterfall(h, rng);
+      else if (h.kind === 'geyser') this._planGeysers(h, rng);
+      else if (h.kind === 'bunting') this._buildBunting(h, rng, accent);
+    }
+  }
+
+  /**
+   * A rock arch straddling the road. The one landmark in the game that is
+   * also a GATE — you go through it, not past it — which is why the span is
+   * sized off the local road width rather than authored, and why the only
+   * solid parts are the two legs.
+   */
+  _buildRockArch(s0, rng) {
+    const sp = this.data.spline;
+    const s = sp.wrapS(s0);
+    const p = sp.posAt(s, _pp), d = sp.dirAt(s, _dd);
+    const w = sp.widthAt(s);
+    // The authored geometry spans 26 m. Scale it so the legs clear the
+    // roadbed by a car's width on each side and no further: an arch you
+    // cannot possibly hit is also an arch you cannot possibly notice.
+    const scale = clamp((w * 2 + 13) / 26, 0.95, 1.7);
+    const geo = this._keepGeo(rockArchGeo(this.palette, (this.def.seed | 0) + 179, 26, 13));
+    const m = new THREE.Mesh(geo, this.dressMat);
+    m.position.set(p.x, this.terrain.heightAt(p.x, p.z) - 0.25, p.z);
+    m.rotation.y = Math.atan2(d.x, d.z);
+    m.scale.setScalar(scale);
+    m.castShadow = true;
+    m.frustumCulled = false;
+    this.group.add(m);
+    this.archMesh = m;
+    // two leg colliders, exactly as _buildJumpArch does it
+    for (const side of [-1, 1]) {
+      const q = sp.offsetPoint(s, side * 13 * scale, _pp2);
+      this._fixedColliders.push({ x: q.x, z: q.z, r: 3.0 * scale, kind: 'arch', bounce: 1.35 });
+      this._claimed.push({ x: q.x, z: q.z, r: 10 * scale });
+    }
+    void rng;
+  }
+
+  /**
+   * The falls. Sited on the STEEPEST ground inside the authored lateral
+   * band — a waterfall belongs on a cliff, and the bake does not carve one,
+   * so the best this can do is find the closest thing the stage already has
+   * and put the sheet on it. Its own scrolling material, and its own mist,
+   * which is dust.js doing what dust.js already does.
+   */
+  _buildWaterfall(h, rng) {
+    const sp = this.data.spline;
+    const s = sp.wrapS(h.s);
+    let best = null, bestSlope = -1;
+    for (let i = 0; i < 40; i++) {
+      const side = i & 1 ? 1 : -1;
+      const lat = side * (h.lat[0] + (i / 40) * (h.lat[1] - h.lat[0]));
+      const q = sp.offsetPoint(sp.wrapS(s + (rng() - 0.5) * 60), lat, _pp);
+      if (Math.abs(q.x) > PLAYABLE_EXT - 24 || Math.abs(q.z) > PLAYABLE_EXT - 24) continue;
+      const sl = this.terrain.slopeAt(q.x, q.z);
+      if (sl > bestSlope) { bestSlope = sl; best = { x: q.x, z: q.z }; }
+    }
+    if (!best) return;
+    const y = this.terrain.heightAt(best.x, best.z);
+    const geo = this._keepGeo(waterfallSheetGeo(this.palette, (this.def.seed | 0) + 181, 7, 16));
+    const tex = this._keepTex(makeStreakSprite(256, { seed: 29 }));
+    const mat = this._keepMat(waterfallMaterial(tex));
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(best.x, y, best.z);
+    // face the road: the falls are for looking at from the car, and a sheet
+    // seen edge-on is a line
+    const c = sp.posAt(s, _pp2);
+    m.rotation.y = Math.atan2(c.x - best.x, c.z - best.z);
+    m.frustumCulled = false;
+    this.group.add(m);
+    this.waterfallMesh = m;
+    this.waterfallMat = mat;
+    this.waterfalls.push({ x: best.x, y, z: best.z });
+    this._claimed.push({ x: best.x, z: best.z, r: 16 });
+    this._fixedColliders.push({ x: best.x, z: best.z, r: 3.4, kind: 'falls', bounce: 1.2 });
+  }
+
+  /** A vent field. The cones are instanced set dressing; what makes them a
+      landmark is the timer in update() firing one every six to nine seconds. */
+  _planGeysers(h, rng) {
+    const sp = this.data.spline, L = sp.length;
+    let placed = 0, guard = 0;
+    while (placed < (h.n || 3) && guard++ < 400) {
+      const s = rng() * L;
+      const side = rng() < 0.5 ? -1 : 1;
+      const lat = side * (h.lat[0] + rng() * (h.lat[1] - h.lat[0]));
+      const q = sp.offsetPoint(s, lat, _pp);
+      if (Math.abs(q.x) > PLAYABLE_EXT - 12 || Math.abs(q.z) > PLAYABLE_EXT - 12) continue;
+      if (!this._canPlace(q.x, q.z, 1.6)) continue;
+      if (this.terrain.slopeAt(q.x, q.z) > 16) continue;      // a vent sits in a flat
+      if (!this._clearOfClaims(q.x, q.z, 14)) continue;
+      const y = this.terrain.heightAt(q.x, q.z);
+      this._dress('geyservent', q.x, y, q.z, rng() * 6.283, 1.0 + rng() * 0.5, 1.5, 1.2);
+      this.geysers.push({ x: q.x, y, z: q.z });
+      this._claimed.push({ x: q.x, z: q.z, r: 12 });
+      placed++;
+    }
+  }
+
+  /** Bunting over the start straight. Merges into the same one-off mesh the
+      power-line wires use, so a whole stage's worth costs no extra draw. */
+  _buildBunting(h, rng, accent) {
+    const sp = this.data.spline;
+    const s0 = sp.wrapS(h.s || 0);
+    const span = h.span || 34;
+    const A = new THREE.Color(accent).getHex();
+    for (let i = 0; i < 3; i++) {
+      const s = sp.wrapS(s0 - 18 + i * (span * 0.55));
+      const w = sp.widthAt(s) * 1.5 + 3;
+      const a = sp.offsetPoint(s, -w, _pp);
+      const b = sp.offsetPoint(s, w, _pp2);
+      const ay = this.terrain.heightAt(a.x, a.z) + 6.2 + rng() * 0.6;
+      const by = this.terrain.heightAt(b.x, b.z) + 6.2 + rng() * 0.6;
+      const g = buntingGeo(0x1c1e22, A, 0xf2efe6, a.x, ay, a.z, b.x, by, b.z, 1.5, 14);
+      if (g) this._oneOff.push(g);
+    }
+  }
+
+  /**
+   * The sponsor faces. The kit's billboard is a blank dark panel — this lays
+   * a canvas graphic over each one, split across TWO textures so a straight
+   * lined with boards is not the same picture five times. Two instanced
+   * meshes, two draw calls, and no per-instance UV plumbing.
+   */
+  _buildBillboards(accent) {
+    const sites = this._billboardSites;
+    if (!sites || !sites.length) return;
+    this.billboardMeshes = [];
+    const W = 9 * 0.96, H = 4.6 * 0.94;
+    for (let v = 0; v < 2; v++) {
+      const mine = sites.filter((_, i) => (i & 1) === v);
+      if (!mine.length) continue;
+      const mat = this._keepMat(new THREE.MeshStandardMaterial({
+        map: this._keepTex(sponsorTex(v ? 'RIDGEBACK' : 'SUNSTRIKE', accent, v)),
+        roughness: 0.84, metalness: 0.03, side: THREE.FrontSide
+      }));
+      const im = new THREE.InstancedMesh(
+        this._keepGeo(new THREE.PlaneGeometry(W, H)), mat, mine.length);
+      im.frustumCulled = false;
+      im.castShadow = false;
+      for (let i = 0; i < mine.length; i++) {
+        const st = mine[i];
+        _dummy.position.set(st.x, st.y, st.z);
+        _dummy.rotation.set(0, st.yaw, 0);
+        _dummy.scale.setScalar(st.scale);
+        _dummy.translateY((3.2 + 4.6 * 0.5) * st.scale);
+        _dummy.translateZ(0.05 * st.scale);
+        _dummy.updateMatrix();
+        im.setMatrixAt(i, _dummy.matrix);
+      }
+      im.instanceMatrix.needsUpdate = true;
+      this.group.add(im);
+      this.billboardMeshes.push(im);
+    }
   }
 
   /* ---------------- landmarks ----------------
@@ -1119,6 +847,7 @@ export class Props {
   _flushDressing() {
     this.dressMeshes = [];
     this.crowdMeshes = [];
+    this._billboardSites = this._dressSites.get('billboard') || null;
     for (const [id, sites] of this._dressSites) {
       if (!sites.length) continue;
       const geo = this._kitGeo(id);
@@ -1137,8 +866,26 @@ export class Props {
       im.instanceMatrix.needsUpdate = true;
       this.group.add(im);
       this.dressMeshes.push(im);
-      if (this._crowdIds.has(id)) this.crowdMeshes.push(im);
+      if (this._crowdIds.has(id)) {
+        /* The crowd is the only dressing that MOVES, so it is the only one
+           that has to keep its rest pose after the flush — the bob rebuilds
+           each matrix from scratch rather than accumulating on to the last
+           one, because an accumulating bob drifts a spectator across the
+           hillside over a three-lap race. Flat, five floats a person. */
+        const rest = new Float32Array(sites.length * 5);
+        for (let i = 0; i < sites.length; i++) {
+          const st = sites[i], o = i * 5;
+          rest[o] = st.x; rest[o + 1] = st.y; rest[o + 2] = st.z;
+          rest[o + 3] = st.yaw; rest[o + 4] = st.scale;
+        }
+        im.userData.rest = rest;
+        im.userData.bobbing = 0;      // how many are currently displaced
+        this.crowdMeshes.push(im);
+      }
     }
+    // The billboard sites survive the clear below because the sponsor faces
+    // are built from them a moment later; nothing else outlives the flush.
+    if (this._billboardSites) this._billboardSites = this._billboardSites.slice();
     if (this._oneOff.length) {
       const merged = mergeGeometries(this._oneOff, false);
       this._oneOff.forEach(g => g.dispose());
@@ -1505,8 +1252,119 @@ export class Props {
     return impact;
   }
 
+  /**
+   * Hand the stage the two particle systems. Both stay optional and every
+   * use is guarded: props has to build and collide correctly in a harness
+   * that never made either one.
+   */
+  setVfx(vfx, dust) {
+    this.vfx = vfx || null;
+    this.dust = dust || null;
+    return this;
+  }
+
   update(dt, t, camera) {
-    void dt; void t; void camera;      // nothing here animates yet; dust owns the smoke
+    if (dt <= 0 || !camera) return;
+    this._bobCrowd(t, camera);
+    this._runGeysers(dt, camera);
+    this._runFalls(dt, camera);
+  }
+
+  /* ---------------- the crowd ----------------
+     A stand full of people standing perfectly still is the single most
+     dead-looking thing you can put beside a race track — worse than an
+     empty stand, because an empty stand at least does not claim anybody
+     came. Eight radians a second is about 1.3 bounces, with a per-person
+     phase so it is a crowd and not a chorus line.
+
+     Only inside 120 m, which is where a figure is more than a few pixels;
+     and the moment one leaves that radius it is written back to its rest
+     pose exactly once, so the far crowd costs nothing per frame. */
+  _bobCrowd(t, camera) {
+    const meshes = this.crowdMeshes;
+    if (!meshes || !meshes.length) return;
+    const cx = camera.position.x, cz = camera.position.z;
+    const R2 = 120 * 120;
+    for (let mi = 0; mi < meshes.length; mi++) {
+      const im = meshes[mi];
+      if (!im.visible) continue;
+      const rest = im.userData.rest;
+      const n = Math.min(im.count, rest.length / 5);
+      let touched = 0;
+      for (let i = 0; i < n; i++) {
+        const o = i * 5;
+        const dx = rest[o] - cx, dz = rest[o + 2] - cz;
+        const near = dx * dx + dz * dz < R2;
+        if (!near) continue;
+        const ph = i * 2.399963;                    // golden angle: no visible beat
+        const b = Math.sin(t * 8.0 + ph);
+        _dummy.position.set(rest[o], rest[o + 1] + 0.055 + 0.055 * b, rest[o + 2]);
+        _dummy.rotation.set(0, rest[o + 3] + 0.10 * Math.sin(t * 3.1 + ph), 0);
+        _dummy.scale.set(rest[o + 4], rest[o + 4] * (1 - 0.035 * b), rest[o + 4]);
+        _dummy.updateMatrix();
+        im.setMatrixAt(i, _dummy.matrix);
+        touched++;
+      }
+      // one settling pass when the last of them goes out of range
+      if (!touched && im.userData.bobbing) {
+        for (let i = 0; i < n; i++) {
+          const o = i * 5;
+          _dummy.position.set(rest[o], rest[o + 1], rest[o + 2]);
+          _dummy.rotation.set(0, rest[o + 3], 0);
+          _dummy.scale.setScalar(rest[o + 4]);
+          _dummy.updateMatrix();
+          im.setMatrixAt(i, _dummy.matrix);
+        }
+      }
+      if (touched || im.userData.bobbing) im.instanceMatrix.needsUpdate = true;
+      im.userData.bobbing = touched;
+    }
+  }
+
+  /* ---------------- the vent field ----------------
+     One geyser every six to nine seconds, and never the same one twice in a
+     row. The timing is Math.random() and that is deliberate: it is cosmetic,
+     nothing reads it back, and a vent field on a fixed clock reads as a
+     machine rather than as geology. */
+  _runGeysers(dt, camera) {
+    const G = this.geysers;
+    if (!G || !G.length) return;
+    this._geyT = (this._geyT === undefined ? 3 : this._geyT) - dt;
+    if (this._geyT > 0) return;
+    this._geyT = 6 + Math.random() * 3;
+    let i = (Math.random() * G.length) | 0;
+    if (G.length > 1 && i === this._geyLast) i = (i + 1) % G.length;
+    this._geyLast = i;
+    const g = G[i];
+    const dx = g.x - camera.position.x, dz = g.z - camera.position.z;
+    if (dx * dx + dz * dz > 260 * 260) return;      // nobody is there to see it
+    if (this.dust) {
+      // steam, not smoke: pale, buoyant, and it goes UP hard before it drifts
+      this.dust.spawn(26, g.x, g.y + 0.6, g.z, 7.5, 0.55, 0, 0,
+        0.82, 0.84, 0.86, DUST_KIND.PUFF);
+    }
+    if (this.vfx) {
+      this.vfx.sparks(14, g.x, g.y + 0.4, g.z, 0, 1, 0, 13.0, 0.20,
+        1.10, 1.25, 1.45, 0.85);
+      this.vfx.shock(g.x, g.y, g.z, 2.6, 0.9, 1.05, 1.25);
+    }
+  }
+
+  /** Mist off the plunge pool, and the sheet's own scroll clock. */
+  _runFalls(dt, camera) {
+    if (!this.waterfallMat) return;
+    const u = this.waterfallMat.uniforms.uTime;
+    u.value = (u.value + dt) % 2048;
+    const W = this.waterfalls;
+    if (!W.length || !this.dust) return;
+    this._mistT = (this._mistT === undefined ? 0 : this._mistT) - dt;
+    if (this._mistT > 0) return;
+    this._mistT = 0.22;
+    const w = W[0];
+    const dx = w.x - camera.position.x, dz = w.z - camera.position.z;
+    if (dx * dx + dz * dz > 170 * 170) return;
+    this.dust.spawn(2, w.x, w.y + 0.7, w.z, 2.2, 2.4, 0, 0,
+      0.86, 0.90, 0.94, DUST_KIND.PUFF);
   }
 
   dispose() {
@@ -1519,19 +1377,3 @@ export class Props {
     this.colliders.length = 0; this.barriers.length = 0;
   }
 }
-
-/** A single upright quad from A to B, `h` metres tall, as its own geometry. */
-function railQuad(ax, ay, az, bx, by, bz, h) {
-  const g = new THREE.BufferGeometry();
-  const len = Math.hypot(bx - ax, bz - az);
-  const u = Math.max(0.25, len / 4);
-  g.setAttribute('position', new THREE.Float32BufferAttribute([
-    ax, ay - h * 0.5, az, bx, by - h * 0.5, bz,
-    bx, by + h * 0.5, bz, ax, ay + h * 0.5, az
-  ], 3));
-  g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, u, 0, u, 1, 0, 1], 2));
-  g.setIndex([0, 1, 2, 0, 2, 3]);
-  return g;
-}
-
-void clamp; void sstep;

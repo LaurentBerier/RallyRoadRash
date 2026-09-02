@@ -29,9 +29,20 @@ import { makeCloudSprite, makeSmokeSprite } from './textures.js';
    applied in the final pass just before tone mapping. It is NOT exposure:
    feel.js owns uExposure, holds it at exactly 1.0 and dips it on landings,
    and dev/camera-check gates that it comes back. This is the stage's own
-   key, and it is what stops four different times of day all resolving to the
-   same washed-out mid-grey after ACES. All four are pulls, never pushes —
-   tone mapping already has all the highlight it can use.
+   key, and it is what stops five different times of day all resolving to the
+   same washed-out mid-grey after ACES. Every channel is a pull except
+   THUNDER's red, which is a deliberate 2 % push on a stage that is a sunset
+   and nothing else — tone mapping otherwise has all the highlight it can use.
+
+   `shaft` / `sat` / `con` ride along the same road: engine.setLightTheme
+   reads them into uShaft / uSat / uCon. ACES pulls saturation out of
+   everything bright, so an arcade stage has to ask for it back, and god rays
+   are a function of how low the sun is — noon over an airfield gets almost
+   none, a caldera dusk gets a lot.
+
+   `vista` / `vistaColor` / `vistaFade` describe the silhouette ring at 5–7.5
+   km. It is the FALLBACK: when assets carry a `sky/<theme>` panorama the
+   dome shows that instead and the ring hides itself.
    ============================================================ */
 export const SKY_THEMES = {
   /* clean noon over an empty airfield: flat light, nothing to misread */
@@ -46,7 +57,9 @@ export const SKY_THEMES = {
     cloudY: 1250, cirrus: 0.35,
     sunDiscColor: 0xfff8ee, sunAngDeg: 1.1, haloStrength: 0.55, sunGlow: 1.0,
     fogHint: 0.00050,
-    grade: [0.88, 0.90, 0.93]
+    grade: [0.88, 0.90, 0.93],
+    shaft: 0.10, sat: 1.06, con: 1.03,
+    vista: 'hills', vistaColor: 0x6c7a8c, vistaFade: 0.40
   },
 
   /* late afternoon in the red rock — long shadows, warm dust in the air */
@@ -61,7 +74,9 @@ export const SKY_THEMES = {
     cloudY: 1500, cirrus: 0.55,
     sunDiscColor: 0xfff0d2, sunAngDeg: 1.6, haloStrength: 0.95, sunGlow: 1.25,
     fogHint: 0.00068,
-    grade: [0.98, 0.90, 0.82]
+    grade: [0.98, 0.90, 0.82],
+    shaft: 0.42, sat: 1.16, con: 1.07,
+    vista: 'mesas', vistaColor: 0x8a4832, vistaFade: 0.30
   },
 
   /* mountain morning: the sun still low behind the ridge, mist in the valleys */
@@ -76,7 +91,9 @@ export const SKY_THEMES = {
     cloudY: 900, cirrus: 0.30,
     sunDiscColor: 0xfff2d8, sunAngDeg: 1.4, haloStrength: 1.10, sunGlow: 1.15,
     fogHint: 0.00105,
-    grade: [0.82, 0.86, 0.84]
+    grade: [0.82, 0.86, 0.84],
+    shaft: 0.55, sat: 1.12, con: 1.06,
+    vista: 'peaks', vistaColor: 0x4a5c70, vistaFade: 0.58
   },
 
   /* caldera dusk: the sun is a coin behind the ash, the horizon glows on its own */
@@ -92,30 +109,114 @@ export const SKY_THEMES = {
     sunDiscColor: 0xff9a52, sunAngDeg: 3.4, haloStrength: 1.35, sunGlow: 0.85,
     fogHint: 0.00130,
     grade: [1.00, 0.90, 0.86],
+    shaft: 0.38, sat: 1.14, con: 1.10,
+    vista: 'rim', vistaColor: 0x3a1e1c, vistaFade: 0.44,
     // ash + the thing making it: a plume off the caldera, downwind of the track
     ash: 0.85, ashColor: 0x3a2a2a, emberColor: 0xff4a12, emberGlow: 0.9,
     plume: { dir: { x: -0.62, z: 0.78 }, dist: 3400, baseY: 120, height: 2600, count: 1.0 }
+  },
+
+  /* THUNDER MESA: the canyon family an hour later. Same red rock, same warm
+     air, but the sun is nine degrees off the deck and every vertical surface
+     on the stage is either rim-lit or in silhouette. High cirrus catches the
+     last of it, which is what the 0.70 buys. */
+  thunder: {
+    sunEl: 9, sunAz: -118,
+    sunDir: { x: -0.463692, y: 0.156434, z: -0.872076 },
+    sunColor: 0xffb070, sunIntensity: 2.60,
+    hemiSky: 0x7c6ea4, hemiGround: 0x6e4630, hemiIntensity: 0.62,
+    zenith: 0x1f2a68, horizon: 0xff9a3c, hazeColor: 0xdd8846,
+    groundHaze: 0x8a5030,
+    cloudAmount: 0.78, cloudTint: 0xffd0a4, cloudShade: 0x5c3a56,
+    cloudY: 1350, cirrus: 0.70,
+    sunDiscColor: 0xffc078, sunAngDeg: 2.4, haloStrength: 1.25, sunGlow: 1.35,
+    fogHint: 0.00058,
+    grade: [1.02, 0.90, 0.80],
+    shaft: 0.62, sat: 1.20, con: 1.10,
+    vista: 'buttes', vistaColor: 0x5a2c30, vistaFade: 0.34
   }
 };
 
 /* Cloud counts and dome tessellation by tier. `stars` is gone from the sky but
    still sits in QUALITY — engine.js is not ours to prune. */
 const SKY_BUDGET = {
-  LOW:    { domeW: 24, domeH: 14, clusters: 10, puffs: 4, plume: 10, ashOct: 2 },
-  MEDIUM: { domeW: 32, domeH: 20, clusters: 16, puffs: 5, plume: 16, ashOct: 3 },
-  HIGH:   { domeW: 48, domeH: 28, clusters: 22, puffs: 6, plume: 22, ashOct: 3 },
-  ULTRA:  { domeW: 64, domeH: 36, clusters: 26, puffs: 7, plume: 28, ashOct: 4 }
+  LOW:    { domeW: 24, domeH: 14, clusters: 10, puffs: 4, plume: 10, ashOct: 2, vista: 16 },
+  MEDIUM: { domeW: 32, domeH: 20, clusters: 16, puffs: 5, plume: 16, ashOct: 3, vista: 22 },
+  HIGH:   { domeW: 48, domeH: 28, clusters: 22, puffs: 6, plume: 22, ashOct: 3, vista: 28 },
+  ULTRA:  { domeW: 64, domeH: 36, clusters: 26, puffs: 7, plume: 28, ashOct: 4, vista: 32 }
 };
 
 const DOME_R = 9000;
 const SUN_D = 7600;
 const CLOUD_R0 = 2400;      // clouds live between these radii, on a flat deck
 const CLOUD_R1 = 7400;
+/* The vista ring sits outside the clipmap (which reaches ~2.9 km at HIGH)
+   and inside the camera's 26 km far plane. Two thousand five hundred metres
+   of depth across the ring is what gives it parallax against itself. */
+const VISTA_R0 = 5000, VISTA_R1 = 7500;
+const VISTA_COLS = 9;       // columns per silhouette; the profile is sampled here
+/* Where the panorama band sits on the dome, in d.y. Just under the horizon so
+   there is no gap, up to about 9 degrees — a skyline, not a ceiling. */
+const SKYLINE_BAND = [-0.035, 0.155];
 
 /* shared scratch — nothing in update() allocates */
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _q = new THREE.Quaternion();
+
+/* ---------------- vista silhouette profiles ----------------
+   h(u) for u across one silhouette, 0..1, zero at both ends so neighbours
+   overlap into a continuous range. p0..p2 are that silhouette's three
+   deterministic randoms — the shape is a pure function of them, which is
+   what lets the ring survive a quality change unchanged. */
+function vistaHeight(kind, rng) {
+  const R = { mesas: [300, 520], peaks: [480, 900], rim: [230, 400], hills: [170, 320], buttes: [300, 580] };
+  const a = R[kind] || R.hills;
+  return a[0] + rng() * (a[1] - a[0]);
+}
+
+function vistaProfile(kind, u, p0, p1, p2) {
+  const s = Math.sin(Math.PI * u);
+  if (kind === 'mesas') {
+    /* A mesa is defined by what it is NOT doing: the top is dead flat and
+       the sides are near-vertical, because the cap rock is the only thing
+       holding the whole thing up. A bench on one flank sells the layering. */
+    const e = 0.10 + p0 * 0.07;
+    const top = sstepf(0, e, u) * (1 - sstepf(1 - e, 1, u));
+    const bench = sstepf(0, e * 0.6, u) * (1 - sstepf(0.34 + p1 * 0.3, 0.46 + p1 * 0.3, u));
+    return Math.min(1, top * (0.90 + 0.10 * p2) + bench * 0.22);
+  }
+  if (kind === 'peaks') {
+    const a = 0.30 + p0 * 0.38;
+    const v = u < a ? u / a : (1 - u) / (1 - a);
+    const main = Math.pow(Math.max(0, v), 0.52);
+    // a subordinate summit, so the range has a rhythm instead of a beat
+    const b = a > 0.5 ? a - 0.30 - p1 * 0.14 : a + 0.30 + p1 * 0.14;
+    const w = u < b ? u / Math.max(b, 1e-3) : (1 - u) / Math.max(1 - b, 1e-3);
+    return Math.min(1, Math.max(main, Math.pow(Math.max(0, w), 0.6) * (0.52 + 0.18 * p2)));
+  }
+  if (kind === 'rim') {
+    // one long crater wall with a breach blown out of it
+    const notch = Math.exp(-Math.pow((u - (0.25 + p0 * 0.5)) / (0.07 + p1 * 0.06), 2));
+    return Math.max(0, Math.pow(s, 0.30) * (0.82 + 0.18 * p2) * (1 - notch * 0.72));
+  }
+  if (kind === 'buttes') {
+    // a narrow tower standing on its own talus fan
+    const c = 0.34 + p0 * 0.32, w = 0.10 + p1 * 0.08;
+    const tower = 1 - sstepf(w, w + 0.05, Math.abs(u - c));
+    const talus = Math.pow(s, 1.9) * (0.28 + 0.14 * p2);
+    return Math.min(1, Math.max(talus, tower * (0.86 + 0.14 * p2) * Math.pow(s, 0.18)));
+  }
+  // hills: two soft lobes, nothing sharp anywhere
+  return Math.pow(s, 0.62) * (0.74 + 0.26 * Math.sin(u * 6.2832 * (1 + p0 * 1.6) + p1 * 6.2832)) *
+    (0.82 + 0.18 * p2);
+}
+
+/** Local smoothstep — rng.js has one, but this file only needs the scalar. */
+function sstepf(a, b, x) {
+  const t = clamp((x - a) / (b - a || 1e-6), 0, 1);
+  return t * t * (3 - 2 * t);
+}
 
 /* value noise for the ash, three lines of GLSL and no texture fetch */
 const GLSL_NOISE = /* glsl */`
@@ -163,12 +264,51 @@ export class Sky {
     this._time = 0;
     this._envDirty = true;
     this.envRT = null;
+    this._skyline = null;          // optional panorama; the ring is the fallback
 
     this._buildDome();
     this._buildSun();
+    this._buildVista();
     this._buildClouds();
     if (t.plume) this._buildPlume();
     this._buildEnv();
+  }
+
+  /**
+   * Hand the dome a skyline panorama, or null to go back to the procedural
+   * ring. `assets.get('sky/<theme>')` is the source and null is the normal
+   * case — see core/assets.js.
+   *
+   * The image is wrapped around the full 360 degrees whatever its aspect
+   * ratio, which would put a hard vertical seam behind the player at u = 0.
+   * A MIRRORED copy is cross-faded in over the last few per cent either side
+   * of the seam: at u = 0 the mirror reads the image's right edge, which is
+   * exactly what continues from u = 1.
+   *
+   * Alpha is used when the image has it (a PNG silhouette) and ignored when
+   * it does not (a JPEG horizon, which brings its own sky and is a perfectly
+   * good answer for the lowest nine degrees). Either way the band dissolves
+   * into the dome across its top third, so there is never a cut line.
+   * SKYLINE_BAND is where it sits and how tall it is; that number and the
+   * dissolve want one look at the real images to settle.
+   */
+  setSkyline(tex) {
+    this._skyline = tex || null;
+    this._applySkyline();
+  }
+
+  _applySkyline() {
+    const m = this.domeMat;
+    if (!m) return;
+    const on = !!this._skyline;
+    m.uniforms.uSkyline.value = this._skyline;
+    if (!!m.defines.SKYLINE !== on) {
+      if (on) m.defines.SKYLINE = 1; else delete m.defines.SKYLINE;
+      m.needsUpdate = true;
+    }
+    // The ring and the panorama are the same job; two of them is one too many.
+    if (this.vista) this.vista.visible = !on;
+    this._envDirty = true;
   }
 
   /* ---------------- the dome ---------------- */
@@ -195,7 +335,9 @@ export class Sky {
         uAshCol: { value: new THREE.Color(t.ashColor || 0x333333) },
         uEmberCol: { value: new THREE.Color(t.emberColor || 0xff4400) },
         uEmber: { value: t.emberGlow || 0 },
-        uPlumeDir: { value: new THREE.Vector2(t.plume ? t.plume.dir.x : 1, t.plume ? t.plume.dir.z : 0).normalize() }
+        uPlumeDir: { value: new THREE.Vector2(t.plume ? t.plume.dir.x : 1, t.plume ? t.plume.dir.z : 0).normalize() },
+        uSkyline: { value: this._skyline || null },
+        uSkyBand: { value: new THREE.Vector2(SKYLINE_BAND[0], SKYLINE_BAND[1]) }
       },
       vertexShader: /* glsl */`
         varying vec3 vD;
@@ -208,7 +350,10 @@ export class Sky {
         varying vec3 vD;
         uniform vec3 uZenith, uHorizon, uHaze, uGround, uSunCol, uSunDir, uAshCol, uEmberCol;
         uniform float uHalo, uTime, uAsh, uEmber;
-        uniform vec2 uPlumeDir;
+        uniform vec2 uPlumeDir, uSkyBand;
+        #ifdef SKYLINE
+        uniform sampler2D uSkyline;
+        #endif
         ${GLSL_NOISE}
         void main(){
           vec3 d = normalize(vD);
@@ -223,6 +368,27 @@ export class Sky {
 
           // below the horizon the dome only shows past the edge of the world
           col = mix(col, uGround, smoothstep(-0.02, -0.32, h));
+
+        #ifdef SKYLINE
+          {
+            float u = atan(d.z, d.x) * 0.15915494 + 0.5;
+            float v = clamp((h - uSkyBand.x) / (uSkyBand.y - uSkyBand.x), 0.0, 1.0);
+            vec4 a = texture2D(uSkyline, vec2(u, v));
+            vec4 b = texture2D(uSkyline, vec2(1.0 - u, v));      // mirrored wrap
+            vec4 sk = mix(b, a, smoothstep(0.0, 0.07, min(u, 1.0 - u)));
+            /* Two kinds of panorama have to work here. A PNG carries its own
+               alpha and this is a silhouette; a JPEG has none, so sk.a is 1
+               and the band is opaque — which is fine, because a photographic
+               horizon brings its own sky and that sky IS the answer for the
+               lowest nine degrees. What neither may have is a hard edge where
+               the band stops, so it dissolves into the dome across the top
+               third rather than being cut off. */
+            float k = sk.a * (1.0 - smoothstep(0.62, 1.0, v));
+            // and the base washes into the theme haze, so the horizon line
+            // belongs to the same air as everything in front of it
+            col = mix(col, mix(uHaze, sk.rgb, 0.35 + 0.65 * smoothstep(0.0, 0.45, v)), k);
+          }
+        #endif
 
           // forward scatter around the sun — wide, warm, no disc (that is a billboard)
           float s = max(dot(d, normalize(uSunDir)), 0.0);
@@ -254,6 +420,7 @@ export class Sky {
     this.dome.renderOrder = -1000;
     this.domeMat = mat;
     this.group.add(this.dome);
+    this._applySkyline();          // a rebuild must not lose the panorama
   }
 
   /* ---------------- sun disc ----------------
@@ -277,11 +444,17 @@ export class Sky {
         void main(){
           vec2 d = (vUv - 0.5) * 2.0;
           float r = length(d);
-          float disc = 1.0 - smoothstep(0.150, 0.176, r);       // soft edge: there is air here
-          float limb = mix(1.0, 0.86, smoothstep(0.0, 0.176, r));
-          float glow = pow(max(0.0, 1.0 - r), 3.4) * 0.55 + exp(-r * 7.0) * 0.30;
-          vec3 col = uCol * (disc * limb * 9.0 + glow * 2.4 * uGlow);
-          float a = clamp(disc + glow * 1.6, 0.0, 1.0);
+          /* Harder edge and a hotter core than before: the disc has to clear
+             the bloom threshold on its own (1.30 after the retune) so the
+             glow around it is the BLOOM, not a painted gradient. Painted
+             gradients read as a sticker; bloom reads as light. */
+          float disc = 1.0 - smoothstep(0.148, 0.170, r);
+          float limb = mix(1.0, 0.80, smoothstep(0.0, 0.170, r));
+          // three lobes: a tight aureole, the corona, and a wide warm bloom
+          float glow = exp(-r * 13.0) * 0.34 + exp(-r * 5.2) * 0.40
+                     + pow(max(0.0, 1.0 - r), 4.2) * 0.36;
+          vec3 col = uCol * (disc * limb * 12.0 + glow * 2.8 * uGlow);
+          float a = clamp(disc + glow * 1.5, 0.0, 1.0);
           if (a < 0.003) discard;
           gl_FragColor = vec4(col, a);
         }`
@@ -294,6 +467,111 @@ export class Sky {
     this.sunMesh.position.copy(this.sunDir).multiplyScalar(SUN_D);   // static in group space
     this.sunMat = mat;
     this.group.add(this.sunMesh);
+  }
+
+  /* ---------------- the vista ring ----------------
+     A stage used to end at the edge of the clipmap and then be sky. That
+     reads as a diorama on a table: no matter how good the ground is, a
+     horizon with nothing behind it tells the eye the world is 3 km across.
+
+     So: ~28 silhouettes on a ring 5–7.5 km out, in ONE BufferGeometry of
+     about 500 triangles, coloured by height and by their own distance so the
+     far ones sit back into the haze. They are the same object as the dome's
+     haze band, only with a shape — which is exactly what atmospheric
+     perspective looks like.
+
+     Per theme the shapes are different, because the silhouette is most of
+     what tells you WHERE a stage is: flat-topped mesas for the canyon,
+     sawtooth peaks for the timberline, one long crater rim for the caldera,
+     rolling hills for the airfield, narrow buttes for Thunder Mesa.
+
+     This is the FALLBACK. With a `sky/<theme>` panorama loaded the dome
+     paints the real thing and setSkyline() hides the ring. */
+  _buildVista() {
+    const t = this.theme;
+    if (!t.vista) { this.vista = null; return; }
+    const n = Math.max(8, this.budget.vista | 0);
+    const COLS = VISTA_COLS;
+    const rng = makeRNG(this._seed ^ 0x715A);
+    const nv = n * (COLS + 1) * 2;
+    const pos = new Float32Array(nv * 3);
+    const par = new Float32Array(nv * 2);          // hNorm, depth
+    const idx = new Uint16Array(n * COLS * 2 * 3);
+    const sector = Math.PI * 2 / n;
+
+    let vi = 0, ii = 0;
+    for (let i = 0; i < n; i++) {
+      const r = VISTA_R0 + rng() * (VISTA_R1 - VISTA_R0);
+      const a0 = i * sector + (rng() - 0.5) * sector * 0.55;
+      // Half-widths overlap the neighbouring sector on purpose: a ring of
+      // separated humps reads as a fence, an overlapping one as a range.
+      const aw = sector * (0.58 + rng() * 0.62);
+      // Height scales with radius so a far ridge and a near one subtend
+      // roughly the same angle — the depth cue is COLOUR, not size.
+      const scale = r / 6000;
+      const H = vistaHeight(t.vista, rng) * scale;
+      const base = -0.050 * r;
+      const p0 = rng(), p1 = rng(), p2 = rng();
+      const depth = (r - VISTA_R0) / (VISTA_R1 - VISTA_R0);
+      const v0 = vi;
+      for (let j = 0; j <= COLS; j++) {
+        const u = j / COLS;
+        const a = a0 + (u - 0.5) * 2 * aw;
+        const cx = Math.cos(a) * r, cz = Math.sin(a) * r;
+        const hn = vistaProfile(t.vista, u, p0, p1, p2);
+        const o = vi * 3, q = vi * 2;
+        pos[o] = cx; pos[o + 1] = base; pos[o + 2] = cz;
+        par[q] = 0; par[q + 1] = depth;
+        pos[o + 3] = cx; pos[o + 4] = hn * H; pos[o + 5] = cz;
+        par[q + 2] = hn; par[q + 3] = depth;
+        vi += 2;
+      }
+      for (let j = 0; j < COLS; j++) {
+        const b0 = v0 + j * 2, t0 = b0 + 1, b1 = b0 + 2, t1 = b0 + 3;
+        idx[ii++] = b0; idx[ii++] = t0; idx[ii++] = t1;
+        idx[ii++] = b0; idx[ii++] = t1; idx[ii++] = b1;
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aParam', new THREE.BufferAttribute(par, 2));
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), VISTA_R1 * 1.5);
+
+    const mat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, depthTest: true, fog: false,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uHaze: { value: this.hazeColor },
+        uRidge: { value: new THREE.Color(t.vistaColor || 0x60646e) },
+        uFade: { value: t.vistaFade === undefined ? 0.40 : t.vistaFade }
+      },
+      vertexShader: /* glsl */`
+        attribute vec2 aParam;
+        varying vec2 vP;
+        void main(){ vP = aParam; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+      fragmentShader: /* glsl */`
+        precision mediump float;
+        varying vec2 vP;
+        uniform vec3 uHaze, uRidge;
+        uniform float uFade;
+        void main(){
+          // haze x height: solid rock at the ridge line, dissolved into the
+          // horizon band at the base, and the whole thing pushed toward haze
+          // by distance and by how thick the theme's air is
+          float k = pow(clamp(vP.x, 0.0, 1.0), 0.85) * (1.0 - vP.y * 0.45) * (1.0 - uFade);
+          gl_FragColor = vec4(mix(uHaze, uRidge, k),
+            smoothstep(0.0, 0.16, vP.x) * (0.62 + 0.38 * vP.x));
+        }`
+    });
+
+    this.vista = new THREE.Mesh(geo, mat);
+    this.vista.frustumCulled = false;
+    this.vista.renderOrder = -993;
+    this.vistaMat = mat;
+    this.vista.visible = !this._skyline;
+    this.group.add(this.vista);
   }
 
   /* ---------------- clouds ----------------
@@ -410,9 +688,17 @@ export class Sky {
           // "lit side" is screen-space and a lie, but it is the lie that makes a
           // flat billboard read as a volume
           float lit = 0.5 + 0.5 * dot(normalize(vC + vec2(1e-4)), uSunScreen);
-          lit = mix(lit * lit, 0.72 + 0.28 * lit, vLayer);
+          /* Retuned harder. The old ramp was linear in lit*lit, which gives
+             a cumulus an even grey gradient — technically a sphere, visually
+             a pebble. A cloud is nearly white where the sun reaches it and
+             falls off FAST into its own shadow, so the cumulus term gets a
+             smoothstep and the silver lining gets over a stop more. Cirrus
+             (vLayer 1) keeps its flat wash: it is one ice crystal thick and
+             has no shadowed side to find. */
+          lit = mix(smoothstep(0.04, 0.92, lit * lit), 0.70 + 0.30 * lit, vLayer);
           vec3 col = mix(uShade, uLit, lit);
-          col += uLit * pow(lit, 5.0) * (1.0 - a) * 0.85;        // silver where it thins
+          col += uLit * pow(lit, 4.0) * (1.0 - a) * 1.15;        // silver where it thins
+          col *= 1.0 + 0.20 * (1.0 - vLayer) * lit;              // tops catch the key
           gl_FragColor = vec4(col, a * vA * uOpacity);
         }`
     });
@@ -632,6 +918,13 @@ export class Sky {
     this.dome.geometry.dispose(); this.dome.material.dispose();
     this._buildDome();
 
+    if (this.vista) {
+      this.group.remove(this.vista);
+      this.vista.geometry.dispose(); this.vista.material.dispose();
+      this.vista = null;
+    }
+    this._buildVista();
+
     if (this.clouds) {
       this.group.remove(this.cloudGroup);
       this.clouds.geometry.dispose(); this.clouds.material.dispose();
@@ -654,6 +947,7 @@ export class Sky {
     this.scene.remove(this.group);
     this.dome.geometry.dispose(); this.dome.material.dispose();
     this.sunMesh.geometry.dispose(); this.sunMesh.material.dispose();
+    if (this.vista) { this.vista.geometry.dispose(); this.vista.material.dispose(); }
     if (this.clouds) {
       this.clouds.geometry.dispose(); this.clouds.material.dispose();
       this.cloudTex.dispose();
@@ -668,6 +962,9 @@ export class Sky {
     if (this.envRT) { this.envRT.dispose(); this.envRT = null; }
     if (this.scene.environment) this.scene.environment = null;
     if (this.scene.fog === this.fog) this.scene.fog = this._prevFog;
-    this.clouds = this.plume = this.dome = this.sunMesh = null;
+    // The panorama belongs to Assets, which owns its lifetime — drop the
+    // reference, never the texture.
+    this._skyline = null;
+    this.clouds = this.plume = this.dome = this.sunMesh = this.vista = null;
   }
 }

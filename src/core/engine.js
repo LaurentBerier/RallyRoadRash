@@ -28,13 +28,19 @@ export const QUALITY = {
     stars: 6000, boulders: 1250, trailRes: 2048, sunRes: 768, sunSteps: 52, dentRes: 2048,
     shadow: 1024, bloom: true, msaa: 0, dust: 1200
   },
+  /* clipM came down from 160/192. The ring count and the cell size set the
+     DETAIL; the ring WIDTH sets how much of each ring is drawn edge-on at a
+     grazing angle, where a triangle covers a fraction of a pixel and costs
+     the same as one that covers a hundred. HIGH was drawing ~500 k triangles
+     against a 450 k budget and the last 16 cells of every ring were the part
+     nobody could see. */
   high: {
-    name: 'HIGH', maxDpr: 2, pixels: 2.4e6, clipM: 160, clipLevels: 9, clipCell: 0.16,
+    name: 'HIGH', maxDpr: 2, pixels: 2.4e6, clipM: 144, clipLevels: 9, clipCell: 0.16,
     stars: 11000, boulders: 2000, trailRes: 4096, sunRes: 1024, sunSteps: 76, dentRes: 4096,
     shadow: 2048, bloom: true, msaa: 4, dust: 2200
   },
   ultra: {
-    name: 'ULTRA', maxDpr: 2, pixels: 4.2e6, clipM: 192, clipLevels: 9, clipCell: 0.13,
+    name: 'ULTRA', maxDpr: 2, pixels: 4.2e6, clipM: 176, clipLevels: 9, clipCell: 0.13,
     stars: 16000, boulders: 2900, trailRes: 4096, sunRes: 1536, sunSteps: 96, dentRes: 4096,
     shadow: 4096, bloom: true, msaa: 4, dust: 3200
   }
@@ -65,9 +71,19 @@ const FinalShader = {
     uVignette: { value: 0.85 },
     uGrain: { value: 0.35 },
     uAberr: { value: 0.5 },
+    /* Sensor tear on a hit. Owned by whoever routes damage — one impulse,
+       decayed to zero by the caller; nothing here animates it. */
     uGlitch: { value: 0.0 },
     uFlash: { value: 0.0 },
     uLetterbox: { value: 0.0 },
+    /* Per-STAGE look, all three set once from SKY_THEMES by setLightTheme and
+       never animated — the same reasoning that gave uGrade its own uniform. */
+    uShaft: { value: 0.0 },      // god-ray strength toward uSunUV
+    uSat: { value: 1.0 },
+    uCon: { value: 1.0 },
+    /* Radial speed smear, 0..1, written per frame by the race loop off road
+       speed. Zero is the default so a stage with nobody driving is clean. */
+    uSpeedBlur: { value: 0.0 },
     uRes: { value: new THREE.Vector2(1, 1) },
     uSunUV: { value: new THREE.Vector3(0.5, 0.5, 0) }   // xy = screen pos, z = visibility
   },
@@ -78,7 +94,7 @@ const FinalShader = {
     uniform sampler2D tDiffuse;
     uniform float uTime, uExposure, uVignette, uGrain, uAberr, uGlitch, uFlash, uLetterbox;
     uniform vec3 uGrade;
-    uniform float uBlind;
+    uniform float uBlind, uShaft, uSat, uCon, uSpeedBlur;
     uniform vec2 uRes; uniform vec3 uSunUV;
 
     vec3 aces(vec3 x){
@@ -115,6 +131,20 @@ const FinalShader = {
       col.g = texture2D(tDiffuse, uv).g;
       col.b = texture2D(tDiffuse, uv - d*k).b;
 
+      /* speed smear: a radial blur toward the CENTRE of the frame, weighted
+         by r^2 so the middle of the screen — where the road and the car you
+         are chasing live — stays sharp and only the periphery streaks. That
+         is the whole trick: an even blur reads as a dirty lens, a radial one
+         reads as velocity. */
+      float amt = clamp(uSpeedBlur * r2 * 2.2, 0.0, 0.22);
+      if (amt > 0.002){
+        vec3 acc = col;
+        for (int i = 1; i <= 6; i++){
+          acc += texture2D(tDiffuse, mix(uv, vec2(0.5), float(i) * (1.0/6.0) * amt)).rgb;
+        }
+        col = acc * (1.0 / 7.0);
+      }
+
       /* anamorphic-ish veiling glare toward the sun — the one thing a vacuum
          cannot give you, but a scratched lens can */
       if (uSunUV.z > 0.001){
@@ -130,12 +160,52 @@ const FinalShader = {
         col += vec3(0.75,0.42,0.25) * exp(-length((g2-uSunUV.xy)*vec2(aspect,1.0))*22.0) * 0.10 * uSunUV.z;
       }
 
+      /* Sun shafts. Twelve taps marching from this pixel TOWARD the sun,
+         each one keeping only what it finds above a luminance threshold —
+         so the rays are cast by the things that are actually bright (the
+         disc, a ridge line lit from behind, a dust cloud) and the ground
+         under the car contributes nothing. Weight decays along the march,
+         which is what makes a ray taper instead of ending in a hard stripe.
+
+         This is the cheapest of the three big skies-and-light wins and the
+         one that reads instantly on a low sun, so it is per-theme: a noon
+         airfield gets none, a caldera dusk gets a lot. */
+      if (uShaft > 0.001 && uSunUV.z > 0.001){
+        vec2 sd = (uSunUV.xy - uv) * (1.0/12.0) * 0.70;
+        vec2 sp2 = uv;
+        vec3 acc = vec3(0.0);
+        float w = 1.0, wsum = 0.0;
+        for (int i = 0; i < 12; i++){
+          sp2 += sd;
+          // clamped: with the sun just off frame the march runs past the edge,
+          // and an unclamped tap smears the edge COLUMN across the shafts
+          vec3 s = texture2D(tDiffuse, clamp(sp2, 0.0, 1.0)).rgb;
+          acc += s * max(dot(s, vec3(0.299,0.587,0.114)) - 0.62, 0.0) * w;
+          wsum += w;
+          w *= 0.90;
+        }
+        // fade with angular distance so the shafts belong to the sun and do
+        // not tint the opposite corner of the frame
+        vec2 sv = (uSunUV.xy - uv) * vec2(aspect, 1.0);
+        col += acc / max(wsum, 1e-4) * uShaft * uSunUV.z * exp(-length(sv) * 1.35);
+      }
+
       /* The dust storm: warm grit over the lens and the contrast crushed
          out of it. Before the grade, so a stage's own key still applies. */
       if (uBlind > 0.001){
         col = mix(col, vec3(0.62, 0.50, 0.34), uBlind * 0.72);
         col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uBlind * 0.45);
       }
+
+      /* Saturation and contrast, in LINEAR and before the grade: ACES pulls
+         several stops of saturation out of anything bright, so an arcade
+         stage that wants punchy colour has to ask for it on the way in. The
+         contrast pivot is 0.18 — mid grey — so pushing contrast darkens the
+         shadows and lifts the highlights around the same point the grade and
+         the tone curve were tuned against. */
+      float lm = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(vec3(lm), col, uSat);
+      col = max((col - 0.18) * uCon + 0.18, 0.0);
       col *= uGrade;
       col *= uExposure;
       col += uFlash;
@@ -254,15 +324,21 @@ export class Engine {
     }
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    // Threshold sits above sunlit white bodywork on purpose: any lower and
-    // bright panels bloom and veil the entire frame.
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.48, 0.70, 1.15);
+    /* Threshold sits above sunlit white bodywork on purpose: any lower and
+       bright panels bloom and veil the entire frame. In three's physical
+       lighting a 0.9 albedo panel under the brightest key here resolves to
+       about 1.0 — so 1.30 keeps every painted surface out and lets only the
+       things that are genuinely emissive through: lamps, lava, embers, the
+       sun disc, boost flames. Raised from 1.15 (which caught white liveries),
+       and the strength went up / the radius down to match: a tighter, hotter
+       bloom reads as arcade, a wide soft one reads as fog. */
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.55, 0.62, 1.30);
     this.bloom.enabled = q.bloom;
     this.composer.addPass(this.bloom);
     this.final = new ShaderPass(FinalShader);
     this.final.renderToScreen = true;
     this.composer.addPass(this.final);
-    this._applyGrade();          // a rebuild must not lose the stage's grade
+    this._applyLook();          // a rebuild must not lose the stage's look
   }
 
   setQuality(key) {
@@ -329,23 +405,74 @@ export class Engine {
        composer, and a stage that silently went a stop brighter when the
        player touched a settings slider would be a nasty little bug. */
     this.grade = t.grade || null;
-    this._applyGrade();
+    this.shaft = t.shaft === undefined ? 0 : t.shaft;
+    this.sat = t.sat === undefined ? 1 : t.sat;
+    this.con = t.con === undefined ? 1 : t.con;
+    this._applyLook();
   }
 
-  _applyGrade() {
-    const u = this.final && this.final.uniforms.uGrade;
-    if (!u) return;
+  _applyLook() {
+    if (!this.final) return;
+    const u = this.final.uniforms;
     const g = this.grade;
-    if (g) u.value.set(g[0], g[1], g[2]); else u.value.set(1, 1, 1);
+    if (g) u.uGrade.value.set(g[0], g[1], g[2]); else u.uGrade.value.set(1, 1, 1);
+    u.uShaft.value = this.shaft || 0;
+    u.uSat.value = this.sat === undefined ? 1 : this.sat;
+    u.uCon.value = this.con === undefined ? 1 : this.con;
+  }
+
+  /**
+   * Hand the terrain the real shadow map.
+   *
+   * The terrain's GLSL has always carried a complete dynamic-shadow path —
+   * uRShadow / uRShadowMat / uRShadowOn / uRShadowTexel and a five-tap PCF
+   * over three's RGBA-packed depth — and nothing ever switched it on, so
+   * every car in the game floated a few centimetres above its own ground
+   * with only the baked terrain self-shadow underneath it. This is the wire.
+   *
+   * Pass null when a stage is torn down, or the engine holds a disposed
+   * material's uniforms across the next build.
+   */
+  attachTerrain(terrain) {
+    if (this.terrain && this.terrain !== terrain) this._terrainShadow(0);
+    this.terrain = terrain || null;
+  }
+
+  /** Flip the terrain's dynamic-shadow branch without touching anything else. */
+  _terrainShadow(on) {
+    const u = this.terrain && this.terrain.uniforms;
+    if (u && u.uRShadowOn) u.uRShadowOn.value = on;
   }
 
   /** keep the shadow frustum tight around the car so 2 k feels like 8 k */
   aimShadow(target, sunDir) {
-    if (!this.sun.castShadow) return;
+    if (!this.sun.castShadow) { this._terrainShadow(0); return; }
     this.sun.target.position.copy(target);
     this.sun.position.copy(target).addScaledVector(sunDir, 90);
     this.sun.target.updateMatrixWorld();
     this.sun.updateMatrixWorld();
+
+    const u = this.terrain && this.terrain.uniforms;
+    if (!u || !u.uRShadow) return;
+    /* setQuality() disposes the map and leaves it null; three re-creates it
+       inside the next shadow pass. Until then there is nothing to sample, and
+       a null sampler bound to a live texture unit is an error on some
+       drivers — so the branch goes off rather than reading garbage. */
+    const map = this.sun.shadow.map;
+    if (!map) { u.uRShadowOn.value = 0; return; }
+    /* Recompute the shadow matrix HERE rather than using the one three left
+       behind. three refreshes it during the shadow pass, which happens inside
+       composer.render() — i.e. after this call — so the matrix sitting on the
+       shadow right now belongs to the previous frame and to the previous
+       position of the car. At 40 m/s that is two thirds of a metre of offset
+       between a car and its own shadow. Calling updateMatrices with the light
+       we have just aimed produces exactly the matrix the shadow pass is about
+       to derive from the same inputs. */
+    this.sun.shadow.updateMatrices(this.sun);
+    u.uRShadow.value = map.texture;
+    u.uRShadowOn.value = 1;
+    u.uRShadowMat.value.copy(this.sun.shadow.matrix);
+    u.uRShadowTexel.value = 1 / Math.max(1, this.sun.shadow.mapSize.x);
   }
 
   render(dt) {

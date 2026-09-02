@@ -32,6 +32,8 @@ import {
   containerGeo, towerGeo, waterTankGeo, hangarGeo, grandstandGeo, canopyGeo,
   personGeo, poleGeo, culvertGeo, pipeworkGeo, logStackGeo, wireGeo, KIT_PALETTE,
   itemBoxGeo, spareWheelGeo, boostPadGeo,
+  floodlightGeo, billboardGeo, buntingGeo, tyreWallGeo, rockArchGeo,
+  waterfallSheetGeo, geyserVentGeo,
 } from '../src/world/kit.js';
 
 let failures = 0, checks = 0;
@@ -45,7 +47,7 @@ function ok(name, pass, detail) {
 function info(s) { console.log('        \x1b[90m' + s + '\x1b[0m'); }
 
 /* Everything the kit makes, with the envelope each one is allowed:
-     [minWidth, maxWidth, minHeight, maxHeight, sink?]
+     [minWidth, maxWidth, minHeight, maxHeight, sink?, float?]
    The ranges are deliberately wide — this is a "did somebody drop a zero"
    gate, not a modelling review.
 
@@ -54,7 +56,13 @@ function info(s) { console.log('        \x1b[90m' + s + '\x1b[0m'); }
    props.js drops it at terrain.heightAt() with no offset, while a bush, an
    obsidian shard and a crashed car all want their base buried a little or
    they read as stickers on a slope. Anything without a sink allowance that
-   goes under is a bug. */
+   goes under is a bug.
+
+   `float` is how far ABOVE y = 0 the lowest point may sit, default 0.30 m —
+   the same statement read the other way. It is 0.30 for everything that
+   stands on the ground and only moves for the shapes that HANG: bunting is
+   strung between two things that themselves stand on the ground, so its own
+   lowest point is metres up and that is correct. */
 const P = kitPalette('canyon');
 const FACTORIES = [
   ['cactus0', () => cactusGeo(P, 11), [0.3, 4.0, 2.0, 7.0]],
@@ -89,6 +97,23 @@ const FACTORIES = [
   /* The boost pad LIES ON the road rather than standing on it: 8 cm tall
      over a 4 m footprint. The width gate is the footprint, not the height. */
   ['boostPad', () => boostPadGeo(P, 157), [3.0, 4.2, 0.05, 0.20, 0.02]],
+  /* --- the event layer --- */
+  ['floodlight', () => floodlightGeo(P, 163), [1.5, 6.0, 10.0, 17.0]],
+  ['billboard', () => billboardGeo(P, 167), [6.0, 14.0, 6.0, 11.0]],
+  ['tyreWall', () => tyreWallGeo(P, 173), [4.0, 9.0, 0.8, 2.2]],
+  /* The one shape you drive THROUGH. Width is the full span plus its
+     buttresses; the height gate is what stops somebody shipping an arch a
+     car cannot fit under. The sink allowance is its springing: a 16 m arch
+     has its feet IN the ground, and props drops it at heightAt with no
+     per-kind offset. */
+  ['rockArch', () => rockArchGeo(P, 179), [22.0, 42.0, 10.0, 22.0, 0.35]],
+  ['waterfall', () => waterfallSheetGeo(P, 181), [4.0, 12.0, 10.0, 22.0]],
+  ['geyserVent', () => geyserVentGeo(P, 191), [2.0, 5.5, 0.5, 2.4]],
+  /* Bunting HANGS: strung at 3.2 m with 1.4 m of sag, its lowest pennant is
+     about 1.5 m up and that is the correct answer, so it gets a float
+     allowance instead of the usual stands-on-the-ground gate. */
+  ['bunting', () => buntingGeo(0x1c1e22, P.paintAlt, P.canvasAlt, 0, 3.2, 0, 14, 3.2, 0, 1.4, 12),
+    [12.0, 16.0, 1.0, 2.6, 0.10, 2.2]],
 ];
 
 const box = new THREE.Box3();
@@ -98,6 +123,7 @@ head('1. FACTORIES — attributes, origin, envelope');
 let totalTris = 0;
 for (const [name, make, env] of FACTORIES) {
   const sink = env[4] === undefined ? 0.10 : env[4];
+  const float = env[5] === undefined ? 0.30 : env[5];
   let g = null;
   try { g = make(); } catch (e) { ok(`${name}: builds`, false, e.message); continue; }
   if (!g) { ok(`${name}: builds`, false, 'returned null'); continue; }
@@ -126,8 +152,8 @@ for (const [name, make, env] of FACTORIES) {
     attrs.join(','));
   ok(`${name}: all positions finite`, allFinite);
   ok(`${name}: linear vertex colours in 0..1`, colOk);
-  ok(`${name}: stands on y = 0 (sink <= ${sink} m)`,
-    b.min.y > -sink - 1e-3 && b.min.y < 0.30, `min y ${f(b.min.y, 3)}`);
+  ok(`${name}: sits on y = 0 (${-sink} .. ${float} m)`,
+    b.min.y > -sink - 1e-3 && b.min.y < float, `min y ${f(b.min.y, 3)}`);
   ok(`${name}: width ${env[0]}–${env[1]} m`, w >= env[0] && w <= env[1], `${f(w, 2)} m`);
   ok(`${name}: height ${env[2]}–${env[3]} m`, h >= env[2] && h <= env[3], `${f(h, 2)} m`);
   g.dispose();
@@ -162,7 +188,7 @@ head('3. MERGEABILITY — every shape must merge with every other shape');
   const { mergeGeometries } = await import('three/addons/utils/BufferGeometryUtils.js');
   const parts = FACTORIES.map(([, make]) => make()).filter(Boolean);
   const merged = mergeGeometries(parts, false);
-  ok('all 26 kit shapes merge into one geometry', !!merged,
+  ok(`all ${FACTORIES.length} kit shapes merge into one geometry`, !!merged,
     merged ? `${Math.round((merged.index ? merged.index.count : merged.attributes.position.count) / 3)} tris` : 'null');
   if (merged) {
     ok('merged geometry keeps its vertex colours', !!merged.attributes.color);
@@ -192,7 +218,8 @@ head('5. PALETTES — one per theme, every slot filled');
   const SLOTS = ['wood', 'timber', 'metal', 'rust', 'paint', 'paintAlt', 'canvas',
     'canvasAlt', 'foliage', 'foliageAlt', 'bark', 'dead', 'concrete', 'dirt', 'glass', 'hazard'];
   const themes = Object.keys(KIT_PALETTE);
-  ok('one palette per stage theme', themes.length === 4, themes.join(','));
+  // five stages now: the four originals plus THUNDER MESA
+  ok('one palette per stage theme', themes.length === 5, themes.join(','));
   for (const t of themes) {
     const pal = KIT_PALETTE[t];
     const missing = SLOTS.filter(k => typeof pal[k] !== 'number');
