@@ -35,11 +35,21 @@
       frame. Pickup and projectile tests run against last frame's positions —
       at 39 m/s that is 65 cm against a 2 m trigger radius, which nobody can
       perceive and which buys a whole frame of latency back.
+
+   6. BOOST PADS ARE TRACK FURNITURE, NOT A POWER-UP. They are chevrons
+      painted on the road; a stage that has them has them whatever the ITEMS
+      setting says, and a lap time set with items off has to be comparable
+      with one set with them on. `step()` is therefore split into an item
+      layer gated on `enabled` and a pad layer that is not, `_hideAll` leaves
+      the pads alone, and the pad meshes live in their own group so hiding
+      the item group cannot take them with it.
    ============================================================ */
 import * as THREE from 'three';
 import { G, TUNE } from './config.js';
 import { DUST_KIND } from '../world/dust.js';
-import { itemBoxGeo, spareWheelGeo, builder, kitPalette, shade } from '../world/kit.js';
+import {
+  itemBoxGeo, spareWheelGeo, boostPadGeo, builder, kitPalette, shade,
+} from '../world/kit.js';
 import {
   ITEM, ITEMS, rollItem, makeInv, clearInv, hasItem, canTake, giveItem, consume, tickInv,
 } from './items.js';
@@ -52,6 +62,24 @@ const PICK_Y = 1.9;              // m — and how far below it you may be
 const BOX_RESPAWN = 3.5;         // s
 const ROLL_TIME = 0.7;           // s of roulette before an item is usable
 const BOX_HOVER = 1.15;          // m above the road
+
+/* ---------------- boost pads (contract 6.1 `pads[]`) ---------------- */
+const PAD_HW = 1.6, PAD_LEN = 4, PAD_MUL = 1.6, PAD_TOP = 1.10, PAD_TIME = 1.2;
+/* Re-trigger lockout for THE SAME pad, on top of that pad's own boost time.
+   Per-pad rather than per-car on purpose: a car parked on a pad must not
+   farm it for ever, but an authored CHAIN of pads has to chain — a blanket
+   per-car cooldown would silently eat every pad but the first. */
+const PAD_CD = 0.35;
+const PAD_GEO_HW = 1.6;          // kit.js boostPadGeo: W 3.2 => half-width 1.6
+const PAD_GEO_LEN = 4.0;         // …and LEN 4.0. Instances scale from these.
+
+/* ---------------- what the AI is allowed to see ----------------
+   Contract 6.7 radii. These are DANGER radii, not collision radii: what the
+   dodge wants to know is how wide to go, and a spare wheel's 0.36 m hitbox
+   plus a car's 1.2 m is the distance at which it actually matters. */
+const THREAT_R_PROJ = 1.6;
+const THREAT_R_HAZ = ITEMS[ITEM.SLICK].radius;
+const THREAT_PROJ = 0, THREAT_HAZ = 1;   // `kind`
 
 /* Boxes are laid out in packs across the road. `lapLength / 420` gives seven
    rows on the 900 m tutorial and nine on the 2 km caldera — often enough that
@@ -76,6 +104,7 @@ export class ItemWorld {
    * @param o.racers   the live racer rows (read: id, isPlayer, vehicle, pos)
    * @param o.rng      the SEEDED race stream
    * @param o.enabled  the ITEMS setting
+   * @param o.vfx      world/vfx.js, or null. EVERY call site is guarded.
    */
   constructor(o) {
     this.scene = o.scene;
@@ -86,6 +115,10 @@ export class ItemWorld {
     this.audio = o.audio;
     this.feel = o.feel;
     this.engine = o.engine;
+    /* Contract 6.2. Built in main.js buildWorld and threaded in by Race; null
+       until P1's module lands, and null for good on any path that does not
+       build a world. Guarded at every call, never cached into a local. */
+    this.vfx = o.vfx || null;
     this.racers = o.racers;
     this.rng = o.rng;
     this.enabled = o.enabled !== false;
@@ -96,8 +129,21 @@ export class ItemWorld {
 
     this.group = new THREE.Group();
     this.scene.add(this.group);
+    /* Pads are not part of the item group: `_hideAll` hides that one, and a
+       stage's boost pads have to survive the ITEMS setting being off. */
+    this.padGroup = new THREE.Group();
+    this.scene.add(this.padGroup);
     this._geo = [];
     this._mat = [];
+
+    /* Contract 6.7 — plain scalars, bumped by a sequence number so a reader
+       can tell "a new one" from "the same one still". race.js copies these
+       into the HUD payload; the AI may read them; nobody writes them but us. */
+    this.events = {
+      hitSeq: 0, hitTarget: -1, hitOwner: -1, hitItem: -1,
+      pickSeq: 0, pickRacer: -1, pickItem: -1,
+      padSeq: 0, padRacer: -1,
+    };
 
     /* Per-racer state. Every field declared here, cleared by _clearState. */
     this.st = [];
@@ -115,6 +161,7 @@ export class ItemWorld {
     this.blindT = 0;
 
     this._buildBoxes();
+    this._buildPads();
     this._buildPools();
     this._time = 0;
     if (!this.enabled) this._hideAll();
@@ -133,6 +180,9 @@ export class ItemWorld {
       hazImmune: new Float32Array(MAX_HAZ),
       rollShown: -1,          // which item name the roulette is displaying
       rollTick: 0,
+      // boost pads — declared here like everything else (decision 4)
+      padT: 0, padCd: 0, padMul: 1, padTop: 1, padLast: -1,
+      sledFlame: 0,           // 1 while a vfx flame is lit for this racer
     };
   }
 
@@ -144,6 +194,8 @@ export class ItemWorld {
     s.ghostT = 0;
     s.hazImmune.fill(0);
     s.rollShown = -1; s.rollTick = 0;
+    s.padT = 0; s.padCd = 0; s.padMul = 1; s.padTop = 1; s.padLast = -1;
+    s.sledFlame = 0;
   }
 
   /* ============================================================
@@ -157,7 +209,7 @@ export class ItemWorld {
     const cps = this.data.checkpoints || [];
     const grid = this.data.gridSlots || [];
 
-    const xs = [], ys = [], zs = [], ss = [];
+    const xs = [], ys = [], zs = [], ss = [], ls = [];
     const packs = clamp(Math.round(L / PACK_SPACING), 3, 6);
     const step = line.length ? L / line.length : 6;
 
@@ -194,6 +246,7 @@ export class ItemWorld {
         ys.push(this.terrain.heightAt(q.x, q.z) + BOX_HOVER);
         zs.push(q.z);
         ss.push(best);
+        ls.push(lat);
       }
     }
 
@@ -203,6 +256,10 @@ export class ItemWorld {
     this.boxY = new Float32Array(ys);
     this.boxZ = new Float32Array(zs);
     this.boxS = new Float32Array(ss);
+    /* Kept because `nearestBox` answers in LATERAL terms — the AI steers by
+       offset, and re-deriving a lateral from a world point would need a
+       second spline.nearest() per query. */
+    this.boxLat = new Float32Array(ls);
     this.boxT = new Float32Array(n);        // > 0 = collected, counting back
 
     /* Arc-length lookup: s -> first box index at or after it. One Int16Array
@@ -265,6 +322,85 @@ export class ItemWorld {
       if (pt && pt.jump) return false;
     }
     return true;
+  }
+
+  /* ============================================================
+     1b. BOOST PADS
+     ------------------------------------------------------------
+     Pure track data (contract 6.1 `pads[]`), which is why there is no
+     placement search here and no seeded RNG: a pad is authored, a box is
+     scattered. `x/y/z/dx/dz` are published by buildTrackData, but they are
+     derived from `s`/`lat` and this module can derive them too — so a track
+     that only carries the authored half still works.
+     ============================================================ */
+  _buildPads() {
+    const src = this.data.pads || [];
+    const n = src.length;
+    this.nPad = n;
+    this.padS = new Float32Array(n);
+    this.padLat = new Float32Array(n);
+    this.padX = new Float32Array(n);
+    this.padY = new Float32Array(n);
+    this.padZ = new Float32Array(n);
+    this.padDX = new Float32Array(n);
+    this.padDZ = new Float32Array(n);
+    this.padHW = new Float32Array(n);
+    this.padLen = new Float32Array(n);
+    this.padMul = new Float32Array(n);
+    this.padTop = new Float32Array(n);
+    this.padTime = new Float32Array(n);
+    this.padHit = new Float32Array(n);      // s of "just fired" glow left
+    if (!n) { this.padMesh = null; return; }
+
+    for (let i = 0; i < n; i++) {
+      const p = src[i];
+      const s = this.spline.wrapS(p.s || 0);
+      const lat = p.lat || 0;
+      this.padS[i] = s;
+      this.padLat[i] = lat;
+      let x = p.x, z = p.z;
+      if (!(Number.isFinite(x) && Number.isFinite(z))) {
+        const q = this.spline.offsetPoint(s, lat, _pp);
+        x = q.x; z = q.z;
+      }
+      let dx = p.dx, dz = p.dz;
+      if (!(Number.isFinite(dx) && Number.isFinite(dz))) {
+        const d = this.spline.dirAt(s, _dd);
+        dx = d.x; dz = d.z;
+      }
+      this.padX[i] = x;
+      this.padZ[i] = z;
+      // sit ON the road, not in it: the same 6 cm lift the oil decal uses
+      this.padY[i] = this.terrain.heightAt(x, z) + 0.05;
+      this.padDX[i] = dx; this.padDZ[i] = dz;
+      this.padHW[i] = p.hw > 0 ? p.hw : PAD_HW;
+      this.padLen[i] = p.len > 0 ? p.len : PAD_LEN;
+      this.padMul[i] = p.mul > 0 ? p.mul : PAD_MUL;
+      this.padTop[i] = p.top > 0 ? p.top : PAD_TOP;
+      this.padTime[i] = p.time > 0 ? p.time : PAD_TIME;
+    }
+
+    const P = kitPalette(this.theme);
+    const geo = this._keepGeo(boostPadGeo(P, 157));
+    /* Emissive on the shared material rather than per-instance colour: one
+       material, one draw call, and the pulse is a single uniform write. */
+    this.padMat = this._keepMat(new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 0.45, metalness: 0.20,
+      emissive: 0x3a1c00, emissiveIntensity: 1.0,
+    }));
+    const im = new THREE.InstancedMesh(geo, this.padMat, n);
+    im.castShadow = false; im.receiveShadow = true; im.frustumCulled = false;
+    this.padGroup.add(im);
+    this.padMesh = im;
+
+    for (let i = 0; i < n; i++) {
+      _dummy.position.set(this.padX[i], this.padY[i], this.padZ[i]);
+      _dummy.rotation.set(0, Math.atan2(this.padDX[i], this.padDZ[i]), 0);
+      _dummy.scale.set(this.padHW[i] / PAD_GEO_HW, 1, this.padLen[i] / PAD_GEO_LEN);
+      _dummy.updateMatrix();
+      im.setMatrixAt(i, _dummy.matrix);
+    }
+    im.instanceMatrix.needsUpdate = true;
   }
 
   /* ============================================================
@@ -339,37 +475,114 @@ export class ItemWorld {
    */
   step(dt, live) {
     this._time += dt;
-    if (!this.enabled) return;
 
-    for (let i = 0; i < this.racers.length; i++) {
-      const r = this.racers[i], s = this.st[i], v = r.vehicle;
-      tickInv(s.inv, dt);
-      if (s.inv.rollT > 0) {
-        // Roulette: cosmetic only, so Math.random is allowed (house rule 6).
-        s.rollTick -= dt;
-        if (s.rollTick <= 0) { s.rollTick = 0.06; s.rollShown = (Math.random() * ITEMS.length) | 0; }
-      } else s.rollShown = -1;
-
-      if (s.boostT > 0) s.boostT -= dt;
-      if (s.slowT > 0) s.slowT -= dt;
-      if (s.ghostT > 0) s.ghostT -= dt;
-      if (s.sledT > 0) this._stepSled(dt, r, s);
-      if (s.towT > 0) this._stepTow(dt, r, s);
-      for (let h = 0; h < MAX_HAZ; h++) if (s.hazImmune[h] > 0) s.hazImmune[h] -= dt;
-
-      /* Recomputed from scratch every frame — see decision 3 in the header. */
-      let fm = 1, tm = 1;
-      if (s.boostT > 0) { fm *= s.boostForce; tm *= s.boostTop; }
-      if (s.slowT > 0) { fm *= ITEMS[ITEM.STORM].force; tm *= ITEMS[ITEM.STORM].top; }
-      if (s.sledT > 0) { fm *= ITEMS[ITEM.SLED].force; tm *= ITEMS[ITEM.SLED].top; }
-      v.extDriveMul = fm;
-      v.extTopMul = tm;
+    /* ONE spline.nearest() per racer per frame, feeding BOTH the box trigger
+       and the pad trigger. It has to happen out here rather than inside
+       _stepBoxes because the pads run with the item layer switched off. */
+    const wantNear = live && (this.enabled || this.nPad > 0);
+    if (wantNear) {
+      for (let i = 0; i < this.racers.length; i++) {
+        const v = this.racers[i].vehicle;
+        this.spline.nearest(v.pos.x, v.pos.z, this._near[i]);
+      }
     }
 
-    if (!live) return;
+    for (let i = 0; i < this.racers.length; i++) {
+      const r = this.racers[i], s = this.st[i];
+
+      if (this.enabled) {
+        tickInv(s.inv, dt);
+        if (s.inv.rollT > 0) {
+          // Roulette: cosmetic only, so Math.random is allowed (house rule 6).
+          s.rollTick -= dt;
+          if (s.rollTick <= 0) { s.rollTick = 0.06; s.rollShown = (Math.random() * ITEMS.length) | 0; }
+        } else s.rollShown = -1;
+
+        if (s.boostT > 0) s.boostT -= dt;
+        if (s.slowT > 0) s.slowT -= dt;
+        if (s.ghostT > 0) s.ghostT -= dt;
+        if (s.sledT > 0) this._stepSled(dt, r, s, i);
+        else if (s.sledFlame) this._sledFlame(i, r, 0);
+        if (s.towT > 0) this._stepTow(dt, r, s);
+        for (let h = 0; h < MAX_HAZ; h++) if (s.hazImmune[h] > 0) s.hazImmune[h] -= dt;
+        if (s.slowT > 0) this._stormWall(r);
+      }
+
+      // --- the pad layer, whatever the ITEMS setting says ---
+      if (s.padCd > 0) s.padCd -= dt;
+      if (s.padT > 0) { s.padT -= dt; if (s.padT < 0) s.padT = 0; }
+      if (live && this.nPad) this._stepPads(i);
+
+      this._applyMuls(i);
+    }
+
+    if (!live || !this.enabled) return;
     this._stepBoxes(dt);
     this._stepProjectiles(dt);
     this._stepHazards(dt);
+  }
+
+  /**
+   * The one writer for `extDriveMul` / `extTopMul` — recomputed from scratch
+   * so an effect can never accumulate (decision 3). Pads compose with items
+   * rather than replacing them: a nitro over a pad is exactly as silly as it
+   * sounds and exactly as rare.
+   */
+  _applyMuls(i) {
+    const s = this.st[i], v = this.racers[i].vehicle;
+    let fm = 1, tm = 1;
+    if (this.enabled) {
+      if (s.boostT > 0) { fm *= s.boostForce; tm *= s.boostTop; }
+      if (s.slowT > 0) { fm *= ITEMS[ITEM.STORM].force; tm *= ITEMS[ITEM.STORM].top; }
+      if (s.sledT > 0) { fm *= ITEMS[ITEM.SLED].force; tm *= ITEMS[ITEM.SLED].top; }
+    }
+    if (s.padT > 0) { fm *= s.padMul; tm *= s.padTop; }
+    v.extDriveMul = fm;
+    v.extTopMul = tm;
+  }
+
+  /**
+   * Boost-pad trigger for one racer, off the arc length / lateral already
+   * computed this frame. No distance test, no collider: a pad is a span of
+   * road, and "am I on that span, within that many metres of its lat" is
+   * exactly the same O(1) question the checkpoint test asks.
+   */
+  _stepPads(ri) {
+    const r = this.racers[ri], s = this.st[ri], v = r.vehicle;
+    if (r.finished) return;
+    if (v.airborne) return;                       // a pad you fly over is scenery
+    const near = this._near[ri];
+    const L = this.lapLength;
+    for (let i = 0; i < this.nPad; i++) {
+      if (i === s.padLast && s.padCd > 0) continue;
+      let d = near.s - this.padS[i];
+      if (d < -L * 0.5) d += L; else if (d > L * 0.5) d -= L;
+      if (d < -this.padLen[i] * 0.5 || d > this.padLen[i] * 0.5) continue;
+      const dl = near.lat - this.padLat[i];
+      if (dl < -this.padHW[i] || dl > this.padHW[i]) continue;
+      s.padT = this.padTime[i];
+      s.padMul = this.padMul[i];
+      s.padTop = this.padTop[i];
+      s.padLast = i;
+      s.padCd = this.padTime[i] + PAD_CD;
+      this.padHit[i] = 0.35;
+      this.events.padSeq++;
+      this.events.padRacer = ri;
+      if (r.isPlayer) {
+        this.audio.boostFire(2, 0.9);
+        if (this.feel) { this.feel.kick(TUNE.boost.fireFov[1]); this.feel.addShake(0.16); }
+      } else if (this._camNear(v, 70)) this.audio.boostFire(2, 0.35);
+      if (this.vfx) {
+        this.vfx.padFlash(this.padX[i], this.padY[i] + 0.05, this.padZ[i],
+          this.padDX[i], this.padDZ[i]);
+      }
+      if (this.dust) {
+        const f = v.forward;
+        this.dust.spawn(3, v.pos.x - f.x * 1.5, v.pos.y - 0.12, v.pos.z - f.z * 1.5,
+          3.2, 0.30, -f.x, -f.z, 1.0, 0.62, 0.20, DUST_KIND.EMBER);
+      }
+      return;                                     // one pad per frame per car
+    }
   }
 
   _stepBoxes(dt) {
@@ -381,8 +594,7 @@ export class ItemWorld {
     for (let ri = 0; ri < this.racers.length; ri++) {
       const r = this.racers[ri], s = this.st[ri], v = r.vehicle;
       if (r.finished || !canTake(s.inv)) continue;
-      const near = this._near[ri];
-      this.spline.nearest(v.pos.x, v.pos.z, near);
+      const near = this._near[ri];               // filled once, up in step()
       const b0 = this.bucket[clamp(Math.floor(near.s / BUCKET), 0, this.bucket.length - 1)];
       // The bucket points at the first box at or after this arc length; a car
       // can be just past one, so look one entry back as well as forward.
@@ -406,11 +618,22 @@ export class ItemWorld {
       this._ctxFor(r), this.rng);
     giveItem(s.inv, id, ROLL_TIME);
     this.stats.taken++;
+    this.events.pickSeq++;
+    this.events.pickRacer = ri;
+    this.events.pickItem = id;
     if (r.isPlayer) {
       this.audio.itemRoll();
     }
     if (this.dust) {
       this.dust.burst(this.boxX[bi], this.boxY[bi], this.boxZ[bi], 0, 0.8, BOX_POP);
+    }
+    /* The box pops in the item's own colour — the pickup reads as "I got
+       THAT" a beat before the roulette finishes saying so. */
+    if (this.vfx) {
+      const col = ITEMS[id] ? ITEMS[id].col : 0xffffff;
+      this.vfx.sparks(16, this.boxX[bi], this.boxY[bi], this.boxZ[bi],
+        0, 1, 0, 5.0, 1.0,
+        ((col >> 16) & 255) / 255, ((col >> 8) & 255) / 255, (col & 255) / 255, 0.55);
     }
   }
 
@@ -438,6 +661,14 @@ export class ItemWorld {
       this.pX[i] += this.pVX[i] * dt;
       this.pY[i] += this.pVY[i] * dt;
       this.pZ[i] += this.pVZ[i] * dt;
+
+      /* Contract 6.2 reserves ribbon slots 0-7 for projectiles, which is
+         exactly MAX_PROJ — so the pool index IS the slot and there is no
+         allocation table to keep in step. */
+      if (this.vfx) {
+        const rb = this.vfx.ribbon(i);
+        if (rb) rb.push(this.pX[i], this.pY[i], this.pZ[i]);
+      }
 
       const gy = this.terrain.heightAt(this.pX[i], this.pZ[i]) + 0.30;
       if (this.pY[i] <= gy) {
@@ -472,7 +703,7 @@ export class ItemWorld {
         const dx = v.pos.x - this.pX[i], dy = v.pos.y - this.pY[i], dz = v.pos.z - this.pZ[i];
         const R = (v.collRadius || 1.2) + def.radius;
         if (dx * dx + dy * dy + dz * dz > R * R) continue;
-        this._spin(ri, this.pSpin[i], this.pVX[i], this.pVZ[i]);
+        this._spin(ri, this.pSpin[i], this.pVX[i], this.pVZ[i], this.pOwner[i], ITEM.WHEEL);
         this._killProj(i);
         break;
       }
@@ -480,6 +711,12 @@ export class ItemWorld {
   }
 
   _killProj(i) {
+    if (this.vfx) {
+      const rb = this.vfx.ribbon(i);
+      /* fade(), not clear(): the trail should outlive the wheel by the width
+         of the impact, which is the whole point of having drawn it. */
+      if (rb) rb.fade();
+    }
     this.pLife[i] = 0; this.pOwner[i] = -1; this.pBounce[i] = 0;
     _dummy.position.set(0, -9999, 0);
     _dummy.rotation.set(0, 0, 0);
@@ -503,7 +740,7 @@ export class ItemWorld {
         const dx = v.pos.x - this.hX[i], dz = v.pos.z - this.hZ[i];
         if (dx * dx + dz * dz > def.radius * def.radius) continue;
         s.hazImmune[i] = def.immune;
-        this._spin(ri, def.spin, v.vel.x, v.vel.z);
+        this._spin(ri, def.spin, v.vel.x, v.vel.z, this.hOwner[i], ITEM.SLICK);
       }
     }
   }
@@ -518,10 +755,14 @@ export class ItemWorld {
    * to re-earn all of it. Never additive: `max`, so two hits in a second are
    * one spin, not two seconds of one.
    */
-  _spin(ri, dur, dirX, dirZ) {
+  _spin(ri, dur, dirX, dirZ, owner, item) {
     const r = this.racers[ri], v = r.vehicle;
     if (v.spinT >= dur) return;
     v.spinT = dur;
+    this.events.hitSeq++;
+    this.events.hitTarget = ri;
+    this.events.hitOwner = owner === undefined ? -1 : owner;
+    this.events.hitItem = item === undefined ? -1 : item;
     /* Deliberately above TUNE.assists.yawRateCap so the always-on cap bleeds
        it: a rotation that starts violently and self-limits. The sign comes
        from which side the hit arrived on, so being clipped from the left
@@ -543,6 +784,41 @@ export class ItemWorld {
       this.dust.burst(v.pos.x, this.terrain.heightAt(v.pos.x, v.pos.z), v.pos.z,
         Math.atan2(v.vel.x, v.vel.z), 1.4, SPIN_POP);
     }
+    /* The ring reads at any distance and the sparks read close up, which is
+       the same split racefx uses for a heavy contact. */
+    if (this.vfx) {
+      this.vfx.shock(v.pos.x, v.pos.y + 0.5, v.pos.z, 3.4, 1.0, 0.72, 0.28);
+      this.vfx.sparks(22, v.pos.x, v.pos.y + 0.5, v.pos.z,
+        dirX, 0.6, dirZ, 7.5, 1.1, 1.0, 0.66, 0.22, 0.5);
+    }
+  }
+
+  /**
+   * A wall of dust around a car inside a storm. Cheap and per-frame: eight
+   * short-lived motes on a ring, so the effect is legible from outside the
+   * car as well as from inside it (the `uBlind` uniform only ever reaches
+   * the player).
+   */
+  _stormWall(r) {
+    if (!this.vfx) return;
+    const v = r.vehicle;
+    const a = this._time * 3.1;
+    for (let k = 0; k < 4; k++) {
+      const th = a + k * (Math.PI * 0.5);
+      const cx = Math.sin(th), cz = Math.cos(th);
+      this.vfx.sparks(2, v.pos.x + cx * 2.2, v.pos.y + 0.8, v.pos.z + cz * 2.2,
+        cx, 0.35, cz, 2.2, 1.4, 0.72, 0.60, 0.42, 0.7);
+    }
+  }
+
+  /** Light or douse the sled's exhaust plume. Ribbon slots 8-13, via flame(). */
+  _sledFlame(ri, r, on) {
+    const s = this.st[ri];
+    if (!this.vfx) { s.sledFlame = on ? 1 : 0; return; }
+    const v = r.vehicle, f = v.forward;
+    this.vfx.flame(ri, on, v.pos.x - f.x * 1.8, v.pos.y - 0.05, v.pos.z - f.z * 1.8,
+      -f.x, 0.12, -f.z, 3);
+    s.sledFlame = on ? 1 : 0;
   }
 
   _boost(ri, def) {
@@ -563,13 +839,15 @@ export class ItemWorld {
   }
 
   /* ---------------- the rocket sled ---------------- */
-  _stepSled(dt, r, s) {
+  _stepSled(dt, r, s, ri) {
     s.sledT -= dt;
     s.ghostT = Math.max(s.ghostT, 0.05);   // stays ghosted for the whole ride
     if (s.sledT <= 0 || r.finished || (r.pos && r.pos <= ITEMS[ITEM.SLED].releaseAt)) {
       s.sledT = 0; s.ghostT = 0;
+      if (s.sledFlame) this._sledFlame(ri, r, 0);
       return;
     }
+    this._sledFlame(ri, r, 1);
     const v = r.vehicle;
     if (this.dust) {
       const f = v.forward;
@@ -598,6 +876,9 @@ export class ItemWorld {
     ctl.throttle = 1;
     ctl.brake = 0;
     ctl.handbrake = 0;
+    /* Contract 6.4: every ctl copy site carries `roll`. A sled that inherited
+       the last roll input the AI wrote would barrel-roll down the road. */
+    ctl.roll = 0;
     ctl.steer = clamp(_v1.dot(rt) * 2.6, -1, 1) * (f.dot(_v1) > 0 ? 1 : 1);
     return true;
   }
@@ -655,6 +936,11 @@ export class ItemWorld {
     const def = consume(s.inv);
     if (!def) return false;
     this.stats.fired++;
+    /* The slot is empty again, so the last pickup is no longer news. Leaving
+       `pickItem` set would have the HUD's item strip and the AI both reading
+       a held item that has just been thrown. */
+    this.events.pickRacer = -1;
+    this.events.pickItem = -1;
     const v = r.vehicle;
 
     switch (def.kind) {
@@ -699,12 +985,17 @@ export class ItemWorld {
         const ti = this._findTarget(r, def);
         if (ti < 0) { this._boost(ri, ITEMS[ITEM.NITRO]); break; }   // never waste a pickup
         s.towT = def.time; s.towTarget = ti;
+        /* A tow never routes through _spin, so without this the only two
+           effects in the roster that take time off somebody else would be
+           invisible to every events reader. */
+        this._noteHit(ti, ri, def.id);
         if (r.isPlayer || this._camNear(v, 70)) this.audio.towSnap(r.isPlayer ? 1 : 0.4);
         break;
       }
       case 'sled':
         s.sledT = def.time;
         s.ghostT = def.time;
+        this._sledFlame(ri, r, 1);
         if (r.isPlayer) {
           this.audio.sledLaunch();
           if (this.feel) { this.feel.kick(3); this.feel.addShake(0.4); }
@@ -717,6 +1008,7 @@ export class ItemWorld {
           if (o === r || o.finished) continue;
           if ((o.pos || 99) >= myPos) continue;         // only those AHEAD
           this.st[i].slowT = Math.max(this.st[i].slowT, def.time);
+          this._noteHit(i, ri, def.id);
           if (o.isPlayer) this.blindT = def.time;
         }
         this.audio.stormHit(r.isPlayer ? 1 : 0.5);
@@ -748,8 +1040,25 @@ export class ItemWorld {
      6.  PRESENTATION
      ============================================================ */
   updateVisuals(dt, camera) {
-    if (!this.enabled) return;
     const t = this._time;
+
+    /* Pads first, and OUTSIDE the enabled gate — see decision 6. The pulse
+       is one shared uniform rather than per-instance colour: the chevrons
+       already carry the direction, all this has to do is breathe. */
+    if (this.padMesh) {
+      let flash = 0;
+      for (let i = 0; i < this.nPad; i++) {
+        if (this.padHit[i] > 0) {
+          this.padHit[i] -= dt;
+          if (this.padHit[i] < 0) this.padHit[i] = 0;
+          if (this.padHit[i] > flash) flash = this.padHit[i];
+        }
+      }
+      this.padMat.emissiveIntensity =
+        0.85 + 0.45 * Math.sin(t * 3.4) + 2.6 * flash;
+    }
+
+    if (!this.enabled) return;
 
     if (this.boxMesh) {
       for (let i = 0; i < this.nBox; i++) {
@@ -851,6 +1160,121 @@ export class ItemWorld {
   hasItem(ri) { return this.enabled && hasItem(this.st[ri].inv) && this.st[ri].inv.rollT <= 0; }
   itemOf(ri) { const s = this.st[ri]; return s.inv.rollT > 0 ? ITEM.NONE : s.inv.id; }
 
+  /** One place that stamps a "somebody took a hit" event. */
+  _noteHit(target, owner, item) {
+    this.events.hitSeq++;
+    this.events.hitTarget = target;
+    this.events.hitOwner = owner;
+    this.events.hitItem = item;
+  }
+
+  /* ============================================================
+     6b. THE READ-ONLY VIEW (contract 6.7)
+     ------------------------------------------------------------
+     Everything below is what a driver is allowed to know. All of it is
+     CALLER-OWNED-BUFFER: the AI hands in its own typed arrays and gets them
+     filled, so six drivers polling every frame allocate nothing between
+     them and none of them can hold a reference into our state.
+
+     Read-only means read-only. Nothing here returns a live object, and no
+     path from `ctx.items` reaches a setter.
+     ============================================================ */
+
+  /**
+   * Live projectiles and hazards, nearest-first is NOT guaranteed — the
+   * caller filters by its own geometry anyway.
+   * @param out { n, x, z, vx, vz, r, kind } of parallel typed arrays
+   */
+  threats(out) {
+    let n = 0;
+    const cap = out.x.length;
+    if (this.enabled) {
+      for (let i = 0; i < MAX_PROJ && n < cap; i++) {
+        if (this.pLife[i] <= 0) continue;
+        out.x[n] = this.pX[i]; out.z[n] = this.pZ[i];
+        out.vx[n] = this.pVX[i]; out.vz[n] = this.pVZ[i];
+        out.r[n] = THREAT_R_PROJ; out.kind[n] = THREAT_PROJ; n++;
+      }
+      for (let i = 0; i < MAX_HAZ && n < cap; i++) {
+        if (this.hLife[i] <= 0) continue;
+        out.x[n] = this.hX[i]; out.z[n] = this.hZ[i];
+        out.vx[n] = 0; out.vz[n] = 0;
+        out.r[n] = THREAT_R_HAZ; out.kind[n] = THREAT_HAZ; n++;
+      }
+    }
+    out.n = n;
+    return out;
+  }
+
+  /**
+   * Nearest uncollected box AHEAD of racer `ri`, as an arc-length distance
+   * and the LATERAL the AI would have to hold to take it. Boxes come in
+   * rows at one `s`, so the row is found first and the lane inside it
+   * second — otherwise a car would be sent at whichever box of the row
+   * happened to be built first.
+   */
+  nearestBox(ri, out) {
+    out.found = 0; out.dist = -1; out.s = 0; out.lat = 0; out.x = 0; out.z = 0;
+    if (!this.enabled || !this.nBox) return out;
+    const near = this._near[ri], L = this.lapLength;
+    let bd = Infinity;
+    for (let i = 0; i < this.nBox; i++) {
+      if (this.boxT[i] > 0) continue;
+      let d = this.boxS[i] - near.s;
+      if (d < -L * 0.5) d += L; else if (d > L * 0.5) d -= L;
+      if (d < 0) continue;
+      if (d < bd) bd = d;
+    }
+    if (!(bd < Infinity)) return out;
+    let bi = -1, bl = Infinity;
+    for (let i = 0; i < this.nBox; i++) {
+      if (this.boxT[i] > 0) continue;
+      let d = this.boxS[i] - near.s;
+      if (d < -L * 0.5) d += L; else if (d > L * 0.5) d -= L;
+      if (d < 0 || d > bd + 1) continue;          // same row, 1 m of slop
+      const dl = Math.abs(this.boxLat[i] - near.lat);
+      if (dl < bl) { bl = dl; bi = i; }
+    }
+    if (bi < 0) return out;
+    out.found = 1; out.dist = bd; out.s = this.boxS[bi]; out.lat = this.boxLat[bi];
+    out.x = this.boxX[bi]; out.z = this.boxZ[bi];
+    return out;
+  }
+
+  /** Nearest boost pad ahead of racer `ri`. Same shape as `nearestBox`. */
+  nearestPad(ri, out) {
+    out.found = 0; out.dist = -1; out.s = 0; out.lat = 0; out.x = 0; out.z = 0;
+    if (!this.nPad) return out;
+    const s = this.st[ri];
+    // a pad already burning under this car is not a pad to steer at
+    if (s.padCd > 0) return out;
+    const near = this._near[ri], L = this.lapLength;
+    let bd = Infinity, bi = -1;
+    for (let i = 0; i < this.nPad; i++) {
+      let d = this.padS[i] - near.s;
+      if (d < -L * 0.5) d += L; else if (d > L * 0.5) d -= L;
+      if (d < 0) continue;
+      if (d < bd) { bd = d; bi = i; }
+    }
+    if (bi < 0) return out;
+    out.found = 1; out.dist = bd; out.s = this.padS[bi]; out.lat = this.padLat[bi];
+    out.x = this.padX[bi]; out.z = this.padZ[bi];
+    return out;
+  }
+
+  /**
+   * Would a tow line fired right now find something? The AI's own rival scan
+   * cannot answer this: the lock uses the item's cone and window, and
+   * `fire()` silently converts a missed tow into a nitro — a waste dressed
+   * up as a mercy, and one the AI should decline rather than trigger.
+   */
+  canLock(ri) {
+    if (!this.enabled) return false;
+    const r = this.racers[ri];
+    if (!r || r.finished) return false;
+    return this._findTarget(r, ITEMS[ITEM.TOW]) >= 0;
+  }
+
   /**
    * A racer was teleported. Cancel everything that was happening TO them and
    * everything they had in flight — a projectile owned by a car that is no
@@ -861,6 +1285,10 @@ export class ItemWorld {
     const s = this.st[ri];
     s.boostT = 0; s.boostForce = 1; s.boostTop = 1;
     s.slowT = 0; s.sledT = 0; s.ghostT = 0;
+    /* A pad boost belongs to a piece of road the car is no longer on. The
+       cooldown goes too, or a respawn onto a pad would be dead to it. */
+    s.padT = 0; s.padCd = 0; s.padMul = 1; s.padTop = 1; s.padLast = -1;
+    if (s.sledFlame) this._sledFlame(ri, this.racers[ri], 0);
     this._endTow(s);
     s.hazImmune.fill(0);
     for (let i = 0; i < this.st.length; i++) {
@@ -874,6 +1302,7 @@ export class ItemWorld {
   /** A restart or a return to the grid: everything, everywhere, gone. */
   resetAll() {
     for (let i = 0; i < this.st.length; i++) {
+      if (this.st[i].sledFlame) this._sledFlame(i, this.racers[i], 0);
       this._clearState(this.st[i]);
       const v = this.racers[i].vehicle;
       v.extDriveMul = 1; v.extTopMul = 1; v.spinT = 0;
@@ -881,8 +1310,13 @@ export class ItemWorld {
     for (let i = 0; i < MAX_PROJ; i++) this._killProj(i);
     this.hLife.fill(0); this.hOwner.fill(-1);
     this.boxT.fill(0);
+    if (this.padHit) this.padHit.fill(0);
     this.blindT = 0;
     this.stats.fired = 0; this.stats.hits = 0; this.stats.taken = 0;
+    const e = this.events;
+    e.hitSeq = 0; e.hitTarget = -1; e.hitOwner = -1; e.hitItem = -1;
+    e.pickSeq = 0; e.pickRacer = -1; e.pickItem = -1;
+    e.padSeq = 0; e.padRacer = -1;
     const u = this.engine && this.engine.final && this.engine.final.uniforms;
     if (u && u.uBlind) u.uBlind.value = 0;
     if (this.towMesh) this.towMesh.visible = false;
@@ -895,18 +1329,20 @@ export class ItemWorld {
     else if (!was && this.enabled) this.group.visible = true;
   }
 
+  /* Hides the ITEM group only. `padGroup` is deliberately untouched and the
+     multipliers go through _applyMuls, which keeps a live pad boost — a
+     stage's boost pads are not a power-up (decision 6). */
   _hideAll() {
     this.group.visible = false;
-    for (let i = 0; i < this.st.length; i++) {
-      const v = this.racers[i].vehicle;
-      v.extDriveMul = 1; v.extTopMul = 1;
-    }
+    for (let i = 0; i < this.st.length; i++) this._applyMuls(i);
   }
 
   dispose() {
     this.resetAll();
     if (this.group.parent) this.group.parent.remove(this.group);
     this.group.traverse(o => { if (o.isInstancedMesh) o.dispose(); });
+    if (this.padGroup.parent) this.padGroup.parent.remove(this.padGroup);
+    this.padGroup.traverse(o => { if (o.isInstancedMesh) o.dispose(); });
     for (const g of this._geo) g.dispose();
     for (const m of this._mat) m.dispose();
     this._geo.length = 0; this._mat.length = 0;
