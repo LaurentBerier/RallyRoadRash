@@ -35,7 +35,7 @@ test('surfaces table is complete and sane', async () => {
 test('every track builds valid race data', async () => {
   const { TRACKS } = await import('../src/world/tracks/index.js');
   const { buildTrackData } = await import('../src/world/track.js');
-  assert.equal(TRACKS.length, 4);
+  assert.equal(TRACKS.length, 5);
   for (const def of TRACKS) {
     const d = buildTrackData(def);
     assert.ok(d.spline.length > 800, `${def.id} length`);

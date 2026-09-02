@@ -9,8 +9,15 @@ import training from './training.js';
 import canyon from './canyon.js';
 import forest from './forest.js';
 import volcano from './volcano.js';
+import thunder from './thunder.js';
 
-export const TRACKS = [training, canyon, forest, volcano];
+/* THUNDER PARK is `bonus: true`, so it is registered here but is NOT part of
+   the campaign order — progression.js gates it behind a SUNSTRIKE CANYON
+   podium (docs/ARCHITECTURE.md §6.10). TRACK_ORDER below is the campaign. */
+export const TRACKS = [training, canyon, forest, volcano, thunder];
+
+/** Campaign order. Bonus stages are deliberately absent. */
+export const TRACK_ORDER = TRACKS.filter(t => !t.bonus).map(t => t.id);
 
 /** Track definition by id, or undefined. */
 export function getTrack(id) {

@@ -21,6 +21,9 @@ import { clamp, lerp, sstep } from '../core/rng.js';
 /** Half-width used when a control point does not name one. */
 export const DEFAULT_HALF_WIDTH = 8;
 
+/** Authored angles are degrees everywhere in tracks/*.js; the solver wants radians. */
+const DEG = Math.PI / 180;
+
 /* Arcade gravity. Mirrors G in game/config.js, duplicated rather than imported
    because that file owns vehicle tuning and this one must stay Node-pure and
    dependency-free. It is only ever used for ADVISORY racing-line speeds — a
@@ -453,6 +456,21 @@ const APEX_FRAC = 0.65;         // of half-width, per the design brief
 const BRAKE_A = 11.0;           // m/s^2 used to back-propagate corner entry
 const ACCEL_A = 6.5;
 
+/* A hip's lip is a diagonal line across the road, so one edge of it is metres
+   further up the ramp than the other. Aim at the TALL edge: 1.2 m of extra
+   lateral over the last 20 m is enough to be on the meat of the lip without
+   abandoning the line into whatever follows. */
+const HIP_AIM = 1.2, HIP_WIN = 20, HIP_OUT = 14;
+/** Whoops are a speed ceiling, not a corner: 2.6 wavelengths a second is the
+    fastest a car can skim the crests instead of diving into every trough. */
+const WHOOP_V = 2.6;
+/** A pad is worth ~10 % more advisory speed for the 25 m it takes to spend. */
+const PAD_ADV = 1.10, PAD_ADV_M = 25;
+
+/* Boost-pad defaults (docs/ARCHITECTURE.md §6.1). Authored in the track file
+   only when a set piece wants something other than the standard strip. */
+const PAD_HW = 1.6, PAD_LEN = 4, PAD_MUL = 1.6, PAD_TOP = 1.10, PAD_TIME = 1.2;
+
 /**
  * Everything the race needs that is derived from a track definition.
  * Pure data out — no three types, so tests can assert on it.
@@ -460,49 +478,171 @@ const ACCEL_A = 6.5;
 export function buildTrackData(trackDef) {
   const spline = new TrackSpline(trackDef.path, true);
   const L = spline.length;
-  const shortcutSpline = trackDef.shortcut
-    ? new TrackSpline(trackDef.shortcut.path, false) : null;
 
-  const jumps = normaliseJumps(trackDef, spline);
-  const checkpoints = buildCheckpoints(trackDef, spline, shortcutSpline, jumps);
+  const routes = routesOf(trackDef, spline);
+  const jumps = normaliseJumpList(trackDef.jumps, spline, false);
+  const pads = normalisePads(trackDef, spline);
+  const banks = trackDef.banks || [];
+  const whoops = trackDef.whoops || [];
+  const berms = trackDef.berms || [];
+
+  const checkpoints = buildCheckpoints(trackDef, spline, routes, jumps);
   const gridSlots = buildGrid(trackDef, spline);
-  const racingLine = buildRacingLine(trackDef, spline, jumps);
+  const racingLine = buildRacingLine(trackDef, spline, jumps, pads, banks, whoops, berms);
 
   const out = {
     spline, checkpoints, gridSlots, racingLine,
     // --- additions beyond the contract, all read-only conveniences ---
     jumps,                                   // lip position resolved to world XZ
+    routes, banks, whoops, berms, pads,
+    /* Spans of s where the carved ground is NOT the spline surface — a gap's
+       void and a drop's plateau. The respawn rule reads this instead of the
+       hard-coded jump list it used to carry. Main line only: racecore never
+       places a car on a detour. */
+    voids: buildVoids(jumps),
+    /* 64 road heights round the lap, for the stage cards' elevation strip. */
+    elev: buildElev(spline),
     walls: trackDef.walls || [],
+    difficulty: Number.isFinite(trackDef.difficulty) ? trackDef.difficulty : 0.5,
+    bonus: !!trackDef.bonus,
     def: trackDef,
     lapLength: L
   };
-  if (shortcutSpline) out.shortcutSpline = shortcutSpline;
+  /* Alias, not a second object: 14 consumers still read `shortcutSpline` and
+     they belong to other packages (docs §6.1 — it goes when they move). */
+  if (routes.length) out.shortcutSpline = routes[0].spline;
   return out;
 }
 
-/** Resolve each jump's lip to a world position + direction, once. */
-function normaliseJumps(trackDef, spline) {
+/**
+ * Alternate routes, normalised. `trackDef.routes` is the schema; a legacy
+ * `trackDef.shortcut` is lifted into a one-entry list so a track file can
+ * carry either (and, while the alias above lives, both).
+ */
+function routesOf(trackDef, spline) {
+  const src = (trackDef.routes && trackDef.routes.length) ? trackDef.routes
+    : (trackDef.shortcut ? [trackDef.shortcut] : []);
   const out = [];
-  const J = trackDef.jumps || [];
+  for (let i = 0; i < src.length; i++) {
+    const r = src[i];
+    if (!r || !r.path) continue;
+    const rs = new TrackSpline(r.path, false);
+    /* Route jumps are authored in the ROUTE's own arc length, because that is
+       the spline the carve walks — and they are always cp:false, since a gate
+       on a detour lip would be a second gate for a slot that already has one. */
+    const rj = normaliseJumpList(r.jumps, rs, true);
+    let floor = 0;
+    for (const j of rj) if (j.need > floor) floor = j.need;
+    out.push({
+      idx: out.length,
+      id: r.id || (out.length === 0 ? 'shortcut' : `route${out.length}`),
+      name: r.name || 'SHORTCUT',
+      s0: spline.wrapS(r.s0), s1: spline.wrapS(r.s1),
+      spline: rs, path: r.path,
+      // How keen the AI should be on this line, 0..1. Tuning lives in ai.js.
+      aiBias: r.aiBias === undefined ? 0.35 : r.aiBias,
+      jumps: rj,
+      // Minimum launch speed anything on this route must hold, from its own
+      // gaps. A route with no gap floors at zero and the AI is free.
+      gapFloor: floor
+    });
+  }
+  return out;
+}
+
+/**
+ * Resolve a jump list to world positions and fill in the schema defaults.
+ * @param forceNoCp routes pass true: a detour lip never carries a checkpoint.
+ */
+function normaliseJumpList(J, spline, forceNoCp) {
+  const out = [];
+  if (!J) return out;
   for (let i = 0; i < J.length; i++) {
     const j = J[i];
+    const kind = j.kind || 'kicker';
     const s = spline.wrapS(j.s);
     const p = spline.posAt(s, { x: 0, y: 0, z: 0 });
     const d = spline.dirAt(s, { x: 0, z: 0 });
+    const len = j.len === undefined ? 12 : j.len;
+    const h = j.h === undefined ? 1.5 : j.h;
+    // A drop is an edge, not a void: nothing is carved out beyond it.
+    const gap = kind === 'drop' ? 0 : (j.gap || 0);
+    /* Steepest angle of the kicker face. rampRise()/LIP_HOLD below are the one
+       definition of that face; terrain-bake.js carves from the same two
+       constants. A drop has no face at all — you leave a plateau over its edge,
+       so the launch is horizontal and the flight is pure freefall. */
+    const angle = kind === 'drop' ? 0
+      : Math.atan2(h * RAMP_SLOPE_AT_LIP, Math.max(2, len - LIP_HOLD));
+    const s2 = Math.sin(2 * angle);
+    // Launch speed that clears the void with 7 m of landing margin.
+    const need = (gap > 0 && s2 > 1e-3) ? Math.sqrt((gap + 7) * G_ARCADE / s2) : 0;
     out.push({
-      idx: i, s, len: j.len, h: j.h, gap: j.gap || 0,
+      idx: i, s, kind, len, h, gap,
+      // Every jump carries a lip checkpoint unless it opts out (docs §6.1).
+      cp: forceNoCp ? false : j.cp !== false,
+      top: j.top === undefined ? 0 : j.top,    // table: plateau length
+      down: j.down === undefined ? 0 : j.down, // table: down-ramp length
+      /* Hip lip-line angle in RADIANS (authored in degrees). The carve shifts
+         the ramp along the road by across·tan(yaw), which is what turns a
+         square lip into a diagonal one. Zero for every other kind. */
+      yaw: kind === 'hip' ? (j.yaw || 0) * DEG : 0,
       // Authored name, if the set piece has one. props.js prints it on the
       // sponsor arch over the ramp; nothing else reads it, and an unnamed
       // jump simply gets the generic banner.
       name: j.name || '',
       x: p.x, y: p.y, z: p.z, dx: d.x, dz: d.z,
       w: spline.widthAt(s),
-      // Steepest angle of the kicker face. rampRise()/LIP_HOLD below are the one
-      // definition of that face; terrain.js carves from the same two constants.
-      angle: Math.atan2(j.h * RAMP_SLOPE_AT_LIP, Math.max(2, j.len - LIP_HOLD))
+      angle, need
     });
   }
   out.sort((a, b) => a.s - b.s);
+  return out;
+}
+
+/** Boost pads, resolved to world coordinates and filled with the defaults. */
+function normalisePads(trackDef, spline) {
+  const out = [];
+  const P = trackDef.pads;
+  if (!P) return out;
+  for (let i = 0; i < P.length; i++) {
+    const q = P[i];
+    const s = spline.wrapS(q.s);
+    const lat = q.lat || 0;
+    const p = spline.offsetPoint(s, lat, { x: 0, y: 0, z: 0 });
+    const d = spline.dirAt(s, { x: 0, z: 0 });
+    out.push({
+      idx: i, s, lat,
+      x: p.x, y: p.y, z: p.z, dx: d.x, dz: d.z,
+      hw: q.hw === undefined ? PAD_HW : q.hw,
+      len: q.len === undefined ? PAD_LEN : q.len,
+      mul: q.mul === undefined ? PAD_MUL : q.mul,
+      top: q.top === undefined ? PAD_TOP : q.top,
+      time: q.time === undefined ? PAD_TIME : q.time
+    });
+  }
+  out.sort((a, b) => a.s - b.s);
+  return out;
+}
+
+/** Spans of s the respawn system must never drop a car into. */
+function buildVoids(jumps) {
+  const out = [];
+  for (const j of jumps) {
+    if (j.gap > 0) out.push({ s0: j.s, s1: j.s + j.gap, kind: 'gap', jump: j.idx });
+    // The plateau BEFORE a drop's edge (and the ramp on to it) is solid ground
+    // metres above the spline: respawning on the spline there buries the car.
+    else if (j.kind === 'drop') {
+      out.push({ s0: j.s - j.len - DROP_RUN, s1: j.s + 0.4, kind: 'drop', jump: j.idx });
+    }
+  }
+  out.sort((a, b) => a.s0 - b.s0);
+  return out;
+}
+
+/** Road height at 64 evenly spaced s, for the UI's stage-card elevation strip. */
+function buildElev(spline) {
+  const N = 64, out = new Float32Array(N), L = spline.length;
+  for (let i = 0; i < N; i++) out[i] = spline.heightAt(i * (L / N));
   return out;
 }
 
@@ -522,8 +662,15 @@ export const RAMP_SLOPE_AT_LIP = 1.75;
 export const LIP_HOLD = 1.0;
 export function rampRise(u, h) { return h * (0.25 * u + 0.75 * u * u); }
 
+/* A drop is a shelf, and a shelf you cannot get on to is a wall: the carve
+   lifts the road on to the plateau over DROP_RUN metres before it starts. Hard
+   rule 7 — no unauthored step over ~0.3 m across the roadbed — so this is not
+   decoration, it is the only thing that makes an h-metre plateau drivable. The
+   respawn void is measured from the same constant. */
+export const DROP_RUN = 8;
+
 /* ---------------- checkpoints ---------------- */
-function buildCheckpoints(trackDef, spline, shortcut, jumps) {
+function buildCheckpoints(trackDef, spline, routes, jumps) {
   const L = spline.length;
   const TARGET = 125;
   const count = Math.max(4, Math.round(L / TARGET));
@@ -539,6 +686,11 @@ function buildCheckpoints(trackDef, spline, shortcut, jumps) {
      the lip. Spacing stays roughly uniform, which is what the HUD arrow and the
      reset-to-last-checkpoint system both assume. */
   for (const j of jumps) {
+    /* A cp:false lip is a rhythm feature, not a gate. The rhythm sections on
+       these stages fire two and three jumps inside 80 m; a checkpoint on each
+       would drive the spacing under the 40 m floor and turn a jump line into a
+       slalom of gantries. */
+    if (!j.cp) continue;
     const js = spline.wrapS(j.s + 1.5);
     if (js < 1 || js > L - 1) continue;                 // the finish line already has one
     let best = -1, bd = 1e9;
@@ -568,33 +720,34 @@ function buildCheckpoints(trackDef, spline, shortcut, jumps) {
     });
   }
 
-  /* Shortcut alternates. A racer satisfies slot `idx` by hitting EITHER the main
-     checkpoint or its twin on the shortcut, which is the whole legality model
-     for alternate routes (racecore.js just compares idx). */
-  if (shortcut && trackDef.shortcut) {
-    const s0 = spline.wrapS(trackDef.shortcut.s0);
-    const s1 = spline.wrapS(trackDef.shortcut.s1);
-    const bypassed = cps.filter(c => spanHas(s0, s1, c.s, L) && c.s !== s0 && c.s !== s1);
-    const SL = shortcut.length;
-    const n = bypassed.length;
-    for (let i = 0; i < n; i++) {
+  /* Route alternates, one set per route. A racer satisfies slot `idx` by
+     hitting EITHER the main checkpoint or any twin on a route that bypasses
+     it, which is the whole legality model for alternate lines (racecore.js
+     just compares idx). Only MAIN checkpoints are candidates — two routes over
+     the same span each twin the main gate, they never twin each other. */
+  for (const rt of routes) {
+    const s0 = rt.s0, s1 = rt.s1;
+    const bypassed = cps.filter(c => !c.alt && spanHas(s0, s1, c.s, L) && c.s !== s0 && c.s !== s1);
+    const SL = rt.spline.length;
+    for (let i = 0; i < bypassed.length; i++) {
       const main = bypassed[i];
       // place the twin at the same fraction along the detour as along the bypass
       let f = main.s - s0; if (f < 0) f += L;
       let span = s1 - s0; if (span <= 0) span += L;
       const ss = clamp(f / span, 0.06, 0.94) * SL;
-      const p = shortcut.posAt(ss, { x: 0, y: 0, z: 0 });
-      const w = shortcut.widthAt(ss);
+      const p = rt.spline.posAt(ss, { x: 0, y: 0, z: 0 });
+      const w = rt.spline.widthAt(ss);
       cps.push({
         x: p.x, z: p.z, y: p.y, r: Math.max(10, w + 4),
         s: main.s, idx: main.idx, big: false, jump: false,
-        alt: true, altS: ss
+        alt: true, altS: ss, route: rt.idx
       });
     }
   }
 
-  // Ordered by slot, then by s inside a slot: main first, then its alternates.
-  cps.sort((a, b) => (a.idx - b.idx) || ((a.alt ? 1 : 0) - (b.alt ? 1 : 0)));
+  // Ordered by slot, then main first, then its alternates in route order.
+  cps.sort((a, b) => (a.idx - b.idx) || ((a.alt ? 1 : 0) - (b.alt ? 1 : 0))
+    || ((a.route || 0) - (b.route || 0)));
   return cps;
 }
 
@@ -616,7 +769,27 @@ function buildGrid(trackDef, spline) {
 }
 
 /* ---------------- racing line ---------------- */
-function buildRacingLine(trackDef, spline, jumps) {
+
+/**
+ * Superelevation the speed solver may lean on, in radians, as a MAGNITUDE:
+ * which side of the road is high is the carve's problem, not the solver's.
+ * A berm is a bank you have to climb, so it counts as one — h over 0.75 of
+ * the half-width is the slope a car actually rides at on the way up it.
+ */
+function bankAngleAt(banks, berms, s, L, w) {
+  let a = 0;
+  for (let i = 0; i < banks.length; i++) {
+    const b = banks[i];
+    if (spanHas(b.s0, b.s1, s, L)) a = Math.max(a, Math.abs(b.deg) * DEG);
+  }
+  for (let i = 0; i < berms.length; i++) {
+    const b = berms[i];
+    if (spanHas(b.s0, b.s1, s, L)) a = Math.max(a, Math.atan2(b.h, 0.75 * w));
+  }
+  return a;
+}
+
+function buildRacingLine(trackDef, spline, jumps, pads, banks, whoops, berms) {
   const L = spline.length;
   const N = Math.max(16, Math.round(L / RL_STEP));
   const ds = L / N;
@@ -648,6 +821,7 @@ function buildRacingLine(trackDef, spline, jumps) {
     }
     lat.set(tmp);
   }
+
   for (let i = 0; i < N; i++) {
     const cap = APEX_FRAC * Math.max(0.5, wArr[i] - 1.6);
     lat[i] = clamp(lat[i], -cap, cap);
@@ -675,18 +849,43 @@ function buildRacingLine(trackDef, spline, jumps) {
     const R = kk > 1e-6 ? 1 / kk : 1e6;
     const surf = paintAt(trackDef, b.s, b.x, b.z, b.lat, L);
     const grip = SURFACES[surf] ? SURFACES[surf].grip : 0.8;
-    // slope costs you too: a steep climb caps entry speed, a drop adds to it
-    const v = Math.sqrt(LAT_ACCEL * grip * R);
+    /* Banking buys grip because part of the cornering load goes into the road
+       instead of across the tyres. 0.9 rather than a full 1.0 because the car
+       is not a point mass on a perfect plane and the arcade solver already
+       flatters it — 22 deg is worth about a fifth more corner speed, which is
+       enough to make a banked hairpin read as fast without making it free. */
+    const bank = bankAngleAt(banks, berms, b.s, L, wArr[i]);
+    const v = Math.sqrt(LAT_ACCEL * grip * R * (1 + 0.9 * Math.tan(bank)));
     b.speed = clamp(v, RL_MIN_SPEED, RL_MAX_SPEED);
+    b.bank = bank;
     b.surface = surf;
+  }
+
+  /* Whoops. Ride the crests or dive the troughs — there is no third option, so
+     the advisory is a hard ceiling rather than anything derived from grip. */
+  for (let k = 0; k < whoops.length; k++) {
+    const wh = whoops[k];
+    const cap = WHOOP_V * wh.wl;
+    for (let i = 0; i < N; i++) {
+      if (!spanHas(wh.s0, wh.s1, pts[i].s, L)) continue;
+      if (pts[i].speed > cap) pts[i].speed = Math.max(RL_MIN_SPEED, cap);
+      pts[i].whoop = true;
+    }
   }
 
   /* Jump windows. A gap has to be cleared, so the advisory speed goes UP on the
      approach; a plain kicker has to not be over-flown, so it goes down. Both are
-     ballistics off the same kicker face the terrain carves. */
+     ballistics off the same kicker face the terrain carves.
+
+     A DROP is neither: there is no lip to over-fly and nothing to clear, the
+     ground simply stops being under you. Braking for one would be wrong, so it
+     is left out of this pass entirely. A TABLE is a kicker whose landing is its
+     own deck — need is 0 by construction (a table carries no gap) and the cap
+     is all that applies. */
   for (const j of jumps) {
-    const th = j.angle, s2 = Math.sin(2 * th) || 0.2;
-    const need = j.gap > 0 ? Math.sqrt((j.gap + 7) * G_ARCADE / s2) : 0;
+    if (j.kind === 'drop') continue;
+    const s2 = Math.sin(2 * j.angle) || 0.2;
+    const need = j.kind === 'table' ? 0 : j.need;
     const cap = Math.sqrt(Math.max(24, j.gap + 40) * G_ARCADE / s2);
     for (let i = 0; i < N; i++) {
       let ds2 = j.s - pts[i].s; if (ds2 < -L / 2) ds2 += L; if (ds2 > L / 2) ds2 -= L;
@@ -711,7 +910,64 @@ function buildRacingLine(trackDef, spline, jumps) {
       if (pts[i].speed > lim) pts[i].speed = lim;
     }
   }
+  /* Pads last, and deliberately AFTER the propagation: a pad is not a corner
+     limit the car has to arrive at, it is free speed it already has. Folding it
+     in before the accel pass would just let that pass clip it back off as
+     "unreachable". Marked once per point so two pads on one lip (the ±3 m pairs
+     the stunt stages use) do not compound into 21 %. */
+  if (pads.length) {
+    const hit = new Uint8Array(N);
+    for (let k = 0; k < pads.length; k++) {
+      for (let i = 0; i < N; i++) {
+        let ds2 = pts[i].s - pads[k].s;
+        if (ds2 < -L / 2) ds2 += L; else if (ds2 > L / 2) ds2 -= L;
+        if (ds2 < 0 || ds2 > PAD_ADV_M) continue;
+        hit[i] = 1;
+      }
+    }
+    for (let i = 0; i < N; i++) {
+      if (!hit[i]) continue;
+      pts[i].speed = Math.min(RL_MAX_SPEED, pts[i].speed * PAD_ADV);
+      pts[i].pad = true;
+    }
+  }
+
   for (let i = 0; i < N; i++) pts[i].speed = Math.max(RL_MIN_SPEED, pts[i].speed);
+
+  /* Hip aim, applied LAST — after the speeds are solved, deliberately.
+     The carve shifts a hip's ds by across·tan(yaw), and the ramp face lives at
+     NEGATIVE ds, so a positive yaw pushes the left of the road PAST the lip and
+     leaves the tall side on the right: the side to aim at is -sign(yaw).
+     (Measured off the baked field, not reasoned about: a hip at yaw -20 carves
+     2.13 m of lip 6 m left of centre and 0.19 m 6 m right of it.)
+
+     Why last: 1.2 m of aim over 20 m is a 3.4-degree change of heading, and
+     folding it into the geometry BEFORE the speed solve does not model that.
+     The line is sampled every 6 m, and a Menger circle through three points a
+     metre apart laterally reads as a 40 m hairpin — the AI then brakes to
+     16 m/s for a jump it should be flat out over. So the aim moves where the
+     car points, and the corner geometry alone sets how fast it goes. */
+  for (let k = 0; k < jumps.length; k++) {
+    const j = jumps[k];
+    if (j.kind !== 'hip' || !j.yaw) continue;
+    const sgn = j.yaw > 0 ? -1 : 1;
+    for (let i = 0; i < N; i++) {
+      let ds = sArr[i] - j.s;
+      if (ds < -L / 2) ds += L; else if (ds > L / 2) ds -= L;
+      // ease in over the last HIP_WIN metres, hold across the lip, ease out
+      let w;
+      if (ds < -HIP_WIN || ds > HIP_OUT) continue;
+      else if (ds < -2) w = sstep(-HIP_WIN, -2, ds);
+      else if (ds <= 2) w = 1;
+      else w = 1 - sstep(2, HIP_OUT, ds);
+      const cap = APEX_FRAC * Math.max(0.5, wArr[i] - 1.6);
+      const nl = clamp(pts[i].lat + sgn * HIP_AIM * w, -cap, cap);
+      pts[i].lat = nl;
+      const p = spline.offsetPoint(sArr[i], nl, { x: 0, y: 0, z: 0 });
+      pts[i].x = p.x; pts[i].y = p.y; pts[i].z = p.z;
+      pts[i].hip = true;
+    }
+  }
   return pts;
 }
 

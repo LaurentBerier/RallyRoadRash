@@ -18,7 +18,7 @@
    ============================================================ */
 import { fbm, ridged, vnoise, hash2i, clamp, sstep } from '../core/rng.js';
 import { SURF, SURFACES } from './surfaces.js';
-import { buildTrackData, paintAt, rampRise, LIP_HOLD } from './track.js';
+import { buildTrackData, paintAt, rampRise, LIP_HOLD, DROP_RUN } from './track.js';
 import {
   MACRO_EXT, MACRO_RES, FAR_EXT, FAR_RES, DET_RES, SURF_EXT, SURF_RES,
 } from './terrain-const.js';
@@ -35,6 +35,10 @@ const BANK_SLOPE = 1.15;    // 49 deg: the steepest cut we allow next to a road
 const BANK_FREE = 1.2;      // metres of free play before the clamp bites
 const CROWN = 0.10;         // roadbed crown, centre high
 const BANK_GAIN = 4.5, BANK_MAX = 1.3;   // corner banking from curvature
+/* Authored features blend in over these, in metres of arc length. 12 m is
+   roughly a car length and a half at speed: long enough that the transition
+   never registers as a step, short enough that a 60 m bank is mostly bank. */
+const BANK_TAPER = 12, BERM_TAPER = 10;
 
 /* ============================================================
    2.  THEME BASE HEIGHT FIELDS
@@ -126,6 +130,23 @@ const THEME_BASE = {
 
   /* Inside the caldera: a cinder cone in the middle, a broken rim wall right
      out at the edge of the world, crevices everywhere between. */
+  /* THUNDER PARK: SUNSTRIKE CANYON's ground, every seed pushed by 40 so not one
+     mesa or hoodoo repeats, and the middle of the arena squashed flat. A stunt
+     park is built on a graded pad — inside r=320 the only relief that should
+     read is the set pieces, and the rim wall stays out where it belongs. */
+  thunder(x, z) {
+    const r = Math.hypot(x, z);
+    let h = (fbm(x * 0.00165, z * 0.00165, 4, 2.05, 0.5, 61) - 0.5) * 30;
+    h += (fbm(x * 0.0072, z * 0.0072, 3, 2.1, 0.5, 69) - 0.5) * 5.5;
+    h += plateaus(x, z, 210, 73, 22, 48, 0.55, 0.55);
+    h += plateaus(x, z, 78, 81, 6, 15, 0.30, 0.75);
+    h += 34 * sstep(430, 640, r) * (0.5 + 0.9 * ridged(x * 0.0052, z * 0.0052, 3, 2.1, 0.5, 91));
+    h += vista(x, z, r, 111, 205, 620);
+    // The pad. Scaling the whole field rather than clamping it keeps the join
+    // smooth — a clamp would put a terrace ring right through the outer loop.
+    return h * (1 - 0.72 * (1 - sstep(200, 320, r)));
+  },
+
   volcano(x, z) {
     const r = Math.hypot(x, z);
     let h = -16 + (fbm(x * 0.00185, z * 0.00185, 4, 2.05, 0.5, 61) - 0.5) * 34;
@@ -204,10 +225,14 @@ function softClamp(v, lo, hi, k) {
    (with none, the outside of a hairpin gets radial gaps between slivers), and
    the winner for each texel is the wedge whose centreline is CLOSEST — which
    is the same answer a distance field would give. */
-function* carveInto(C, spline, jumps, sMapBase, sMapScale, endTaper, report, prog0, prog1) {
+function* carveInto(C, spline, F, report, prog0, prog1) {
   const { res, ext, x0, z0, nx, nz, cAcross, cTarget, cW, cS, cD } = C;
   const px = ext / res;
   const L = spline.length;
+  const jumps = F.jumps, banks = F.banks, whoops = F.whoops, berms = F.berms;
+  const sMapBase = F.sMapBase, sMapScale = F.sMapScale, endTaper = F.endTaper;
+  const bsign = banks && banks.length ? bankSigns(spline, banks) : null;
+  const _bk = { w: 0, t: 0 };
   const steps = Math.max(8, Math.ceil(L / CARVE_STEP));
   const step = L / steps;
   const closed = spline.closed;
@@ -295,11 +320,26 @@ function* carveInto(C, spline, jumps, sMapBase, sMapScale, endTaper, report, pro
            an open spline, so the junction is flat and the surfaces agree. */
         const tk = endTaper > 0
           ? clamp(Math.min(s, L - s) / endTaper, 0, 1) : 1;
-        // banking: raise the outside of the corner. kappa > 0 turns left, so
-        // the outside is negative-across.
-        tgt += clamp(-kappaA * across * BANK_GAIN, -BANK_MAX, BANK_MAX) * tk;
-        tgt -= VERGE_DROP * tk * sstep(SHOULDER_IN, SHOULDER_OUT, tw);
-        if (jumps) tgt += jumpProfile(jumps, s, ad, w, L);
+        /* Banking: raise the outside of the corner. kappa > 0 turns left, so
+           the outside is negative-across. An AUTHORED bank replaces the
+           curvature term inside its span rather than stacking on it — the
+           whole point of authoring one is that the corner gets the angle the
+           designer asked for, not that plus whatever the geometry produced. */
+        const curveBank = clamp(-kappaA * across * BANK_GAIN, -BANK_MAX, BANK_MAX);
+        if (bsign) {
+          bankAt(banks, bsign, s, L, _bk);
+          tgt += (curveBank * (1 - _bk.w) + across * _bk.t * _bk.w) * tk;
+        } else tgt += curveBank * tk;
+        /* The verge: a drop away from the road, unless a berm has been authored
+           on this side — then the same span of ground goes UP instead, into a
+           wall you can ride. Same profile curve either way, so the roadbed edge
+           joins it without a lip. */
+        const vf = sstep(SHOULDER_IN, SHOULDER_OUT, tw);
+        const bh = berms ? bermAt(berms, s, across, L) : 0;
+        if (bh > 0) tgt += bh * vf * tk;
+        else tgt -= VERGE_DROP * tk * vf;
+        if (whoops) tgt += whoopAt(whoops, s, L) * (1 - sstep(0.95, 1.25, tw));
+        if (jumps) tgt += jumpProfile(jumps, s, across, ad, w, L);
 
         cAcross[i] = across; cTarget[i] = tgt; cW[i] = w; cD[i] = dSeg;
         cS[i] = sMapBase + s * sMapScale;
@@ -309,17 +349,110 @@ function* carveInto(C, spline, jumps, sMapBase, sMapScale, endTaper, report, pro
   }
 }
 
+/* ---------------- authored cross-section features ---------------- */
+
+/**
+ * Which edge of an authored bank goes up. `deg` is a magnitude in the track
+ * file — asking an author to sign it correctly for a corner they cannot see
+ * from the numbers is how you get a bank that throws cars off the outside.
+ * The sign comes from the MEAN curvature over the whole span so it cannot flip
+ * halfway through and put a ridge down the middle of the apex; a negative
+ * authored `deg` still flips it, for the one corner that wants the wrong way.
+ */
+function bankSigns(spline, banks) {
+  const L = spline.length;
+  const out = new Float32Array(banks.length);
+  for (let i = 0; i < banks.length; i++) {
+    const b = banks[i];
+    let span = b.s1 - b.s0; if (span <= 0) span += L;
+    let acc = 0;
+    for (let t = 0; t <= span; t += 2) acc += spline.curvatureAt(b.s0 + t);
+    // kappa > 0 turns left; the outside is then negative-across, and raising it
+    // needs a negative multiplier on `across`.
+    out[i] = acc >= 0 ? -1 : 1;
+  }
+  return out;
+}
+
+/** Authored bank at s: `w` is the blend against the curvature bank, `t` the
+    signed tangent to multiply `across` by. */
+function bankAt(banks, signs, s, L, out) {
+  out.w = 0; out.t = 0;
+  for (let i = 0; i < banks.length; i++) {
+    const b = banks[i];
+    let d0 = s - b.s0; if (d0 < -L * 0.5) d0 += L; else if (d0 > L * 0.5) d0 -= L;
+    let span = b.s1 - b.s0; if (span <= 0) span += L;
+    if (d0 < 0 || d0 > span) continue;
+    const w = clamp(Math.min(d0, span - d0) / BANK_TAPER, 0, 1);
+    if (w <= out.w) continue;
+    out.w = w;
+    out.t = Math.tan(b.deg * Math.PI / 180) * signs[i];
+  }
+  return out;
+}
+
+/** Rollers, in metres to ADD to the roadbed. One wavelength of fade at each end
+    so the field starts and ends level with the road either side of it. */
+function whoopAt(whoops, s, L) {
+  let h = 0;
+  for (let i = 0; i < whoops.length; i++) {
+    const q = whoops[i];
+    let d0 = s - q.s0; if (d0 < -L * 0.5) d0 += L; else if (d0 > L * 0.5) d0 -= L;
+    let span = q.s1 - q.s0; if (span <= 0) span += L;
+    if (d0 < 0 || d0 > span) continue;
+    const fade = clamp(Math.min(d0, span - d0) / q.wl, 0, 1);
+    h += q.amp * (1 - Math.cos((2 * Math.PI * d0) / q.wl)) * 0.5 * fade;
+  }
+  return h;
+}
+
+/** Berm height on this side of the road at s, or 0 if the verge is normal. */
+function bermAt(berms, s, across, L) {
+  for (let i = 0; i < berms.length; i++) {
+    const b = berms[i];
+    if (b.side > 0 ? across < 0 : across > 0) continue;      // other side of the road
+    let d0 = s - b.s0; if (d0 < -L * 0.5) d0 += L; else if (d0 > L * 0.5) d0 -= L;
+    let span = b.s1 - b.s0; if (span <= 0) span += L;
+    if (d0 < 0 || d0 > span) continue;
+    return b.h * clamp(Math.min(d0, span - d0) / BERM_TAPER, 0, 1);
+  }
+  return 0;
+}
+
 /** Kicker ramps and carved voids, in metres to ADD to the roadbed height. */
-function jumpProfile(jumps, s, ad, w, L) {
+function jumpProfile(jumps, s, across, ad, w, L) {
   let h = 0;
   for (let i = 0; i < jumps.length; i++) {
     const j = jumps[i];
     let ds = s - j.s;
     if (ds < -L * 0.5) ds += L; else if (ds > L * 0.5) ds -= L;
-    const gap = j.gap || 0;
-    if (ds > gap + 2 || ds < -j.len - 1) continue;
+    /* A hip's lip is a diagonal line across the road: shifting ds by
+       across·tan(yaw) rotates the entire ramp about the centreline, so one edge
+       of the lip sits metres further up the face than the other and the car
+       leaves it turning. */
+    if (j.yaw) ds += across * Math.tan(j.yaw);
     // the ramp face, tapered across so it is a kicker and not an earthwork
     const taper = 1 - sstep(0.78, 1.12, ad / w);
+
+    if (j.kind === 'drop') {
+      /* A shelf. DROP_RUN metres of ramp up on to it (see track.js: without
+         that it is a wall), `len` metres of plateau at h, then the ground stops
+         in 0.4 m — the shortest step this 0.66 m/texel field can hold as an
+         edge instead of smearing into a slope. Nothing is carved out beyond it;
+         the road underneath simply carries on at its own height. */
+      if (taper <= 0 || ds < -j.len - DROP_RUN || ds > 1) continue;
+      if (ds <= -j.len) h += j.h * ((ds + j.len + DROP_RUN) / DROP_RUN) * taper;
+      else if (ds <= 0) h += j.h * taper;
+      else h += j.h * (1 - clamp(ds / 0.4, 0, 1)) * taper;
+      continue;
+    }
+
+    const gap = j.gap || 0;
+    // A table's deck: `top` metres of lip held flat, then `down` metres of exit
+    // ramp. Land on it, roll off it, or clear the lot — the choice is the point.
+    const top = j.kind === 'table' ? j.top : 0;
+    const down = j.kind === 'table' ? j.down : 0;
+    if (ds > gap + top + down + 2 || ds < -j.len - 1) continue;
     if (taper > 0) {
       // rampRise + LIP_HOLD live in track.js: one definition of the kicker
       // face, shared with the racing line's launch-speed maths.
@@ -327,10 +460,15 @@ function jumpProfile(jumps, s, ad, w, L) {
         h += rampRise(clamp((ds + j.len) / (j.len - LIP_HOLD), 0, 1), j.h) * taper;
       }
       else if (ds > 0) {
-        // the back of the lip: near-vertical for a gap (you are meant to fly
-        // it), 1.2 m of 70-degree face otherwise so a crawling car can get down
-        const back = gap > 0 ? 0.4 : 1.2;
-        if (ds < back) h += j.h * (1 - ds / back) * taper;
+        if (top > 0 || down > 0) {
+          if (ds <= top) h += j.h * taper;
+          else if (ds <= top + down) h += j.h * (1 - (ds - top) / down) * taper;
+        } else {
+          // the back of the lip: near-vertical for a gap (you are meant to fly
+          // it), 1.2 m of 70-degree face otherwise so a crawling car can get down
+          const back = gap > 0 ? 0.4 : 1.2;
+          if (ds < back) h += j.h * (1 - ds / back) * taper;
+        }
       }
     }
     if (gap > 0 && ds > 0 && ds < gap) {
@@ -418,8 +556,8 @@ export function* bakeTrack(trackDef, report = () => { }) {
     bx0 = Math.min(bx0, pt.x - rr); bx1 = Math.max(bx1, pt.x + rr);
     bz0 = Math.min(bz0, pt.z - rr); bz1 = Math.max(bz1, pt.z + rr);
   }
-  if (trackData.shortcutSpline) {
-    const ss = trackData.shortcutSpline;
+  for (const rt of trackData.routes) {
+    const ss = rt.spline;
     for (let s = 0; s <= ss.length; s += 4) {
       ss.posAt(s, pt);
       const rr = ss.widthAt(s) * SHOULDER_OUT + CORRIDOR + 3;
@@ -439,14 +577,31 @@ export function* bakeTrack(trackDef, report = () => { }) {
     cD: new Float32Array(nx * nz)
   };
   report(0.38, 'carving the road'); yield;
-  yield* carveInto(C, spline, trackData.jumps, 0, 1, 0, report, 0.38, 0.48);
-  if (trackData.shortcutSpline) {
-    // The detour inherits the MAIN line's s so surface spans keep running down
-    // it; racecore never asks the terrain where a shortcut racer is.
-    const sc = trackDef.shortcut;
-    let span = sc.s1 - sc.s0; if (span <= 0) span += L;
-    yield* carveInto(C, trackData.shortcutSpline, null,
-      sc.s0, span / trackData.shortcutSpline.length, 45, report, 0.48, 0.52);
+  yield* carveInto(C, spline, {
+    jumps: trackData.jumps, banks: trackData.banks,
+    whoops: trackData.whoops, berms: trackData.berms,
+    sMapBase: 0, sMapScale: 1, endTaper: 0
+  }, report, 0.38, 0.48);
+  {
+    /* Every route is carved with its OWN jumps — a detour whose drop exists
+       only in the data is a route the AI will take and the ground will not
+       honour. Banks, whoops and berms are main-line spans and stay off the
+       detours: their s is the main line's, and re-indexing them into route
+       arc length would put a bank where nobody asked for one. */
+    const rts = trackData.routes;
+    const p0 = 0.48, p1 = 0.52;
+    for (let i = 0; i < rts.length; i++) {
+      const rt = rts[i];
+      // The detour inherits the MAIN line's s so surface spans keep running down
+      // it; racecore never asks the terrain where a route racer is.
+      let span = rt.s1 - rt.s0; if (span <= 0) span += L;
+      const a = p0 + (p1 - p0) * (i / rts.length);
+      const b = p0 + (p1 - p0) * ((i + 1) / rts.length);
+      yield* carveInto(C, rt.spline, {
+        jumps: rt.jumps, banks: null, whoops: null, berms: null,
+        sMapBase: rt.s0, sMapScale: span / rt.spline.length, endTaper: 45
+      }, report, a, b);
+    }
   }
 
   /* resolve the carve into the height field + road mask */
@@ -602,7 +757,11 @@ function onJumpFace(jumps, s, ad, L) {
     const j = jumps[i];
     let ds = s - j.s;
     if (ds < -L * 0.5) ds += L; else if (ds > L * 0.5) ds -= L;
-    if (ds < -j.len - 2 || ds > (j.gap || 0) + 2) continue;
+    // The packed-rock apron covers whatever the carve actually built: a drop's
+    // run-up and plateau ahead of the lip, a table's deck behind it.
+    const before = j.kind === 'drop' ? j.len + DROP_RUN : j.len;
+    const after = (j.gap || 0) + (j.kind === 'table' ? j.top + j.down : 0);
+    if (ds < -before - 2 || ds > after + 2) continue;
     if (ad < j.w * 1.6) return true;
   }
   return false;
