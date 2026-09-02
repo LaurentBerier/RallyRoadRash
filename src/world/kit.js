@@ -769,6 +769,45 @@ export function spareWheelGeo(P, seed) {
 }
 
 /**
+ * Boost pad: a low chevron slab that lies ON the road, pointing the way you
+ * are meant to cross it.
+ *
+ * Built at the default pad footprint from the track schema — 2 × hw (1.6) wide
+ * and len (4) long, +Z being down the road — so a default pad instances at
+ * scale 1 and only an authored hw/len has to scale. It is deliberately almost
+ * flat: 6 cm of slab plus 2 cm of chevron. A pad that stands proud enough to
+ * see from the cockpit is also tall enough to unsettle a car crossing it at
+ * 40 m/s, and this is a reward, not a kerb.
+ *
+ * The chevrons carry the accent colour; the pulse and the glow are the
+ * emissive material's job, not the geometry's.
+ */
+export function boostPadGeo(P, seed) {
+  const b = builder();
+  const W = 3.2, LEN = 4.0, T = 0.06;
+  // the slab, dark so the chevrons read against it in any theme
+  b.box(shade(P.concrete, -0.55), W, T, LEN, 0, T * 0.5, 0);
+  // a thin lip either side, so the pad has an edge under a low sun
+  for (const s of [-1, 1]) {
+    b.box(shade(P.metal, -0.25), 0.14, T + 0.02, LEN, s * (W * 0.5 - 0.07), (T + 0.02) * 0.5, 0);
+  }
+  /* Three chevrons down the length. Each is two angled bars meeting on the
+     centreline; brightness climbs toward the exit end so the arrow reads as
+     motion even when the car is sitting still on top of it. */
+  const a = P.paintAlt;
+  for (let i = 0; i < 3; i++) {
+    const z = -LEN * 0.5 + LEN * (0.22 + i * 0.28);
+    const k = -0.18 + i * 0.18;
+    for (const s of [-1, 1]) {
+      b.box(shade(a, k), 0.22, 0.02, W * 0.52,
+        s * W * 0.20, T + 0.01, z, 0, s * 0.90, 0);
+    }
+  }
+  void seed;
+  return b.done();
+}
+
+/**
  * Catenary wire between two points, as a thin swept tube.
  * `sag` is the drop at midspan in metres. Built as one polyline of short
  * segments — a wire is two pixels wide, and anything cleverer is wasted.

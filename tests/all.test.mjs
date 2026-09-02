@@ -134,3 +134,10 @@ test('deep: boost-check (mini-turbo + drive multipliers)', () => {
 test('deep: kit-check (set-dressing geometry gates)', () => {
   run(['--experimental-loader', './dev/loader.mjs', 'dev/kit-check.mjs']);
 });
+
+/* Registered before src/game/tricks.js exists. The check is a stub that exits
+   0 today and fails loudly the moment the module lands without real gates
+   behind it — see dev/trick-check.mjs. */
+test('deep: trick-check (air control + trick scoring)', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/trick-check.mjs']);
+});

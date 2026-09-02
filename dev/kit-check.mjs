@@ -31,7 +31,7 @@ import {
   stumpGeo, shardGeo, drumGeo, crateGeo, baleGeo, wreckGeo, pipeStackGeo, shedGeo,
   containerGeo, towerGeo, waterTankGeo, hangarGeo, grandstandGeo, canopyGeo,
   personGeo, poleGeo, culvertGeo, pipeworkGeo, logStackGeo, wireGeo, KIT_PALETTE,
-  itemBoxGeo, spareWheelGeo,
+  itemBoxGeo, spareWheelGeo, boostPadGeo,
 } from '../src/world/kit.js';
 
 let failures = 0, checks = 0;
@@ -86,6 +86,9 @@ const FACTORIES = [
      height, so its diamond hangs below y = 0 by design. */
   ['itemBox', () => itemBoxGeo(P, 149), [0.8, 1.6, 0.9, 1.8, 0.10]],
   ['spareWheel', () => spareWheelGeo(P, 151), [0.4, 0.9, 0.5, 0.9, 0.05]],
+  /* The boost pad LIES ON the road rather than standing on it: 8 cm tall
+     over a 4 m footprint. The width gate is the footprint, not the height. */
+  ['boostPad', () => boostPadGeo(P, 157), [3.0, 4.2, 0.05, 0.20, 0.02]],
 ];
 
 const box = new THREE.Box3();
@@ -159,7 +162,7 @@ head('3. MERGEABILITY — every shape must merge with every other shape');
   const { mergeGeometries } = await import('three/addons/utils/BufferGeometryUtils.js');
   const parts = FACTORIES.map(([, make]) => make()).filter(Boolean);
   const merged = mergeGeometries(parts, false);
-  ok('all 25 kit shapes merge into one geometry', !!merged,
+  ok('all 26 kit shapes merge into one geometry', !!merged,
     merged ? `${Math.round((merged.index ? merged.index.count : merged.attributes.position.count) / 3)} tris` : 'null');
   if (merged) {
     ok('merged geometry keeps its vertex colours', !!merged.attributes.color);

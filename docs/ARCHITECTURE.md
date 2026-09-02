@@ -11,8 +11,19 @@ stop and flag it in your report instead of unilaterally changing it.**
 
 ## Hard rules (all contributors)
 
-1. **No new dependencies. No asset files. No network fetches.** Everything is code-generated
-   (canvas textures, procedural geometry, WebAudio synthesis).
+1. **No new dependencies. No network fetches at runtime.** Everything the game NEEDS is
+   code-generated (canvas textures, procedural geometry, WebAudio synthesis).
+
+   *Amended in wave 6:* a small set of **optional** images may ship in `assets/` — skyline
+   panoramas, ground detail tiles, stage and title key art. They are a look upgrade and
+   nothing more. The rules that keep that true, and that every consumer is tested against:
+   they load through `src/core/assets.js` only; they load with **relative URLs** and
+   `crossOrigin = 'anonymous'` (the game is served from Sandscape in production and from a
+   static server locally, and a tainted canvas breaks the screenshot path); loading is
+   **non-blocking** and a missing or broken entry resolves to `null`, never to a rejected
+   promise; and **every consumer keeps its procedural path as the fallback**. Rename
+   `assets/` aside and the game must still run and still look deliberate — that is a QA gate,
+   not an aspiration. No generated 3D and no generated audio: those stay procedural.
 2. **ES modules** loaded via the import map in `index.html` (`three`, `three/addons/`).
    Relative imports between our modules. Must run from a static file server, Chrome 89+ /
    Firefox 108+ / Safari 16.4+ (WebGL2 + import maps).
@@ -36,48 +47,65 @@ stop and flag it in your report instead of unilaterally changing it.**
 ## Module map & ownership
 
 ```
-index.html                shell, overlays, HUD markup            [T7 ui]
+index.html                shell, overlays, HUD markup            [P6 ui/ux]
 server.js                 static server (unchanged)              [locked]
 src/
-  main.js                 bootstrap, app state machine, frame    [T5 race-flow]
+  main.js                 bootstrap, app state machine, frame    [lead]
   core/
-    engine.js             renderer, quality tiers, composer      [T3 environment: light rig only]
-    input.js              kb/mouse/gamepad/touch                 [T7 ui: touch + input-method detect]
-    audio.js              procedural WebAudio                    [T4 audio]
-    audio-items.js        power-up/boost cues (uses audio.js internals) [T4 audio]
+    engine.js             renderer, quality tiers, composer      [P1 env & vfx]
+    assets.js             OPTIONAL image loading (never in Node)  [lead]
+    input.js              kb/mouse/gamepad/touch                 [P4 air & tricks: roll bindings]
+    audio.js              procedural WebAudio                    [lead: delegates only]
+    audio-items.js        power-up/boost/trick cues              [P4 air & tricks]
     rng.js                noise/PRNG helpers (unchanged)         [locked]
-    save.js               localStorage wrapper                   [T5 race-flow]
+    save.js               localStorage wrapper                   [locked]
   world/
-    terrain.js            bake, clipmap, surface map, ruts       [T1 terrain]
-    track.js              spline, road carve, checkpoints, grid  [T1 terrain]
-    tracks/index.js       registry: TRACKS list                  [T1 terrain]
-    tracks/training.js    PROVING GROUNDS (tutorial)             [T1 terrain]
-    tracks/canyon.js      SUNSTRIKE CANYON (desert, gap jumps)   [T1 terrain]
-    tracks/forest.js      TIMBERLINE CLIMB (mud, narrow, ramps)  [T1 terrain]
-    tracks/volcano.js     CALDERA RUN (extreme, biggest jumps)   [T1 terrain]
-    surfaces.js           surface-type table (shared data)       [T1 terrain]
-    props.js              scatter, landmarks, camps, jump kit     [T1 terrain]
-    kit.js                set-dressing geometry (vertex-coloured)  [T1 terrain]
-    sky.js                day skies per theme, sun, clouds, IBL  [T3 environment]
-    dust.js               atmospheric dust/mud/debris particles  [T3 environment]
-    textures.js           shared procedural texture helpers      [T3 environment]
+    terrain.js            Terrain object, CPU height, clipmap, ruts [lead]
+    terrain-const.js      extents/resolutions both sides agree on  [locked]
+    terrain-bake.js       theme base, road carve, surface paint    [P3 tracks]
+    terrain-shader.js     THEMES, height GLSL, material factories  [P1 env & vfx]
+    track.js              spline, routes, checkpoints, racing line [P3 tracks]
+    tracks/index.js       registry: TRACKS list                  [P3 tracks]
+    tracks/training.js    PROVING GROUNDS (tutorial)             [P3 tracks]
+    tracks/canyon.js      SUNSTRIKE CANYON (desert, gap jumps)   [P3 tracks]
+    tracks/forest.js      TIMBERLINE CLIMB (mud, narrow, ramps)  [P3 tracks]
+    tracks/volcano.js     CALDERA RUN (extreme, biggest jumps)   [P3 tracks]
+    tracks/thunder.js     THUNDER PARK (bonus stunt stage)       [P3 tracks]
+    surfaces.js           surface-type table (shared data)       [locked]
+    props.js              scatter, landmarks, camps, jump kit     [P1 env & vfx]
+    kit.js                set-dressing geometry (vertex-coloured)  [P1 env & vfx]
+    sky.js                skies per theme, sun, clouds, vista, IBL [P1 env & vfx]
+    vfx.js                sparks/confetti/shock/ribbons/flames    [P1 env & vfx]
+    dust.js               atmospheric dust/mud/debris particles  [P1 env & vfx]
+    textures.js           shared procedural texture helpers      [P1 env & vfx]
   game/
-    config.js             ALL gameplay tuning in one place       [T2 vehicle]
-    vehicle.js            4-wheel rigid-body vehicle + visuals   [T2 vehicle]
-    vehicles.js           the four machine specs                 [T2 vehicle]
-    racecore.js           PURE race logic (no three, no DOM)     [T5 race-flow]
-    race.js               race session: countdown→results        [T5 race-flow]
-    progression.js        PURE unlocks/records (no three/DOM)    [T5 race-flow]
-    miniturbo.js          PURE drift->boost state machine        [T2 vehicle]
-    items.js              PURE power-up table + rubber-band roulette [T5 race-flow]
-    itemworld.js          live boxes/projectiles/hazards/effects  [T5 race-flow]
-    ai.js                 AI drivers                             [T6 ai]
-    camera.js             chase camera, shake, FOV, look-ahead   [T8 camera-feel]
-    feel.js               game-feel triggers (shake/fx routing)  [T8 camera-feel]
+    config.js             ALL gameplay tuning in one place       [P4 air & tricks]
+    vehicle.js            4-wheel rigid body: solver only        [P4 air & tricks]
+    vehicle-art.js        everything a vehicle LOOKS like        [P2 vehicle art]
+    tricks.js             PURE air-rotation scoring              [P4 air & tricks]
+    vehicles.js           the four machine specs                 [P2 vehicle art]
+    racecore.js           PURE race logic (no three, no DOM)     [locked]
+    race.js               race session: countdown→results        [lead]
+    racefx.js             race presentation (sound/particle/shake) [lead]
+    progression.js        PURE unlocks/records (no three/DOM)    [P6 ui/ux]
+    miniturbo.js          PURE drift->boost state machine        [P4 air & tricks]
+    items.js              PURE power-up table + roulette          [P6 ui/ux: desc/tip/icon ONLY]
+    itemworld.js          live boxes/projectiles/hazards/pads      [P5 ai & items]
+    ai.js                 AI drivers                             [P5 ai & items]
+    ai-items.js           PURE "should I fire, and where" policy  [P5 ai & items]
+    camera.js             chase camera, shake, FOV, look-ahead   [locked]
+    feel.js               game-feel triggers (shake/fx routing)  [locked]
   ui/
-    hud.js                HUD, minimap, banners, results         [T7 ui]
-    styles.css            responsive layout, touch-safe          [T7 ui]
-tests/                    node:test suites for pure modules      [T9 qa]
+    hud.js                HUD, minimap, banners, results         [P6 ui/ux]
+    ui.js                 screens, cards, settings, focus        [P6 ui/ux]
+    menuscene.js          the live 3D menu backdrop              [P6 ui/ux]
+    cards.js              stage and machine card painting        [P6 ui/ux]
+    logo.js               canvas wordmark                        [P6 ui/ux]
+    icons.js              item and event glyphs                  [P6 ui/ux]
+    playbook.js           the how-to-play screen                 [P6 ui/ux]
+    styles.css            responsive layout, touch-safe          [P6 ui/ux]
+tests/                    node:test suites for pure modules      [lead]
+dev/                      harness checks; each package owns its own [see below]
 docs/                     this file + tuning/QA docs             [lead]
 ```
 
@@ -132,7 +160,22 @@ export default {
 };
 ```
 
-## Terrain — `src/world/terrain.js` (T1)
+## Terrain — `terrain.js` + `terrain-{const,bake,shader}.js`
+
+Split in wave 6 because one 1763-line file could not be worked on by two packages at once.
+The four pieces and who may touch them:
+
+- **`terrain-const.js`** — extents, resolutions, detail amplitudes, the crossfade radii.
+  Locked. Every one of these numbers appears on BOTH sides of the height contract; a value
+  changed here and not there is a car landing where the ground is not.
+- **`terrain-bake.js`** [P3] — theme base fields, the road carve, jump profiles, the surface
+  and lateral paint, mip chains. Everything that runs once, at load.
+- **`terrain-shader.js`** [P1] — `THEMES`, `themePalette`, `TERRAIN_GLSL` (with the parity
+  table), `buildTerrainMaterial(terrain)` and `makeLevelMaterial(terrain, cell, i)`.
+- **`terrain.js`** [lead] — the `Terrain` object itself: CPU sampling, the clipmap, ruts,
+  trails, the sun mask. It **re-exports every name that moved**, so `import { bakeTrack,
+  Terrain, PLAYABLE_EXT, THEMES, … } from './terrain.js'` still works everywhere.
+
 
 ```js
 export const GRAVITY_WORLD = …  // re-export from game/config.js if needed; physics owns G
@@ -187,7 +230,18 @@ export function buildTrackData(trackDef) → {
 `buildTrackData` must be importable in Node (no three imports — plain math) so tests can
 validate checkpoint ordering and racing-line sanity. Use plain objects, not Vector3.
 
-## Vehicles — `src/game/vehicle.js`, `vehicles.js`, `config.js` (T2)
+## Vehicles — `vehicle.js`, `vehicle-art.js`, `vehicles.js`, `config.js`
+
+`vehicle.js` is the solver and nothing else. Everything a car LOOKS like moved to
+`vehicle-art.js` in wave 6: `buildVehicleVisuals(v, scene, spec)`,
+`updateVehicleVisuals(v, dt)`, `disposeVehicleVisuals(v)` and `setGhostLook(v, k01)`.
+
+The Vehicle still **owns** the objects — `root`, `chassis`, `wheelRoot`, `leanRoot`,
+`mats`, `tex`, `geos`, `exhaust`, `paintColor` and the per-wheel `obj/hub/arm/coil/…` are
+instance properties, because the dev harnesses reach in and read them. `updateVisuals(dt)`
+and `dispose()` remain methods and simply delegate, so race.js and every harness are
+unchanged. Physics reads none of it.
+
 
 ```js
 // config.js — THE tuning surface. Everything gameplay-feel lives here.
@@ -401,6 +455,190 @@ landing thud + suspension clunks, collision crunches, countdown beeps (3 low, GO
 checkpoint chime, lap bell, finish fanfare, position up/down stingers, UI ticks. Music:
 menu theme + in-race driving loop (intensity input), generative, energetic but not annoying.
 `update(dt, { rpm, load, speed, slipLat, slipLong, surface, airborne, contacts })`.
+
+## Wave 6 contracts ("arcade glow-up")
+
+Written by the lead **before** the parallel packages start, and binding on all of them. Six
+agents (P1 environment & vfx, P2 vehicle art, P3 tracks, P4 air & tricks, P5 ai & items,
+P6 ui/ux) work in isolated worktrees with **disjoint file ownership** — see the module map.
+A package that needs something outside its files reports it; it does not reach across.
+
+The lead has already landed the pre-wave refactors these contracts assume:
+`vehicle-art.js`, the `terrain-{const,bake,shader}.js` split (plus the signed-lateral
+texture below), `racefx.js`, `core/assets.js`, `kit.boostPadGeo`, and a `trick-check` stub
+registered in the suite.
+
+### 6.1 Track schema additions — `world/tracks/*.js` → `track.js` + `terrain-bake.js`
+
+```js
+difficulty: 0.55, bonus: true,                       // bonus ⇒ not in TRACK_ORDER
+jumps: [{ s, len, h, gap?, name?, kind?: 'kicker'|'table'|'hip'|'drop', cp?: false,
+          top?, down?,   // table: plateau length / down-ramp length
+          yaw? }],       // hip: lip line angle (deg); ramp s shifts by lat·tan(yaw)
+banks:  [{ s0, s1, deg }],            // authored superelevation (≤ 28°), replaces the
+                                      //   curvature bank inside the span
+whoops: [{ s0, s1, wl, amp }],        // rollers: wl 5..10 m, amp ≤ 0.7 m, full width
+berms:  [{ s0, s1, side, h }],        // raised outer verge wall, h ≤ 2.5 (wall-ride)
+routes: [{ id, name, s0, s1, path, aiBias?, jumps? }],   // generalises `shortcut`
+pads:   [{ s, lat, hw?:1.6, len?:4, mul?:1.6, top?:1.10, time?:1.2 }],
+```
+
+`buildTrackData` publishes: normalised `jumps[].kind/cp/top/down/yaw`; `banks/whoops/berms`
+verbatim; `routes[] = {id, name, s0, s1, spline, aiBias, jumps}` with `shortcutSpline =
+routes[0].spline` kept as an alias **until all 14 shortcut consumers move**; `pads[] =
+{idx, s, lat, x, y, z, dx, dz, hw, len, mul, top, time}`; `voids[] = [{s0, s1}]` (gaps and
+drops, so the respawn rule is data rather than a hard-coded list); and
+`elev: Float32Array(64)` for the UI's card strips.
+
+Every jump entry still gets a lip checkpoint **unless** `cp: false`; `track-check` gates
+`jumpN === jumps.filter(j => j.cp !== false).length`. Route jumps are always `cp: false`.
+
+The theme id `thunder` is fixed. Every theme table gets an entry, each from its owner:
+`SKY_THEMES`, `DUST_THEMES`, `THEMES` (palette), `KIT_PALETTE`, `RECIPES`, `DRESSING` → P1;
+`THEME_BASE` → P3; `STAGE_SKIN` → P6.
+
+### 6.2 VFX — `world/vfx.js` (P1 writes; lead, P5 and P6 call, always guarded `if (vfx)`)
+
+```
+sparks(n, x,y,z, dx,dy,dz, speed, spread, r,g,b, life)
+confetti(n, x,y,z, spread)
+shock(x,y,z, radius, r,g,b)
+padFlash(x,y,z, dx,dz)
+ribbon(id) -> { push(x,y,z), fade(), clear() }   // 14 fixed slots:
+                                                 //   0–7 projectiles, 8–13 racer flames
+flame(ri, on01, x,y,z, dx,dy,dz, tier)
+update(dt, camera)   setViewport()   setTheme()   setQuality()   clear()   dispose()
+```
+
+≤ 3 draw calls: one additive Points pool sized by tier (400/900/1600/2400), one ribbon mesh,
+one ring InstancedMesh. Smoke is **not** a new system — it is `dust.spawn(PUFF, dark)`.
+Zero allocation after construction. Sprites come from `textures.js makeVfxAtlas(128)`
+(SPARK / CONFETTI / RING / STREAK). Built in `main.js buildWorld`, disposed by
+`Race.dispose`, `setViewport` called beside `dust.setViewport`.
+
+VFX may use `Math.random()` — it is cosmetic and never feeds the sim.
+
+### 6.3 Tricks — `game/tricks.js` (P4; PURE, imports `TUNE` and nothing else)
+
+`TRICK` enum + `TRICK_NAME`: STYLE HOP, BIG AIR, 360, 720, BACKFLIP, FRONTFLIP, BARREL ROLL,
+DOUBLE FLIP, COMBO, CRASH.
+
+```
+makeTrick()  -> fixed shape { qx,qy,qz,qw, pitch,yaw,roll, air, hopT, hop, wasHand,
+                              launched, id, pts, tier, seq, q, best, bestPts, total, fired }
+trickReset(st)          // flight only — called from placeAt
+trickClear(st)          // totals too — called at the grid
+trickStep(st, dt, v, ctl)   // once per frame, right after driftStep
+trickLabel(id)
+predictAirTime(vy, dropM, G, hang)   // shared with the AI's canned-trick planner
+```
+
+`trickStep` accumulates pitch/yaw/roll from the **body-frame delta quaternion**; on
+`v.landEdge` it classifies, sets `id/pts/tier`, bumps `seq`, adds to `total`, and sets
+`fired = tier` as a one-shot.
+
+### 6.4 Vehicle publications (P4; all zeroed in `placeAt`)
+
+`landEdge`, `landQ` (0..1), `airPeak`, `_trick`. `ctl` gains `roll` (−1..1).
+
+**Every copy site must carry `roll`** or it works in the check and not in the game:
+`vehicle.js _ctl` (P4), `race.js _pctl` (**done, pre-wave**), `ai.js this.ctl` +
+`itemworld.pilot()` (P5), `input.js poll()` (P4). Dev checks tolerate absence via
+`c.roll || 0`. At integration the lead greps `handbrake:` across `src/` to find any missed
+one.
+
+### 6.5 Mini-turbo hook (P4)
+
+`export function driftFire(st, tier)` in `miniturbo.js` — "better of, never the sum", the
+same rule the existing tier logic uses; sets `st.fired = tier` so `RaceFX.boost` plays the
+cues that already exist. `makeDrift()`'s key set does not change (boost-check A8 counts it).
+
+### 6.6 HUD payload additions (race.js writes, hud.js reads; pre-allocated, strings only on change)
+
+```
+vehicle: { …, drift 0..1, driftTier, boost 0..1, boostTier, padT,
+           trick: { id, name, pts, seq } }
+race:    { …, finalLap, style, styleBest }
+item:    { …, icon, seq }
+events:  { hitSeq, hitBy, hitWith, landSeq, padSeq }
+```
+
+Plus `hud.setInputMethod(m)` (P6), called beside `ui.setInputMethod`, and
+`hud.tip(id, text, ttl)` (P6) for first-run tips.
+
+### 6.7 AI ↔ ItemWorld read-only accessors (P5 owns both sides)
+
+`ctx.items` is supplied by race.js (**done, pre-wave**). ItemWorld exposes:
+
+```
+threats(out)        // caller-owned typed arrays: live projectiles + hazards
+                    //   { n, x, z, vx, vz, r, kind }
+nearestBox(ri, out)   nearestPad(ri, out)   canLock(ri)   hasItem(ri)
+events              // scalars: hitSeq, hitTarget, hitOwner, hitItem,
+                    //          pickSeq, pickRacer, pickItem, padSeq, padRacer
+```
+
+Read-only means read-only: the AI never mutates anything it reaches through `ctx.items`.
+`dev/ai-check.mjs` passes a mock `ctx.items` for the new scenarios only — the AI must
+early-return without one.
+
+### 6.8 Menu scene — `ui/menuscene.js` (P6 writes, main.js drives)
+
+```
+show(kind, { trackId, vehicleId, profile })   // 'main' | 'tracks' | 'garage'
+setTrack()   setVehicle()   update(dt, elapsed)   hide()   dispose()
+sky                                            // for projectSun
+resultsBurst(vfx, pos)
+```
+
+`hide()`/`dispose()` **must dispose its `Sky` before `buildWorld` runs** — `Sky.dispose`
+restores fog and environment, and a menu sky left alive is the wrong IBL for the whole race.
+UI emits `{ type: 'preview', trackId?, vehicleId? }` on card selection.
+
+### 6.9 Items copy — `game/items.js` (P6 owns exactly three fields; P5 reads `ITEMS` read-only)
+
+`desc`, `tip`, `icon` (`nitro | triple | wheel | slick | tow | sled | storm`). No other field
+in that file moves.
+
+### 6.10 Profile, settings, bindings
+
+- `profile.tips = { drive, drift, air, items, pad }`, whitelisted in `defaultProfile`,
+  `normalizeProfile` **and** `cloneProfile` — those are strict whitelists and a field missing
+  from any one of them is silently dropped.
+- `EXTRA_TRACKS = ['thunder']`; `REQUIREMENT.thunder = { track: 'canyon', podium: true }`;
+  `REWARDS.canyon.tracks = ['forest', 'thunder']`; whitelist over `ALL_TRACKS`.
+- Settings keys `motionFx` (0 | 0.5 | 1), `tips` (bool), `trickAssist` (0 | 1 | 2) in
+  `main.js DEFAULTS` (lead) and `ui.js SETTINGS_SPEC` (P6).
+- Bindings (P4, `input.js`): `KeyQ`/`KeyE` → `roll ∓1`; pad buttons 4/5 (LB/RB) → roll;
+  handbrake **held while airborne** is the trick modifier (steer rolls instead of yaws).
+  Touch is unchanged.
+
+### 6.11 Optional assets — `core/assets.js` (lead)
+
+`assets.get(id)` returns a texture **or null**, and null is the normal case:
+
+| id | what | consumer |
+|---|---|---|
+| `sky/<theme>` | skyline panorama | P1 dome (`uSkyline`/`uSkylineOn`) — the procedural vista ring is the fallback and hides when a panorama is present |
+| `ground` | `DataArrayTexture`, layers DIRT SAND ROCK MUD GRASS ROAD | P1 terrain shader (`uGround`/`uGroundOn`), close-range detail faded out by 60 m, sampled per surface id |
+| `art/<trackId>` | 16:9 stage key art | P6 stage cards, race loading screen |
+| `art/title` | 16:9 title key art | P6 menu backdrop |
+
+Every path must render correctly with the map empty. See hard rule 1.
+
+### 6.12 The signed-lateral texture (landed pre-wave)
+
+The heightfield is single-valued and carries no lateral channel, so the shader has no way to
+know where the road edge is. The bake now writes one: `baked.lat`, a `SURF_RES²` byte field
+holding the signed offset across the road in half-widths, encoded around a neutral 128 and
+saturating at ±1.4. `Terrain` uploads it as R8 `uLat`; the GLSL helper is
+
+```glsl
+float latAt(vec2 p);   // 0 on the crown, ±1 at the roadbed edge, ±1.4 out in the verge
+```
+
+Off the carved corridor it reads 0, so **gate every use on `roadMaskAt(p) > 0`**. P1 consumes
+it (lane tones, shoulder, verge dust); P3 owns what the bake writes into it.
 
 ## Performance budgets
 

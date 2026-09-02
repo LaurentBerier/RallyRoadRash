@@ -33,6 +33,7 @@ import { DUST_KIND } from '../world/dust.js';
 import { RaceTracker, formatTime } from './racecore.js';
 import { AIDriver, makeGridProfiles } from './ai.js';
 import { ItemWorld } from './itemworld.js';
+import { RaceFX } from './racefx.js';
 import { CAM } from './camera.js';
 import { applyResult, TRACK_ORDER } from './progression.js';
 import { Save } from '../core/save.js';
@@ -57,15 +58,9 @@ const OFF_COURSE_TIME = TUNE.reset.offCourseTime ?? 2.5;
 const RIVAL_RANGE = 40;             // m — the rival the engine mix can hear
 const RIVAL_SWAP = 1.0;             // s minimum before the rival voice moves
 const POS_STINGER_GAP = 1.0;        // s between position up/down stingers
-const LAVA_WARN_GAP = 3.5;          // s between lava banners
-const TOUCHDOWN_AIR = 0.25;         // s of air before a landing is an event
-const AIRTIME_BRAG = 1.3;           // s of air worth a HUD flourish. Hang-time
-                                    //   gravity makes 1 s airs routine; the brag
-                                    //   has to stay something you earn.
 const CLUNK_VEL = 1.9;              // m/s of compression velocity that thumps
 const IMPACT_MIN = 2.0;             // m/s of closing speed worth hearing
 const BOOST = TUNE.boost;           // read every frame in _wheelEffects
-const BOOST_HEAR = 70;              // m — a rival's boost you can still hear
 
 const AI_NAMES = ['MARA', 'JUKKA', 'REY', 'OTTO', 'SANNE'];
 /* Minimap dots have to be told apart at four pixels across, which the three
@@ -74,7 +69,6 @@ const RIVAL_COLORS = [0x36a8ff, 0x7ee06a, 0xffd23f, 0xc46bff, 0xff5f56];
 
 /* ---------------- module scratch ---------------- */
 const _v1 = new THREE.Vector3();
-const _v2 = new THREE.Vector3();
 const _sp = { x: 0, y: 0, z: 0 };
 const _sd = { x: 0, z: 0 };
 const _near = { s: 0, d: 0, side: 1, lat: 0, x: 0, z: 0 };
@@ -128,7 +122,6 @@ export class Race {
     this._beat = -1;
     this._disposed = false;
     this._resultsShown = false;
-    this._lavaT = 0;
     this._posT = 0;
     this._rivalT = 0;
     this._rivalId = -1;
@@ -160,7 +153,13 @@ export class Race {
       scene: this.engine.scene, terrain: this.terrain, trackData: this.trackData,
       dust: this.dust, audio: this.audio, feel: this.feel, engine: this.engine,
       racers: this.racers, tracker: this.tracker, rng: this.rng,
-      enabled: o.items !== false,
+      enabled: o.items !== false, vfx: null,
+    });
+    /* Presentation. Everything this object does is a sound, a particle or a
+       shake; nothing it does can change the race. See racefx.js. */
+    this.fx = new RaceFX({
+      audio: this.audio, feel: this.feel, dust: this.dust, terrain: this.terrain,
+      hud: this.hud, engine: this.engine, vfx: null,
     });
     /* Set at the green flag and never cleared mid-race: a record set with
        items on is FLAGGED as such, and toggling them off on the last lap must
@@ -168,8 +167,13 @@ export class Race {
     this.itemsFlag = false;
 
     /* ---- reusable per-frame payloads ---- */
-    this._pctl = { throttle: 0, steer: 0, brake: 0, handbrake: 0 };
-    this._aictx = { vehicles: this.racers.map(r => r.vehicle), tracker: this.tracker, myId: 0, state: 'countdown' };
+    this._pctl = { throttle: 0, steer: 0, brake: 0, handbrake: 0, roll: 0 };
+    this._aictx = {
+      vehicles: this.racers.map(r => r.vehicle), tracker: this.tracker,
+      // Read-only view of the item world, so a driver can aim, dodge and
+      // decide whether a box is worth the detour. See ai-items.js.
+      items: this.items, myId: 0, state: 'countdown',
+    };
     this._look = { lookX: 0, lookY: 0, zoom: 0 };
     this._as = {
       rpm: 0, load: 0, speed: 0, slipLat: 0, slipLong: 0, surface: 0,
@@ -229,6 +233,10 @@ export class Race {
         spec, vehicle: v, ai: null,
         slot: i,
         wasAir: false, airPeak: 0,
+        /* Trick columns. Always present, never lazily added: itemworld.js
+           reads racer rows through a fixed shape and a hidden class change
+           mid-race costs more than the three slots do. */
+        style: 0, bestTrick: 0, trickSeq: 0,
         ghostT: 0, flipT: 0, stuckT: 0, offT: 0,
         bestS: null, noProgT: 0,
         finished: false, pos: i + 1,
@@ -249,6 +257,7 @@ export class Race {
 
   /** Put the field on the grid. Called at construction and by restart(). */
   _enterGrid(first) {
+    this.fx.reset();
     const slots = this.trackData.gridSlots;
     for (const r of this.racers) {
       const g = slots[r.slot % slots.length];
@@ -479,12 +488,13 @@ export class Race {
         const c = this._pctl;
         if (locked) {
           // Brakes on, engine live: the countdown has to feel like held revs.
-          c.throttle = 0; c.steer = 0; c.brake = 1; c.handbrake = 1;
+          c.throttle = 0; c.steer = 0; c.brake = 1; c.handbrake = 1; c.roll = 0;
         } else {
           c.throttle = raw.throttle || 0;
           c.steer = raw.steer || 0;
           c.brake = raw.brake || 0;
           c.handbrake = raw.handbrake ? 1 : 0;
+          c.roll = raw.roll || 0;
         }
         ctl = c;
       } else {
@@ -519,7 +529,7 @@ export class Race {
     for (let i = 0; i < FIELD - 1; i++) {
       for (let j = i + 1; j < FIELD; j++) {
         const impact = resolveVehiclePair(this.racers[i].vehicle, this.racers[j].vehicle);
-        if (impact > IMPACT_MIN) this._contact(this.racers[i], this.racers[j], impact);
+        if (impact > IMPACT_MIN) this.fx.contact(this.racers[i], this.racers[j], impact, this.player);
       }
     }
 
@@ -529,29 +539,7 @@ export class Race {
          comeback item that ends in a ditch, so it is the one exception. */
       if (this.items.isSledding(r.id)) continue;
       const impact = this.props.resolve(r.vehicle);
-      if (impact > IMPACT_MIN) this._contact(r, null, impact);
-    }
-  }
-
-  /** Collision heard and felt. Rivals only ring the bell if you are near them. */
-  _contact(a, b, impact) {
-    const p = this.player.vehicle;
-    const near = a.isPlayer || (b && b.isPlayer);
-    let gain = 1, pan = 0;
-    if (!near) {
-      const src = a.vehicle.pos;
-      const d = src.distanceTo(p.pos);
-      if (d > 55) return;
-      gain = clamp(1 - d / 55, 0.15, 1);
-      pan = clamp(_v1.subVectors(src, p.pos).dot(p.right) / 22, -1, 1);
-    }
-    this.audio.crash(clamp(impact * 0.16, 0.2, 2.2) * gain, pan);
-    if (near && this.feel) {
-      // Direction of the shove, so the shake leans the way the hit came from.
-      const other = b ? (a.isPlayer ? b.vehicle : a.vehicle) : null;
-      if (other) _v2.subVectors(p.pos, other.pos).setY(0).normalize();
-      else _v2.copy(p.vel).setY(0).normalize().negate();
-      this.feel.collision(impact, _v2);
+      if (impact > IMPACT_MIN) this.fx.contact(r, null, impact, this.player);
     }
   }
 
@@ -629,48 +617,6 @@ export class Race {
     }
   }
 
-  /**
-   * The one-shot half of the mini-turbo: the chime on a tier, and the shove
-   * on release. Split out of the wheel loop because it is per CAR, not per
-   * wheel, and because `tierUp`/`fired` are single-frame flags that must be
-   * consumed exactly once.
-   *
-   * Rivals are distance-gated the same way _contact() gates a crash: a boost
-   * seventy metres up the road is a sound you should hear, faintly, because
-   * it tells you somebody just got a run on you. Beyond that it is noise.
-   */
-  _boostCues(r, D, camD) {
-    if (D.tierUp) {
-      if (r.isPlayer) {
-        this.audio.boostTier(D.tier);
-        if (this.feel) this.feel.kick(BOOST.tierFov);
-      }
-    }
-    if (!D.fired) return;
-    const t = D.fired;
-    if (r.isPlayer) {
-      this.audio.boostFire(t, 1);
-      if (this.feel) {
-        this.feel.kick(BOOST.fireFov[t - 1]);
-        this.feel.addShake(BOOST.fireShake[t - 1]);
-      }
-    } else if (camD < BOOST_HEAR) {
-      this.audio.boostFire(t, clamp(1 - camD / BOOST_HEAR, 0.12, 0.5));
-    }
-    /* The flame. EMBER is already a glowing, buoyant, cooling particle whose
-       shader multiplies by a fixed warm tint and clears the bloom threshold —
-       so an ember IS a flame with no new particle kind, no fourth entry in
-       dust.js's K_GY/K_BUOY tables and no shader branch. It cannot be tinted
-       cool, which is why the TIER is read from the charge dust and the FLAME
-       is the same every time. */
-    const v = r.vehicle;
-    if (camD < 120) {
-      const f = v.forward;
-      this.dust.spawn(3 + t, v.pos.x - f.x * 1.6, v.pos.y - 0.15, v.pos.z - f.z * 1.6,
-        2.0 + t * 0.9, 0.30, -f.x, -f.z, 1.0, 0.55, 0.16, DUST_KIND.EMBER);
-    }
-  }
-
   /* ---------------- 7: ground effects from the wheels ----------------
      One pass per contact wheel doing
      tyre marks, ruts and the rooster tail, driven off the surface table so a
@@ -702,7 +648,7 @@ export class Race {
          have banked something" are still different pictures. */
       const bcol = D.active ? BOOST.col[D.tier > 0 ? D.tier - 1 : 0] : null;
       const bglow = D.tier > 0 ? BOOST.glow : BOOST.glow * 0.5;
-      this._boostCues(r, D, camD);
+      this.fx.boost(r, D, camD);
 
       for (let i = 0; i < 4; i++) {
         const w = v.wheels[i];
@@ -786,25 +732,8 @@ export class Race {
       /* Landings and lip departures, off the airborne edge. airTime is already
          zero on the frame you touch down, so the peak is carried forward. */
       const air = v.airborne;
-      if (air && !r.wasAir && v.vel.y > 4) {
-        this.audio.jumpWhoosh(clamp(v.vel.y * 0.12, 0.25, 1.5) * (r.isPlayer ? 1 : 0.35));
-        if (r.isPlayer && this.feel && this.feel.jump) this.feel.jump();
-      }
-      if (!air && r.wasAir && r.airPeak > TOUCHDOWN_AIR) {
-        const hit = v.hardHit;
-        if (r.isPlayer) {
-          if (this.feel) this.feel.landing(hit);
-          this.audio.land(clamp(hit * 0.22, 0.2, 2.2), v.surfaceId);
-          if (r.airPeak > AIRTIME_BRAG) this.hud.airtime(r.airPeak);
-        } else if (camD < 70) {
-          this.audio.land(clamp(hit * 0.22, 0.2, 2.2) * clamp(1 - camD / 70, 0.1, 0.6), v.surfaceId);
-        }
-        const S = SURFACES[v.surfaceId] || SURFACES[SURF.DIRT];
-        if (emit > 0) {
-          this.dust.burst(v.pos.x, this.terrain.heightAt(v.pos.x, v.pos.z), v.pos.z,
-            Math.atan2(v.vel.x, v.vel.z), clamp(hit * 0.16, 0.4, 2.0) * S.dust, S.dustCol);
-        }
-      }
+      if (air && !r.wasAir) this.fx.lip(r, v);
+      if (!air && r.wasAir) this.fx.touchdown(r, v, camD, emit);
       r.airPeak = air ? v.airTime : 0;
       r.wasAir = air;
     }
@@ -812,14 +741,7 @@ export class Race {
     /* Lava is not damage — it is 0.55 grip and a lot of drag, which is
        punishment enough. The banner and the hiss exist so the player knows
        WHY the car has gone vague. */
-    const pv = this.player.vehicle;
-    if (this.terrain.surfaceAt(pv.pos.x, pv.pos.z) === SURF.LAVA) {
-      this.audio.scrape(SURF.LAVA, clamp(Math.abs(pv.speed) / 18, 0.2, 1));
-      this._lavaT -= dt;
-      if (this._lavaT <= 0) { this._lavaT = LAVA_WARN_GAP; this.hud.banner('LAVA CRUST — NO GRIP', 'bad', 1.8); }
-    } else if (this._lavaT > 0) {
-      this._lavaT = 0;
-    }
+    this.fx.lava(dt, this.player.vehicle);
   }
 
   /* ---------------- 8: reset and recovery ---------------- */
@@ -958,8 +880,7 @@ export class Race {
       this._offCourse = 0; this._wrongWay = false;
       if (banner) this.hud.banner(banner, 'warn', 1.6);
     }
-    const S = SURFACES[v.surfaceId] || SURFACES[SURF.DIRT];
-    this.dust.burst(v.pos.x, this.terrain.heightAt(v.pos.x, v.pos.z), v.pos.z, yaw, 1.4, S.dustCol);
+    this.fx.respawn(v, yaw);
   }
 
   /* ---------------- 11: audio mix ---------------- */
