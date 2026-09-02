@@ -20,6 +20,7 @@ import { Input } from './core/input.js';
 import { Audio } from './core/audio.js';
 import { Save } from './core/save.js';
 import { clamp } from './core/rng.js';
+import { Assets, NO_ASSETS, loadAssets } from './core/assets.js';
 import { bakeTrack, Terrain } from './world/terrain.js';
 import { Sky, SKY_THEMES } from './world/sky.js';
 import { Props } from './world/props.js';
@@ -50,7 +51,12 @@ const App = {
   state: AS.BOOT,
   settings: null,
   profile: null,
-  world: null,        // { terrain, sky, props, dust } — Race disposes it
+  world: null,        // { terrain, sky, props, dust, vfx } — Race disposes it
+  /* Optional imagery. Starts as the EMPTY set, not null, so every consumer
+     runs its fallback path from the first frame and never has to test for
+     the handle itself — only for the texture, which is null most of the
+     time. Replaced in place when the manifest resolves. */
+  assets: NO_ASSETS,
   race: null,
   elapsed: 0,
   muted: false,
@@ -109,6 +115,17 @@ async function boot() {
 
   wireLifecycle();
   showScreen('main');
+
+  /* Optional images, loaded AFTER the menu is up and deliberately not
+     awaited: the game is fully playable with assets/ empty, and blocking
+     the boot on a set of JPEGs that may not exist would trade a certain
+     delay for an uncertain gain. Consumers pick them up at their next
+     material rebuild — which for a race is buildWorld(), and for the menu
+     is the next card paint. */
+  loadAssets('assets/manifest.json').then((map) => {
+    App.assets = new Assets(map);
+    if (App.assets.any && App.ui.setAssets) App.ui.setAssets(App.assets);
+  }).catch(() => { /* stays NO_ASSETS; nothing downstream cares */ });
 
   App.tick = tick;
   App.showScreen = showScreen;
