@@ -4,12 +4,24 @@
    Everything a Vehicle LOOKS like, and nothing it does. Extracted from
    vehicle.js so the solver and the model kit can be worked on separately:
    physics reads none of this, and this reads only published body state
-   (pos/quat, per-wheel worldPos/steer/spin, the _accel* pair, contacts).
+   (pos/quat, per-wheel worldPos/steer/spin, the _accel* pair, contacts,
+   the drift tier and the item drive multiplier).
 
    The Vehicle still OWNS the objects — root, chassis, wheelRoot, leanRoot,
    mats, tex, geos, exhaust, paintColor and the per-wheel obj/hub/arm/coil
    live on the instance, because the dev harnesses reach in and read them.
    These functions only build, drive and free them.
+
+   Two hard constraints shape most of what follows:
+
+     • `updateVehicleVisuals` runs once per car per frame, six cars deep.
+       It allocates NOTHING — no vectors, no closures, no array literals.
+     • Every mesh under `root` casts a shadow (dev/vehicle-check gates it,
+       and a car whose wheels do not cast reads as hovering). The single
+       exemption is `v.exhaust`. Additive transients therefore have to be
+       something the shadow pass does not render at all, which is why the
+       lamp/brake/flame glows are `THREE.Sprite` and not quads: three's
+       shadow map only walks Mesh/Line/Points.
 
    Conventions match vehicle.js: metres, radians, Y up, local forward +Z.
    ============================================================ */
@@ -17,6 +29,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clamp, makeRNG } from '../core/rng.js';
 import { G } from './config.js';
+import { liveryTexture, LAYOUTS } from './vehicle-livery.js';
 
 const RACE_NUMBERS = [7, 12, 23, 41, 68, 95, 3, 55];
 /* Peak visual bank on a two-wheeler, radians. 0.62 = 35.5°, which is what a
@@ -25,8 +38,38 @@ const RACE_NUMBERS = [7, 12, 23, 41, 68, 95, 3, 55];
    the wrong sport. */
 const BIKE_LEAN_MAX = 0.62;
 
+/* Which of the five graphics a machine's WORKS car wears. AI variants walk
+   the list from there (`+ livery`), so a grid never shows the same layout
+   twice until it is more than five cars deep in one machine — and hue alone
+   is never what tells two cars apart. */
+const TEAM_LAYOUT = { hopper: 0, redline: 1, moto: 2, ridgeback: 3 };
+
+/* Rim family per body style. A beadlock is a plate with a bolted ring, a
+   truck wheel is six heavy spokes, and the wedge gets the turbine off a
+   road car — three silhouettes you can name from the chase camera. */
+const RIM_STYLE = { buggy: 'beadlock', truck: 'spoke6', wedge: 'turbine5', bike: 'wire' };
+/* Half the rim width, as a fraction of spec.wheelW. The tyre's bead and the
+   rim's flange are the same circle on the same plane — both builders read
+   this so they cannot drift apart. */
+const RIM_W = 0.40;
+
+/* Base headlamp colour, over-bright by 1.6× so it clears the bloom
+   threshold (engine.js: UnrealBloomPass at 1.15 over a HalfFloat target).
+   Kept as linear components because updateVisuals rescales it every time
+   the ghost flicker moves and must not allocate a Color to do it. */
+const LAMP_R = 1.600, LAMP_G = 1.447, LAMP_B = 1.157;
+
+/* Body panels that take mud. The cage, the rims and the glass do not: mud
+   sticks to flat painted surfaces and washes off everything that spins. */
+const MUD_MATS = ['paint', 'paint2', 'livery', 'dark'];
+/* Everything solid enough to need fading when a car is ghosted. Fading only
+   the painted panels leaves a set of solid wheels floating inside a
+   translucent body, which reads as a bug rather than as a respawn. */
+const GHOST_MATS = ['paint', 'paint2', 'livery', 'dark', 'metal', 'rim',
+  'tyre', 'spring', 'glass', 'visor', 'helmet'];
+
 /* ============================================================
-   PUBLIC API — build / update / dispose / ghost
+   PUBLIC API — build / update / dispose / ghost / mud
    ============================================================ */
 
 /**
@@ -42,42 +85,36 @@ export function buildVehicleVisuals(v, scene, spec) {
   scene.add(v.root);
   const rng = makeRNG(0x9a17 + v.livery * 7919 + spec.id.length);
   const hue = spec.liveryHues[v.livery % spec.liveryHues.length] || 0;
-  const num = RACE_NUMBERS[v.livery % RACE_NUMBERS.length];
+  /* Livery 0 is the works car and wears the team's own number off the spec;
+     everything behind it on the grid is a privateer and draws from the pool. */
+  const num = v.livery === 0 ? (spec.number | 0) || RACE_NUMBERS[0]
+    : RACE_NUMBERS[v.livery % RACE_NUMBERS.length];
 
   const base = new THREE.Color(spec.color);
   base.getHSL(_hsl);
   const paint = new THREE.Color().setHSL((_hsl.h + hue) % 1, _hsl.s, _hsl.l);
   const paint2 = new THREE.Color().setHSL((_hsl.h + hue + 0.5) % 1,
     _hsl.s * 0.35, _hsl.l * 0.34);
+  /* The third colour. paint2 is the body's own shadow — put a graphic in it
+     and the graphic vanishes at 40 m, which is the range every one of these
+     cars is actually looked at. `accent` is the complement pushed to full
+     chroma and mid lightness: the one value on the panel that survives
+     distance, dust and a low sun. */
+  const accent = new THREE.Color().setHSL((_hsl.h + hue + 0.5) % 1,
+    Math.min(1, _hsl.s * 1.1 + 0.30), 0.60);
+  const helmet = new THREE.Color().setHSL((_hsl.h + hue) % 1,
+    Math.min(1, _hsl.s * 0.55), 0.84);
   v.paintColor = paint.getHex();
 
-  v.tex = { livery: liveryTexture(paint, paint2, num, spec.name, rng) };
-
-  const M = v.mats = {
-    paint: new THREE.MeshStandardMaterial({ color: paint, metalness: 0.30, roughness: 0.42 }),
-    paint2: new THREE.MeshStandardMaterial({ color: paint2, metalness: 0.20, roughness: 0.60 }),
-    livery: new THREE.MeshStandardMaterial({
-      map: v.tex.livery, color: 0xffffff, metalness: 0.15, roughness: 0.48,
-    }),
-    dark: new THREE.MeshStandardMaterial({ color: 0x1d1f24, metalness: 0.35, roughness: 0.74 }),
-    metal: new THREE.MeshStandardMaterial({ color: 0x9aa0a8, metalness: 0.90, roughness: 0.38 }),
-    tyre: new THREE.MeshStandardMaterial({ color: 0x1a1a1c, metalness: 0.05, roughness: 0.92 }),
-    rim: new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.85, roughness: 0.32 }),
-    spring: new THREE.MeshStandardMaterial({
-      map: springTexture(), color: 0xe8eaee, metalness: 0.55, roughness: 0.48,
-    }),
-    glass: new THREE.MeshPhysicalMaterial({
-      color: 0x0b1015, metalness: 0.20, roughness: 0.10,
-      clearcoat: 1.0, clearcoatRoughness: 0.05, envMapIntensity: 1.8,
-    }),
-    helmet: new THREE.MeshStandardMaterial({ color: 0xf0f2f5, metalness: 0.1, roughness: 0.45 }),
-    lamp: new THREE.MeshBasicMaterial({ color: 0xfff4dc }),
-    brake: new THREE.MeshBasicMaterial({ color: 0x3a0705 }),
-    glow: new THREE.MeshBasicMaterial({
-      color: 0xff8a3a, transparent: true, opacity: 0.0,
-      blending: THREE.AdditiveBlending, depthWrite: false,
+  const layout = LAYOUTS[((TEAM_LAYOUT[spec.id] | 0) + v.livery) % LAYOUTS.length];
+  v.tex = {
+    livery: liveryTexture({
+      paint, paint2, accent, number: num, layout, rng,
+      team: spec.team || spec.name,
     }),
   };
+
+  const M = buildMaterials(v, paint, paint2, helmet);
 
   v.chassis = new THREE.Group();
   v.wheelRoot = new THREE.Group();
@@ -103,10 +140,11 @@ export function buildVehicleVisuals(v, scene, spec) {
 
   const kit = new Kit();
   if (spec.bodyStyle === 'truck') buildTruck(kit, spec);
-  else if (spec.bodyStyle === 'wedge') buildWedge(kit, spec, v);
-  else if (spec.bodyStyle === 'bike') buildBike(kit, spec, v);
+  else if (spec.bodyStyle === 'wedge') buildWedge(kit, spec);
+  else if (spec.bodyStyle === 'bike') buildBike(kit, spec);
   else buildBuggy(kit, spec);
   v.geos = kit.flush(v.chassis, M);
+  buildGlowRig(v, kit, M);
 
   buildRunningGear(v, spec, M);
   // Traverse the WHOLE root, not just the chassis — the wheels, arms and
@@ -118,6 +156,161 @@ export function buildVehicleVisuals(v, scene, spec) {
   v.sync();
 }
 
+/* ---------------- materials ----------------
+   One set per vehicle, because every one of them carries either the car's
+   own paint, its own livery canvas or its own mud uniform. `name` is set on
+   all of them so dev/garage.js can print a triangle count per material
+   without a lookup table that would go stale the first time one is added. */
+function buildMaterials(v, paint, paint2, helmet) {
+  const uMud = v._uMud = { value: 0 };
+  const glow = glowTexture();
+  const spriteMat = (color) => new THREE.SpriteMaterial({
+    map: glow, color, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+  });
+
+  const M = v.mats = {
+    /* Physical, not Standard: a rally car is painted metal under lacquer,
+       and the second specular lobe is the entire difference between "this
+       is a colour" and "this is a panel". clearcoatRoughness stays low —
+       the mud path below is what dulls it, on purpose and under control. */
+    paint: new THREE.MeshPhysicalMaterial({
+      color: paint, metalness: 0.35, roughness: 0.38,
+      clearcoat: 0.90, clearcoatRoughness: 0.12, envMapIntensity: 1.10,
+    }),
+    paint2: new THREE.MeshPhysicalMaterial({
+      color: paint2, metalness: 0.28, roughness: 0.52,
+      clearcoat: 0.55, clearcoatRoughness: 0.22, envMapIntensity: 0.95,
+    }),
+    livery: new THREE.MeshPhysicalMaterial({
+      map: v.tex.livery, color: 0xffffff, metalness: 0.18, roughness: 0.42,
+      clearcoat: 0.85, clearcoatRoughness: 0.14, envMapIntensity: 1.05,
+    }),
+    dark: new THREE.MeshStandardMaterial({ color: 0x1d1f24, metalness: 0.35, roughness: 0.74 }),
+    // the cage, the bullbar, the pipes: chrome, and it wants the sky in it
+    metal: new THREE.MeshStandardMaterial({
+      color: 0xc6ccd4, metalness: 0.95, roughness: 0.22, envMapIntensity: 1.60,
+    }),
+    rim: new THREE.MeshStandardMaterial({
+      color: 0xb9c0c9, metalness: 0.92, roughness: 0.28, envMapIntensity: 1.35,
+    }),
+    tyre: new THREE.MeshStandardMaterial({ color: 0x121215, metalness: 0.02, roughness: 0.95 }),
+    spring: new THREE.MeshStandardMaterial({
+      map: springTexture(), color: 0xe8eaee, metalness: 0.55, roughness: 0.48,
+    }),
+    glass: new THREE.MeshPhysicalMaterial({
+      color: 0x0b1015, metalness: 0.20, roughness: 0.10,
+      clearcoat: 1.0, clearcoatRoughness: 0.05, envMapIntensity: 1.8,
+    }),
+    /* A mirrored visor, not a window. It is 20 cm of the model and it is the
+       only part of a driver anybody ever looks at; leaving it the same dark
+       glass as the screen makes the helmet read as empty. */
+    visor: new THREE.MeshStandardMaterial({
+      color: 0x2c2412, metalness: 1.0, roughness: 0.07, envMapIntensity: 2.40,
+    }),
+    helmet: new THREE.MeshStandardMaterial({ color: helmet, metalness: 0.10, roughness: 0.34 }),
+    lamp: new THREE.MeshBasicMaterial({ color: new THREE.Color(LAMP_R, LAMP_G, LAMP_B) }),
+    brake: new THREE.MeshBasicMaterial({ color: 0x3a0705 }),
+    glow: new THREE.MeshBasicMaterial({
+      color: 0xff8a3a, transparent: true, opacity: 0.0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }),
+    headGlow: spriteMat(0xffe9c0),
+    brakeGlow: spriteMat(0xff2a10),
+    flameGlow: spriteMat(0xff9a44),
+  };
+  for (const k in M) M[k].name = k;
+  for (const k of MUD_MATS) mudify(M[k], uMud);
+
+  /* Pre-built so setGhostLook can run every frame without walking an object
+     literal or filtering a list. `k` is the last value applied, which is how
+     the (very common) not-ghosted case costs one comparison. */
+  v._ghost = { k: 0, mats: GHOST_MATS.map(k => M[k]) };
+  v._ghostFlicker = 1;
+  v._lampK = -1;
+  return M;
+}
+
+/**
+ * Mud on the paint, as a shader patch rather than a second texture set: one
+ * varying, one uniform, and the same 1024² livery canvas either way. It
+ * darkens the panel, roughens it and — the part that actually sells it —
+ * kills the clearcoat, because the difference between a clean car and a
+ * filthy one is almost entirely the specular.
+ */
+function mudify(mat, uMud) {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uMud = uMud;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vMudP;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvMudP = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>',
+        '#include <common>\nuniform float uMud;\nvarying vec3 vMudP;\n' +
+        'float mudMask(){\n' +
+        // body space: y is height above the centre of mass, so low = dirty
+        '  float h = smoothstep(0.45, -0.35, vMudP.y);\n' +
+        '  float n = sin(vMudP.x * 13.0) * sin(vMudP.z * 9.0 + 1.7) * 0.5 + 0.5;\n' +
+        '  return clamp(uMud * h * (0.40 + 0.80 * n), 0.0, 1.0);\n}')
+      .replace('#include <color_fragment>',
+        '#include <color_fragment>\n\tfloat _mud = mudMask();\n' +
+        '\tdiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.105, 0.078, 0.050), _mud);')
+      .replace('#include <roughnessmap_fragment>',
+        '#include <roughnessmap_fragment>\n\troughnessFactor = mix(roughnessFactor, 0.94, _mud);')
+      .replace('#include <lights_physical_fragment>',
+        '#include <lights_physical_fragment>\n\t#ifdef USE_CLEARCOAT\n' +
+        '\tmaterial.clearcoat = mix(material.clearcoat, 0.02, _mud);\n' +
+        '\tmaterial.clearcoatRoughness = mix(material.clearcoatRoughness, 0.85, _mud);\n\t#endif');
+  };
+}
+
+/**
+ * How filthy this car is, 0 = washed, 1 = a lap of TIMBERLINE. Cheap enough
+ * to drive off surface time per frame if a caller ever wants to.
+ */
+export function setMudLook(v, k01) {
+  if (v._uMud) v._uMud.value = clamp(k01, 0, 1);
+}
+
+/* ---------------- the additive rig ----------------
+   `v.exhaust` is the pipe flare and the ONE mesh dev/vehicle-check excuses
+   from the shadow pass. Everything else additive on the car — lamp bloom,
+   brake bloom, the flame's own halo — hangs under it as `THREE.Sprite`,
+   which the shadow map skips outright.
+
+   The one wrinkle: the flare SCALES with boost, and a parent's scale would
+   drag its children's positions with it. `_glowRig` sits between them
+   carrying the exact inverse, so the sprites keep their metres. */
+function buildGlowRig(v, kit, M) {
+  const F = kit.flameSpec;
+  const flame = new THREE.Mesh(
+    new THREE.ConeGeometry(F.r, F.len, 8, 1, true).rotateX(-Math.PI / 2), M.glow);
+  flame.position.set(F.x, F.y, F.z);
+  flame.renderOrder = 6;
+  v.chassis.add(flame);
+  v.exhaust = flame;
+  v.geos.push(flame.geometry);
+
+  const rig = v._glowRig = new THREE.Group();
+  flame.add(rig);
+  const spr = (mat, x, y, z, size) => {
+    const s = new THREE.Sprite(mat);
+    s.position.set(x - F.x, y - F.y, z - F.z);
+    s.scale.set(size, size, 1);
+    s.renderOrder = 7;
+    rig.add(s);
+    return s;
+  };
+  /* Only the flare halo is kept by reference — it is the one sprite whose
+     SIZE moves. Every lamp bloom is driven through its shared material, so
+     twelve headlights on a truck cost one opacity write, not twelve. */
+  v._sprFlame = spr(M.flameGlow, F.x, F.y, F.z - F.len * 0.45, 0.3);
+  for (const g of kit.glows) {
+    spr(g.kind === 'brake' ? M.brakeGlow : M.headGlow, g.x, g.y, g.z, g.size);
+  }
+}
+
+/* ---------------- running gear, four-wheeler ---------------- */
 function buildRunningGear(v, spec, M) {
   if (spec.bodyStyle === 'bike') return buildBikeGear(v, spec, M);
   const sxs = spec.bodyStyle === 'buggy';
@@ -125,50 +318,33 @@ function buildRunningGear(v, spec, M) {
   // the contact-patch number the physics uses. Purely cosmetic.
   const visW = spec.wheelW * (sxs ? 1.16 : 1);
   const wheelGeo = buildWheelGeometry(spec.wheelR, visW);
-  // The rim face must reach the tyre face or it vanishes inside the sidewall.
-  const discGeo = new THREE.CylinderGeometry(spec.wheelR * 0.60, spec.wheelR * 0.60,
-    sxs ? visW * 0.96 : spec.wheelW * 0.20, 16);
-  discGeo.rotateZ(Math.PI / 2);
+  /* Rims are handed — the face is on the outboard side and the brake disc
+     tucks in behind it — so there are two geometries, not one mirrored by a
+     negative scale (which would invert every normal on the car's left). Two
+     wheels share each. */
+  const rimGeo = { '-1': null, 1: null }, calGeo = { '-1': null, 1: null };
+  for (const s of [-1, 1]) {
+    rimGeo[s] = buildRimGeometry(spec.wheelR, visW, RIM_STYLE[spec.bodyStyle], s);
+    calGeo[s] = buildCaliperGeometry(spec.wheelR, visW, s);
+  }
   const armGeo = roundedBox(sxs ? 0.075 : 0.11, sxs ? 0.075 : 0.09, 1, 0.028);
   const coilGeo = new THREE.CylinderGeometry(sxs ? 0.075 : 0.055, sxs ? 0.075 : 0.055, 1, 9);
   coilGeo.rotateX(Math.PI / 2);                        // make it a +Z member too
   const shaftGeo = sxs ? (() => { const g = new THREE.CylinderGeometry(0.026, 0.026, 1, 7); g.rotateX(Math.PI / 2); return g; })() : null;
-  let beadGeo = null;
-  if (sxs) {
-    // Beadlock face: outer ring + eight bolt heads, one merged geometry that
-    // spins with the tyre. Mirrored per side at attach time via scale.x.
-    const parts = [];
-    const face = visW * 0.5 + 0.008, ringR = spec.wheelR * 0.60;
-    const ring = new THREE.TorusGeometry(ringR, 0.030, 8, 22);
-    ring.rotateY(Math.PI / 2);
-    ring.translate(face, 0, 0);
-    parts.push(ring);
-    for (let i = 0; i < 8; i++) {
-      const a = i / 8 * Math.PI * 2;
-      const bolt = new THREE.CylinderGeometry(0.022, 0.022, 0.04, 6);
-      bolt.rotateZ(Math.PI / 2);
-      bolt.translate(face + 0.012, Math.cos(a) * ringR, Math.sin(a) * ringR);
-      parts.push(bolt);
-    }
-    beadGeo = mergeGeometries(parts, false);
-    parts.forEach(p => p.dispose());
-  }
-  v.geos.push(wheelGeo, discGeo, armGeo, coilGeo);
+  v.geos.push(wheelGeo, rimGeo[-1], rimGeo[1], calGeo[-1], calGeo[1], armGeo, coilGeo);
   if (shaftGeo) v.geos.push(shaftGeo);
-  if (beadGeo) v.geos.push(beadGeo);
 
   for (const w of v.wheels) {
     const g = new THREE.Group();
     const tyre = new THREE.Mesh(wheelGeo, M.tyre);
-    tyre.castShadow = true; tyre.receiveShadow = true;
     g.add(tyre);
-    const disc = new THREE.Mesh(discGeo, M.rim);
-    g.add(disc);
-    if (beadGeo) {
-      const bead = new THREE.Mesh(beadGeo, M.rim);
-      bead.scale.x = w.side;                 // outboard face on both sides
-      g.add(bead);
-    }
+    g.add(new THREE.Mesh(rimGeo[w.side], M.rim));
+    /* The caliper is bolted to the upright, not to the disc. `w.obj` carries
+       both the steering angle and the wheel spin, so the caliper cancels the
+       spin back out every frame and keeps the steering — one property write,
+       and without it the car has a brake caliper orbiting its own wheel. */
+    w.caliper = new THREE.Mesh(calGeo[w.side], M.paint);
+    g.add(w.caliper);
     w.obj = g; w.hub = tyre;
     v.wheelRoot.add(g);
 
@@ -181,13 +357,11 @@ function buildRunningGear(v, spec, M) {
     const armMat = sxs ? M.paint : M.dark;
     w.arm = new THREE.Mesh(armGeo, armMat);
     w.coil = new THREE.Mesh(coilGeo, sxs ? M.spring : M.metal);
-    w.arm.castShadow = w.coil.castShadow = true;
     v.wheelRoot.add(w.arm, w.coil);
     w.armRoot.set(w.side * spec.track * 0.20, w.mount.y - spec.suspRest * 0.90, w.mount.z);
     w.coilRoot.set(w.side * spec.track * 0.30, w.mount.y + 0.20, w.mount.z - 0.06);
     if (sxs) {
       w.arm2 = new THREE.Mesh(armGeo, armMat);
-      w.arm2.castShadow = true;
       v.wheelRoot.add(w.arm2);
       w.arm2Root = new THREE.Vector3(w.side * spec.track * 0.22,
         w.mount.y - spec.suspRest * 0.52, w.mount.z + 0.10);
@@ -214,34 +388,27 @@ function buildRunningGear(v, spec, M) {
    case anywhere in the physics. ---------------------------------------- */
 function buildBikeGear(v, spec, M) {
   const R = spec.wheelR;
-  const wheelGeo = buildWheelGeometry(R, spec.wheelW);
-  // Spoked hub: a plain disc reads as a scooter wheel. Rim ring + hub barrel.
-  const hubParts = [];
-  const rim = new THREE.CylinderGeometry(R * 0.80, R * 0.80, spec.wheelW * 0.34, 18, 1, true);
-  rim.rotateZ(Math.PI / 2); hubParts.push(rim);
-  const barrel = new THREE.CylinderGeometry(R * 0.20, R * 0.20, spec.wheelW * 1.5, 10);
-  barrel.rotateZ(Math.PI / 2); hubParts.push(barrel);
-  for (let i = 0; i < 8; i++) {
-    const a = i / 8 * Math.PI * 2;
-    const spoke = new THREE.BoxGeometry(spec.wheelW * 0.10, R * 0.62, 0.012);
-    spoke.translate(0, R * 0.50, 0);
-    spoke.rotateX(a);
-    hubParts.push(spoke);
+  // Taller, narrower knobs than a car: this is an MX tyre, and the knobs
+  // are most of what says so from the side.
+  const wheelGeo = buildWheelGeometry(R, spec.wheelW, 13, 0.135);
+  const rimGeo = { '-1': null, 1: null }, calGeo = { '-1': null, 1: null };
+  for (const s of [-1, 1]) {
+    rimGeo[s] = buildRimGeometry(R, spec.wheelW, 'wire', s);
+    calGeo[s] = buildCaliperGeometry(R, spec.wheelW, s);
   }
-  const discGeo = mergeGeometries(hubParts, false);
-  hubParts.forEach(p => p.dispose());
   // Fork legs and swingarm rails are round tube; the shock wears a spring.
   const legGeo = new THREE.CylinderGeometry(0.030, 0.036, 1, 8); legGeo.rotateX(Math.PI / 2);
   const armGeo = new THREE.CylinderGeometry(0.034, 0.042, 1, 7); armGeo.rotateX(Math.PI / 2);
   const shockGeo = new THREE.CylinderGeometry(0.048, 0.048, 1, 9); shockGeo.rotateX(Math.PI / 2);
-  v.geos.push(wheelGeo, discGeo, legGeo, armGeo, shockGeo);
+  v.geos.push(wheelGeo, rimGeo[-1], rimGeo[1], calGeo[-1], calGeo[1], legGeo, armGeo, shockGeo);
 
   const FORK_X = 0.085, ARM_X = 0.098;
   for (const w of v.wheels) {
     const g = new THREE.Group();
     const tyre = new THREE.Mesh(wheelGeo, M.tyre);
-    const disc = new THREE.Mesh(discGeo, M.rim);
-    g.add(tyre, disc);
+    g.add(tyre, new THREE.Mesh(rimGeo[w.side], M.rim));
+    w.caliper = new THREE.Mesh(calGeo[w.side], M.paint);
+    g.add(w.caliper);
     // One tyre per axle. The right-hand corner tracks silently.
     g.visible = w.side < 0;
     w.obj = g; w.hub = tyre;
@@ -270,11 +437,20 @@ function buildBikeGear(v, spec, M) {
 }
 
 /**
- * Wheels, suspension travel, steering, brake lights and the visual-only body
- * lean. Physics never reads any of this.
+ * Wheels, suspension travel, steering, lamps, the pipe flare and the
+ * visual-only body lean. Physics never reads any of this, and none of it
+ * allocates: six cars × 60 Hz is the wrong place to make garbage.
  */
 export function updateVehicleVisuals(v, dt) {
   if (!v.root) return;
+  /* The respawn look, driven off the flag race.js already maintains. Wave 6
+     says race.js will call setGhostLook itself with `v.ghost ? 1 : 0`; doing
+     it here as well is not a second writer, because both sites compute the
+     same number from the same flag and setGhostLook is idempotent. What it
+     buys is that ghosting is LIVE with no edit to a file this package does
+     not own — and a feature that needs someone else's line to do anything is
+     a feature that ships broken. */
+  setGhostLook(v, v.ghost ? 1 : 0);
   const S = v.spec;
   _q1.copy(v.quat).invert();
 
@@ -288,6 +464,7 @@ export function updateVehicleVisuals(v, dt) {
     w.obj.rotation.set(0, 0, 0);
     w.obj.rotateY(w.steer);
     w.obj.rotateX(w.spin);
+    if (w.caliper) w.caliper.rotation.x = -w.spin;      // bolted to the upright
     if (w.hubOff) { _v2.copy(_v1); _v2.x += w.hubOff; span(w.arm, w.armRoot, _v2); }
     else span(w.arm, w.armRoot, _v1);
     if (w.coil) span(w.coil, w.coilRoot, _v1);
@@ -319,16 +496,44 @@ export function updateVehicleVisuals(v, dt) {
     v.leanRoot.rotation.z = v._bikeLean;
   }
 
+  /* Ghosting dims every emissive on the car as well as fading the panels —
+     a translucent body still wearing full-brightness headlamps looks like a
+     rendering fault. `_ghostFlicker` is 1 whenever the car is solid, so this
+     is a multiply by one in every frame of a normal race. */
+  const flick = v._ghostFlicker;
+  if (flick !== v._lampK) {
+    v._lampK = flick;
+    v.mats.lamp.color.setRGB(LAMP_R * flick, LAMP_G * flick, LAMP_B * flick);
+  }
+  v.mats.headGlow.opacity = 0.40 * flick;
+
   // brake lights: on under braking, and under reverse, like the real thing
   const lit = v._ctlBrake > 0.04 || v._ctlHand > 0 || v.speed < -0.6;
-  const b = lit ? 2.6 : 0.22;
+  const b = (lit ? 4.0 : 0.22) * flick;
   v.mats.brake.color.setRGB(b, b * 0.055, b * 0.04);
+  v.mats.brakeGlow.opacity = lit ? 0.80 * flick : 0;
 
-  // exhaust flicker — cosmetic transient, Math.random is allowed here
+  /* Pipe flare. Two sources, and the boost one is the point: `fireTier / 3`
+     is the mini-turbo burning, `(extDriveMul − 1) / 0.9` is a nitro from the
+     item layer, and taking the max means one visual answers both without
+     either system knowing the other exists. Everything below is a cosmetic
+     transient, so Math.random is allowed (hard rule 6). */
   if (v.exhaust) {
     const heat = v.rpmNorm * Math.max(0, v._ctlThr);
-    v.exhaust.material.opacity = heat > 0.35
-      ? (heat - 0.35) * (0.45 + Math.random() * 0.55) : 0;
+    const boost = clamp(Math.max(v._drift.fireTier / 3, (v.extDriveMul - 1) / 0.9), 0, 1);
+    const k = Math.max(heat > 0.35 ? (heat - 0.35) * 1.55 : 0, boost);
+    const jit = 0.55 + Math.random() * 0.45;
+    const wide = 0.72 + k * 0.60, long = 0.55 + k * (1.6 + jit * 0.7);
+    v.exhaust.scale.set(wide, wide, long);
+    v._glowRig.scale.set(1 / wide, 1 / wide, 1 / long);
+    v.exhaust.material.opacity = k * jit * flick;
+    // orange at idle, blue-white at full boost — the same read as a rocket
+    v.exhaust.material.color.setRGB(1 - 0.22 * boost, 0.54 + 0.30 * boost, 0.23 + 0.70 * boost);
+    v.mats.flameGlow.color.setRGB(1 - 0.14 * boost, 0.56 + 0.28 * boost, 0.28 + 0.62 * boost);
+    v.mats.flameGlow.opacity = k * (0.30 + jit * 0.45) * flick;
+    const fs = 0.26 + k * 0.80;
+    v._sprFlame.scale.set(fs, fs, 1);
+    v._sprFlame.position.z = -(0.10 + k * 0.34);
   }
 }
 
@@ -343,18 +548,53 @@ export function disposeVehicleVisuals(v) {
     else if (m && !seenM.has(m)) { seenM.add(m); m.dispose(); }
   });
   for (const g of v.geos || []) if (!seenG.has(g)) g.dispose();
+  /* Sprites are not meshes, so the traverse above never reaches the three
+     glow materials — and their shared quad geometry belongs to three, not to
+     us, so it must NOT be disposed. Sweep the table instead of the graph. */
+  for (const k in v.mats) {
+    const m = v.mats[k];
+    if (m && !seenM.has(m)) { seenM.add(m); m.dispose(); }
+  }
   for (const k in v.tex) v.tex[k]?.dispose();
   v.root.parent?.remove(v.root);
   v.root = null; v.chassis = null; v.wheelRoot = null;
-  for (const w of v.wheels) { w.obj = w.hub = w.arm = w.coil = null; }
+  v.exhaust = null; v._glowRig = null; v._sprFlame = null;
+  v._ghost = null; v._uMud = null;
+  for (const w of v.wheels) { w.obj = w.hub = w.arm = w.coil = w.caliper = null; }
 }
 
 /**
- * Ghost look for a replay/spectator car: k01 0 = solid, 1 = fully ghosted.
- * A no-op stub until the vehicle-art pass lands the transparent path — the
- * call site in race.js exists now so the seam is exercised from day one.
+ * Ghost look for a car inside its post-respawn immunity: k01 0 = solid,
+ * 1 = fully ghosted. Called EVERY frame, for every car, from
+ * updateVehicleVisuals (and, per the wave-6 contract, from race.js as well),
+ * so the solid case has to cost almost nothing — hence the early out and the
+ * pre-built material list. Idempotent: calling it twice with the same k does
+ * nothing the second time except re-roll the lamp flicker.
+ *
+ * `transparent` is a program parameter in three (it drives the OPAQUE
+ * define), so flipping it recompiles. That happens twice per respawn, on the
+ * edges only, and the second one is a program-cache hit.
  */
-export function setGhostLook(v, k01) {   // eslint-disable-line no-unused-vars
+export function setGhostLook(v, k01) {
+  const gh = v._ghost;
+  if (!gh) return;
+  const k = k01 > 1 ? 1 : k01 < 0 ? 0 : k01;
+  if (k === 0 && gh.k === 0) return;                  // the whole-race case
+  if ((k > 0) !== (gh.k > 0)) {
+    const on = k > 0;
+    for (let i = 0; i < gh.mats.length; i++) {
+      gh.mats[i].transparent = on;
+      gh.mats[i].needsUpdate = true;
+    }
+  }
+  const o = 1 - 0.58 * k;                             // lerp(1, 0.42, k)
+  for (let i = 0; i < gh.mats.length; i++) gh.mats[i].opacity = o;
+  /* The lamps and the sprites are written by updateVehicleVisuals, which has
+     exactly one writer per value and must keep it that way. So the flicker
+     is published here as a scalar and applied there — one frame of latency
+     on a value that is deliberately random anyway. */
+  v._ghostFlicker = k > 0 ? 1 - k * (0.45 + Math.random() * 0.45) : 1;
+  gh.k = k;
 }
 
 /* ============================================================
@@ -379,96 +619,202 @@ function roundedBox(sx, sy, sz, r, seg = 3) {
   return g;
 }
 
-/** Knobby off-road tyre: carcass, rim face, and chevron cleats with real depth. */
-function buildWheelGeometry(R, W) {
+/**
+ * One moulded block: a tapered prism with NO bottom face, because the bottom
+ * is buried in whatever it stands on and nothing ever sees it. Ten triangles
+ * where a BoxGeometry is twelve — across 39 lugs a tyre, 24 wheels a grid,
+ * that is most of a spare wheel's worth of budget.
+ *
+ * Grows along +Y from the origin. Indexed, with a zeroed normal attribute
+ * and a dummy uv, because mergeGeometries refuses a mixed attribute set and
+ * every caller recomputes normals after the merge anyway.
+ */
+function lugGeometry(sx, sy, sz, taper = 0.72) {
+  const hx = sx * 0.5, hz = sz * 0.5, tx = hx * taper, tz = hz * taper;
+  const b = [[-hx, 0, -hz], [hx, 0, -hz], [hx, 0, hz], [-hx, 0, hz]];
+  const t = [[-tx, sy, -tz], [tx, sy, -tz], [tx, sy, tz], [-tx, sy, tz]];
+  const pos = [], uv = [], idx = [];
+  const quad = (p0, p1, p2, p3) => {
+    const o = pos.length / 3;
+    pos.push(p0[0], p0[1], p0[2], p1[0], p1[1], p1[2],
+      p2[0], p2[1], p2[2], p3[0], p3[1], p3[2]);
+    uv.push(0, 0, 1, 0, 1, 1, 0, 1);
+    idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
+  };
+  quad(t[0], t[3], t[2], t[1]);                                  // crown
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) & 3;
+    quad(b[j], b[i], t[i], t[j]);                                // flanks
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
+}
+
+/**
+ * Knobbly off-road tyre. 24-gon carcass, two sidewalls, and thirteen rows of
+ * blocky lugs: a shoulder pair staggered either side of the crown plus one
+ * centre-rib block half a row along.
+ *
+ * The old tyre wore 32 thin chevrons and 544 triangles and read as fuzz —
+ * at speed the eye integrates anything finer than a few degrees of arc into
+ * noise, and noise is what a black doughnut looks like. Thirteen big blocks
+ * cost the same and actually hold a silhouette. Budget: 534 tris per wheel,
+ * 2136 for a set of four.
+ *
+ * The sidewalls cone INBOARD as they drop to the bead, so the tread shoulder
+ * is the widest thing on the wheel and the rim sits in a dish behind it.
+ * Coning them the other way (which is what the old tyre did) puts the rim
+ * permanently inside the rubber, which is why the rims never read.
+ */
+function buildWheelGeometry(R, W, rows = 13, lugH = 0.115) {
   const parts = [];
-  const carcass = new THREE.CylinderGeometry(R * 0.94, R * 0.94, W, 20, 1, true);
+  const TR = R * 0.90;                     // carcass radius, under the lugs
+  const BEAD = R * 0.62;                   // where rubber meets rim flange
+  /* The section is 1.2× the nominal width: an off-road tyre bulges well past
+     its rim and the shoulder is the widest thing on the car. RIM_W below is
+     the same 0.40 the rim builder uses — move one and move both, or the
+     flange ends up outside the rubber. */
+  const SH = W * 0.60, BW = W * RIM_W;     // tread-shoulder / bead half-widths
+
+  const carcass = new THREE.CylinderGeometry(TR, TR, SH * 2, 24, 1, true);
   carcass.rotateZ(Math.PI / 2); parts.push(carcass);
   for (const s of [-1, 1]) {
-    const sidewall = new THREE.CylinderGeometry(R * 0.94, R * 0.62, W * 0.16, 20, 1, true);
-    sidewall.rotateZ(Math.PI / 2); sidewall.translate(s * (W / 2 + W * 0.08), 0, 0);
-    parts.push(sidewall);
-    const face = new THREE.CircleGeometry(R * 0.62, 20);
-    face.rotateY(s * Math.PI / 2); face.translate(s * (W / 2 + W * 0.16), 0, 0);
-    parts.push(face);
+    // rotateZ(π/2) sends +Y to −X, so radiusTop ends up on the −X side
+    const wall = new THREE.CylinderGeometry(s < 0 ? TR : BEAD, s < 0 ? BEAD : TR,
+      SH - BW, 24, 1, true);
+    wall.rotateZ(Math.PI / 2);
+    wall.translate(s * (SH + BW) * 0.5, 0, 0);
+    parts.push(wall);
   }
-  // Cleats, deliberately chunky — these are the silhouette at speed, and a
-  // tyre without them reads as a black doughnut.
-  const N = 16;
-  for (let i = 0; i < N; i++) {
-    const a = i / N * Math.PI * 2;
-    for (const half of [-1, 1]) {
-      const cleat = new THREE.BoxGeometry(W * 0.42, R * 0.10, R * 0.30);
-      cleat.translate(0, R * 0.96, 0);
-      cleat.rotateY(half * 0.30);
-      cleat.translate(half * W * 0.24, 0, 0);
-      cleat.rotateX(a + half * 0.10);
-      parts.push(cleat);
+
+  const step = Math.PI * 2 / rows, LR = TR - R * 0.015;
+  for (let i = 0; i < rows; i++) {
+    const a = i * step;
+    for (const sd of [-1, 1]) {
+      // shoulder block, canted like a real directional knobbly and staggered
+      // half a step against its partner so the two rows interlock
+      const lug = lugGeometry(W * 0.48, R * lugH, R * 0.26, 0.68);
+      lug.rotateY(sd * 0.34);
+      lug.translate(sd * W * 0.30, LR, 0);
+      lug.rotateX(a + sd * step * 0.22);
+      parts.push(lug);
     }
+    const rib = lugGeometry(W * 0.34, R * lugH * 0.86, R * 0.19, 0.64);
+    rib.rotateY((i & 1) ? 0.20 : -0.20);
+    rib.translate(0, LR, 0);
+    rib.rotateX(a + step * 0.5);
+    parts.push(rib);
   }
+
   const g = mergeGeometries(parts, false);
   parts.forEach(p => p.dispose());
   g.computeVertexNormals();
   return g;
 }
 
-/** Racing livery: number roundel, accent stripes, a bit of sponsor noise. */
-function liveryTexture(paint, paint2, num, name, rng, size = 512) {
-  const c = document.createElement('canvas');
-  c.width = size; c.height = size / 2;
-  const g = c.getContext('2d');
-  const H = c.height;
-  const hex = (col) => '#' + col.getHexString();
+/**
+ * The wheel behind the rubber: barrel, back cap, hub, a brake disc you can
+ * see turning through the spokes, and one of four faces.
+ *
+ * Handed — `side` is the outboard direction (+1 for the right-hand pair) —
+ * because mirroring one geometry with a negative scale inverts every normal
+ * down that side of the car. Two geometries, two wheels each.
+ */
+function buildRimGeometry(R, W, style, side) {
+  const parts = [];
+  const RR = R * 0.615;                    // flange, just over the tyre bead
+  const face = side * W * 0.34;            // the spoke face, inside the dish
+  const push = (g) => parts.push(g);
 
-  g.fillStyle = hex(paint); g.fillRect(0, 0, size, H);
-  // dirt gradient toward the bottom — every rally car is filthy by lap two
-  const grd = g.createLinearGradient(0, H * 0.45, 0, H);
-  grd.addColorStop(0, 'rgba(60,48,34,0)'); grd.addColorStop(1, 'rgba(52,42,30,0.42)');
-  g.fillStyle = grd; g.fillRect(0, 0, size, H);
-
-  // accent stripes running the length of the panel
-  g.fillStyle = hex(paint2);
-  g.fillRect(0, H * 0.60, size, H * 0.10);
-  g.globalAlpha = 0.55; g.fillRect(0, H * 0.73, size, H * 0.035); g.globalAlpha = 1;
-  g.save();
-  g.translate(size * 0.70, 0); g.transform(1, 0, -0.35, 1, 0, 0);
-  g.fillStyle = 'rgba(255,255,255,0.16)';
-  g.fillRect(0, 0, size * 0.09, H); g.fillRect(size * 0.14, 0, size * 0.04, H);
-  g.restore();
-
-  // number roundel
-  const cx = size * 0.30, cy = H * 0.40, r = H * 0.30;
-  g.fillStyle = 'rgba(248,248,244,0.94)';
-  g.beginPath(); g.arc(cx, cy, r, 0, 6.2832); g.fill();
-  g.strokeStyle = 'rgba(20,20,22,0.75)'; g.lineWidth = r * 0.10; g.stroke();
-  g.fillStyle = '#17181c';
-  g.font = `900 ${Math.round(r * 1.15)}px ui-monospace, Menlo, monospace`;
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText(String(num), cx, cy + r * 0.04);
-
-  // team name + a couple of sponsor blocks
-  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
-  g.fillStyle = 'rgba(250,250,250,0.88)';
-  g.font = `700 ${Math.round(H * 0.085)}px ui-monospace, Menlo, monospace`;
-  g.fillText(name, size * 0.50, H * 0.24);
-  g.font = `600 ${Math.round(H * 0.052)}px ui-monospace, Menlo, monospace`;
-  g.fillStyle = 'rgba(20,20,22,0.66)';
-  g.fillText('ROAD RASH · WORKS TEAM', size * 0.50, H * 0.545);
-  for (let i = 0; i < 5; i++) {
-    const bx = size * (0.50 + i * 0.095), by = H * 0.80;
-    g.fillStyle = `rgba(${20 + rng() * 40 | 0},${20 + rng() * 40 | 0},${24 + rng() * 40 | 0},0.55)`;
-    g.fillRect(bx, by, size * 0.075, H * 0.10);
+  // barrel runs a hair past the tyre bead at ±RIM_W so no grazing angle can
+  // find a gap between rubber and rim
+  const barrel = new THREE.CylinderGeometry(RR, RR, W * (RIM_W * 2 + 0.05), 20, 1, true);
+  barrel.rotateZ(Math.PI / 2); push(barrel);
+  /* Back of the dish, both ways. Every surface on a merged geometry is
+     single-sided, so ONE disc here closes the wheel from outboard and leaves
+     a hole through it from inboard. Two discs, 24 triangles, and the wheel is
+     opaque from every angle a rolled car can be looked at. */
+  for (const s of [-1, 1]) {
+    const back = new THREE.CircleGeometry(RR, 12);
+    back.rotateY(s * Math.PI / 2);
+    back.translate(-side * W * (RIM_W + 0.02) + s * 0.002, 0, 0);
+    push(back);
   }
-  // scuffs
-  for (let i = 0; i < 40; i++) {
-    g.fillStyle = `rgba(30,24,18,${0.03 + rng() * 0.07})`;
-    g.fillRect(rng() * size, rng() * H, 4 + rng() * 40, 1 + rng() * 4);
+  // brake disc: inboard of the face so it reads as being BEHIND the spokes
+  const disc = new THREE.CylinderGeometry(R * 0.50, R * 0.50, W * 0.08, 14);
+  disc.rotateZ(Math.PI / 2); disc.translate(-side * W * 0.12, 0, 0); push(disc);
+  const hub = new THREE.CylinderGeometry(R * 0.17, R * 0.17, W * 0.76, 10);
+  hub.rotateZ(Math.PI / 2); push(hub);
+
+  /** A radial member lying in the face plane: thickness across the axle,
+      width around the wheel, growing outward from `r0`. */
+  const spoke = (thick, len, wide, r0, a, twist, taper) => {
+    const g = lugGeometry(thick, len, wide, taper);
+    if (twist) g.rotateY(twist);
+    g.translate(face, r0, 0);
+    g.rotateX(a);
+    push(g);
+  };
+  /** A stud standing proud of the face, growing outboard. */
+  const stud = (d, h, r0, a) => {
+    const g = lugGeometry(d, h, d, 0.75);
+    g.rotateZ(-side * Math.PI / 2);        // +Y → outboard
+    g.translate(face + side * W * 0.02, Math.cos(a) * r0, Math.sin(a) * r0);
+    push(g);
+  };
+  const ring = (ri, ro, dx) => {
+    const g = new THREE.RingGeometry(ri, ro, 20, 1);
+    g.rotateY(side * Math.PI / 2); g.translate(face + side * dx, 0, 0); push(g);
+  };
+  const cap = (r, dx) => {
+    const g = new THREE.CircleGeometry(r, style === 'beadlock' ? 20 : 12);
+    g.rotateY(side * Math.PI / 2); g.translate(face + side * dx, 0, 0); push(g);
+  };
+
+  if (style === 'beadlock') {
+    // a solid plate with a bolted retaining ring — the SxS wheel, exactly
+    cap(RR, 0.005);
+    ring(RR * 0.74, RR * 0.96, 0.022);
+    for (let i = 0; i < 8; i++) stud(R * 0.055, W * 0.055, RR * 0.85, i / 8 * Math.PI * 2);
+  } else if (style === 'spoke6') {
+    ring(RR * 0.70, RR, 0.010);
+    for (let i = 0; i < 6; i++) spoke(W * 0.13, RR * 0.60, R * 0.155, R * 0.15, i / 6 * Math.PI * 2, 0, 0.52);
+    cap(R * 0.26, 0.020);
+  } else if (style === 'turbine5') {
+    ring(RR * 0.78, RR, 0.010);
+    for (let i = 0; i < 5; i++) {
+      const a = i / 5 * Math.PI * 2;
+      spoke(W * 0.10, RR * 0.56, R * 0.185, R * 0.16, a, 0.42, 0.60);       // blade
+      spoke(W * 0.07, RR * 0.34, R * 0.095, R * 0.30, a + 0.63, 0.62, 0.70); // vane
+    }
+    cap(R * 0.24, 0.020);
+  } else {                                  // 'wire' — the motocross wheel
+    ring(RR * 0.88, RR, 0.006);
+    for (let i = 0; i < 10; i++) spoke(W * 0.10, RR * 0.66, R * 0.045, R * 0.17, i / 10 * Math.PI * 2, 0, 0.85);
+    cap(R * 0.22, 0.016);
   }
 
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
-  return t;
+  const g = mergeGeometries(parts, false);
+  parts.forEach(p => p.dispose());
+  g.computeVertexNormals();
+  return g;
+}
+
+/** Brake caliper: a body and a bridge straddling the disc, 20 triangles. */
+function buildCaliperGeometry(R, W, side) {
+  const x = -side * W * 0.12;               // over the disc, not over the rim
+  const body = lugGeometry(W * 0.17, R * 0.15, R * 0.21, 0.82);
+  body.translate(x, R * 0.40, 0);
+  const bridge = lugGeometry(W * 0.26, R * 0.05, R * 0.12, 0.90);
+  bridge.translate(x, R * 0.36, 0);
+  const g = mergeGeometries([body, bridge], false);
+  body.dispose(); bridge.dispose();
+  g.computeVertexNormals();
+  return g;
 }
 
 /* One shared coil-spring stripe texture for every coilover in the game. Never
@@ -488,13 +834,45 @@ function springTexture() {
   return _springTex;
 }
 
+/* One shared radial falloff for every additive sprite on every car. Module
+   state like the spring stripe, so disposeVehicleVisuals must not touch it. */
+let _glowTex = null;
+function glowTexture() {
+  if (_glowTex) return _glowTex;
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0.00, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.22, 'rgba(255,244,220,0.72)');
+  grd.addColorStop(0.55, 'rgba(255,210,150,0.20)');
+  grd.addColorStop(1.00, 'rgba(255,180,110,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+  _glowTex = new THREE.CanvasTexture(c);
+  _glowTex.colorSpace = THREE.SRGBColorSpace;
+  return _glowTex;
+}
+
 /** Collects build-time geometry into one merged mesh per material. */
 class Kit {
-  constructor() { this.b = new Map(); }
+  constructor() {
+    this.b = new Map();
+    /* Two side channels the body builders write and buildGlowRig reads, so
+       a machine declares where its lamps and its pipe are in the same call
+       that draws them instead of the caller guessing. */
+    this.glows = [];
+    this.flameSpec = { x: 0, y: 0, z: 0, r: 0.08, len: 0.34 };
+  }
   add(mat, g) { let a = this.b.get(mat); if (!a) this.b.set(mat, a = []); a.push(g); }
 
   box(mat, sx, sy, sz, x, y, z, r = 0.04, rx = 0, ry = 0, rz = 0) {
     const g = roundedBox(sx, sy, sz, r);
+    if (rx) g.rotateX(rx); if (ry) g.rotateY(ry); if (rz) g.rotateZ(rz);
+    g.translate(x, y, z); this.add(mat, g); return g;
+  }
+  /** Hard-edged 12-triangle box. `box` subdivides 3× for its rounding, which
+      is 108 triangles — right for a bonnet, absurd for a mirror stalk. */
+  blk(mat, sx, sy, sz, x, y, z, rx = 0, ry = 0, rz = 0) {
+    const g = new THREE.BoxGeometry(sx, sy, sz);
     if (rx) g.rotateX(rx); if (ry) g.rotateY(ry); if (rz) g.rotateZ(rz);
     g.translate(x, y, z); this.add(mat, g); return g;
   }
@@ -508,22 +886,33 @@ class Kit {
     if (rx) g.rotateX(rx); if (ry) g.rotateY(ry); if (rz) g.rotateZ(rz);
     g.translate(x, y, z); this.add(mat, g); return g;
   }
+  torus(mat, r, tube, rseg, tseg, x, y, z, rx = 0, ry = 0, rz = 0) {
+    const g = new THREE.TorusGeometry(r, tube, rseg, tseg);
+    if (rx) g.rotateX(rx); if (ry) g.rotateY(ry); if (rz) g.rotateZ(rz);
+    g.translate(x, y, z); this.add(mat, g); return g;
+  }
   sphere(mat, r, x, y, z, seg = 12) {
     const g = new THREE.SphereGeometry(r, seg, seg * 0.7 | 0);
     g.translate(x, y, z); this.add(mat, g); return g;
   }
-  /** Cage tube between two body-space points. */
+  /** Cage tube between two body-space points. Ten sides, not eight: this is
+      the chrome, and a chrome octagon shows its facets in every reflection. */
   tube(mat, ax, ay, az, bx, by, bz, r) {
     const lx = bx - ax, ly = by - ay, lz = bz - az;
     const len = Math.hypot(lx, ly, lz);
     if (len < 1e-4) return;
-    const g = new THREE.CylinderGeometry(r, r, len, 8);
+    const g = new THREE.CylinderGeometry(r, r, len, 10);
     _kq.setFromUnitVectors(_kY, _kv.set(lx / len, ly / len, lz / len));
     _km.makeRotationFromQuaternion(_kq);
     _km.setPosition((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
     g.applyMatrix4(_km);
     this.add(mat, g);
   }
+
+  /** Register an additive bloom at a lamp. kind: 'head' | 'brake'. */
+  glow(kind, x, y, z, size) { this.glows.push({ kind, x, y, z, size }); }
+  /** Where this machine's pipe flare lives, and how big it is. */
+  flame(x, y, z, r, len) { this.flameSpec = { x, y, z, r, len }; }
 
   flush(group, mats) {
     const out = [];
@@ -546,21 +935,47 @@ class Kit {
 function addLights(kit, y, zF, zR, spread) {
   // Headlights are faintly lit at all times — a dark grille with two bright
   // discs is the cheapest way to give a low-poly car a face at 40 m. The tail
-  // boxes share one material so updateVisuals can light them all at once.
+  // boxes share one material so updateVisuals can light them all at once, and
+  // each lamp registers an additive bloom that sits in front of it.
   for (const s of [-1, 1]) {
     kit.cyl('lamp', 0.10, 0.10, 0.05, 14, s * spread, y, zF, Math.PI / 2);
     kit.cyl('dark', 0.125, 0.125, 0.07, 14, s * spread, y, zF - 0.035, Math.PI / 2);
-    kit.box('brake', 0.30, 0.11, 0.06, s * spread * 0.92, y, zR, 0.02);
+    kit.blk('brake', 0.30, 0.11, 0.06, s * spread * 0.92, y, zR);
+    kit.glow('head', s * spread, y, zF + 0.05, 0.62);
+    kit.glow('brake', s * spread * 0.92, y, zR - 0.05, 0.44);
   }
 }
 
+/* The driver. Half the read on an open car and most of the read on the bike:
+   a helmet alone is a bowling ball on a seat, and what makes it a person is
+   the pair of arms going somewhere. They go to the wheel rim, which is why
+   the wheel is a torus and not a disc. */
 function addDriver(kit, spec, y, z, lean = 0.22, x = 0) {
   const w = spec.dims.W;
   kit.box('dark', w * 0.34, 0.42, 0.16, x, y + 0.06, z - 0.34, 0.05, -lean);   // seat back
   kit.box('dark', w * 0.34, 0.10, 0.44, x, y - 0.15, z - 0.10, 0.04);          // seat base
+  kit.blk('dark', w * 0.36, 0.06, 0.10, x, y + 0.24, z - 0.33, -lean);         // headrest
+  // torso in the team suit, shoulders squared to the wheel
+  kit.box('paint2', 0.36, 0.34, 0.24, x, y + 0.01, z - 0.20, 0.08, -lean * 0.5);
   kit.sphere('helmet', 0.145, x, y + 0.20, z - 0.20);
-  kit.plate('glass', 0.20, 0.11, x, y + 0.20, z - 0.065);                      // visor
-  kit.cyl('dark', 0.115, 0.115, 0.03, 14, x, y + 0.06, z + 0.26, 1.15);        // steering wheel
+  kit.blk('helmet', 0.20, 0.05, 0.13, x, y + 0.265, z - 0.115, -0.34);         // peak
+  /* Proud of the shell, not flush with it. A 12-segment sphere's front facet
+     lands at z − 0.06 here, and a visor plate placed ON that number z-fights
+     with it and disappears — which is what the old one did. */
+  kit.plate('visor', 0.21, 0.115, x, y + 0.198, z - 0.045);
+
+  /* The wheel is a rim, because the arms have to arrive somewhere. Its axis
+     points up and back at the driver: TorusGeometry rings the +Z axis, and
+     rotateX(−0.42) tips that to (0, 0.41, 0.91). */
+  const wy = y + 0.055, wz = z + 0.255;
+  kit.torus('dark', 0.112, 0.017, 4, 10, x, wy, wz, -0.42);
+  kit.blk('dark', 0.21, 0.022, 0.030, x, wy, wz, -0.42);                       // cross spoke
+  kit.blk('dark', 0.060, 0.048, 0.032, x, wy, wz, -0.42);                      // boss
+  for (const s of [-1, 1]) {
+    kit.tube('paint2', x + s * 0.155, y + 0.11, z - 0.19, x + s * 0.150, y + 0.06, z + 0.06, 0.046);
+    kit.tube('paint2', x + s * 0.150, y + 0.06, z + 0.06, x + s * 0.100, wy + 0.02, wz - 0.02, 0.036);
+    kit.blk('dark', 0.075, 0.065, 0.085, x + s * 0.098, wy + 0.02, wz - 0.005);  // glove
+  }
 }
 
 /* --- BUGGY: modern sport side-by-side — low panelled hull, raked cage with
@@ -579,13 +994,13 @@ function buildBuggy(kit, spec) {
   kit.box('paint', bw * 0.98, 0.34, 1.55, 0, y0 + 0.52, 0.02, 0.10);           // lower hull
   // sloped bonnet, dropping toward the nose, with a centre vent
   kit.box('paint', bw * 0.84, 0.11, 1.10, 0, y0 + 0.735, L * 0.265, 0.05, 0.135);
-  kit.box('dark', bw * 0.30, 0.055, 0.62, 0, y0 + 0.80, L * 0.245, 0.02, 0.135); // hood vent
+  kit.blk('dark', bw * 0.30, 0.055, 0.62, 0, y0 + 0.80, L * 0.245, 0.135);     // hood vent
   // front fascia: black grille panel under angry LED brows
   kit.box('dark', bw * 0.86, 0.30, 0.16, 0, y0 + 0.545, L * 0.455, 0.04);
   for (const s of [-1, 1]) {
     // LED brows — thin lit slashes, angled down-inward like the reference
-    kit.box('lamp', 0.30, 0.035, 0.03, s * bw * 0.28, y0 + 0.665, L * 0.468, 0.008, 0, 0, s * -0.22);
-    kit.box('dark', 0.34, 0.075, 0.05, s * bw * 0.28, y0 + 0.665, L * 0.452, 0.015, 0, 0, s * -0.22);
+    kit.blk('lamp', 0.30, 0.035, 0.03, s * bw * 0.28, y0 + 0.665, L * 0.468, 0, 0, s * -0.22);
+    kit.blk('dark', 0.34, 0.075, 0.05, s * bw * 0.28, y0 + 0.665, L * 0.452, 0, 0, s * -0.22);
   }
 
   /* ---- front tube bumper: twin rails wrapping the nose ---- */
@@ -603,7 +1018,6 @@ function buildBuggy(kit, spec) {
     // half-door panel carrying the livery (number, graphics)
     kit.plate('livery', 1.34, 0.44, s * (bw * 0.5 + 0.005), y0 + 0.60, -0.10, 0, s * Math.PI / 2);
     kit.box('dark', 0.07, 0.50, 1.40, s * bw * 0.515, y0 + 0.575, -0.10, 0.045);
-    // white slash accent along the door top — the "RS" streak
     // fender flares over both arches, wider than the hull
     kit.box('dark', 0.30, 0.075, 1.02, s * hw * 0.74, y0 + 0.82, spec.wheelbase.front, 0.03);
     kit.box('dark', 0.32, 0.075, 1.10, s * hw * 0.76, y0 + 0.84, spec.wheelbase.rear, 0.03);
@@ -630,7 +1044,7 @@ function buildBuggy(kit, spec) {
     kit.tube('metal', s * cw, y0 + 0.44, roofR, -s * cw, roofY, roofR, r * 0.75);    // X brace
     kit.tube('metal', s * bw * 0.5, y0 + 0.70, 0.66, s * cw, y0 + 0.98, -0.20, r * 0.7); // intrusion
     // side mirror on the A-pillar
-    kit.box('dark', 0.05, 0.09, 0.14, s * (bw * 0.5 + 0.09), y0 + 1.05, 0.52, 0.02);
+    kit.blk('dark', 0.05, 0.09, 0.14, s * (bw * 0.5 + 0.09), y0 + 1.05, 0.52);
   }
   kit.tube('metal', -cw, roofY, roofF, cw, roofY, roofF, r);
   kit.tube('metal', -cw, roofY, roofR, cw, roofY, roofR, r);
@@ -642,9 +1056,10 @@ function buildBuggy(kit, spec) {
   kit.box('dark', bw * 0.42, 0.16, 0.28, 0, y0 + 0.84, -L * 0.33, 0.05);        // airbox
   kit.box('dark', bw * 0.95, 0.24, 0.30, 0, y0 + 0.42, -L * 0.455, 0.06);     // rear valance
   for (const s of [-1, 1]) {
-    kit.cyl('dark', 0.055, 0.062, 0.22, 10, s * bw * 0.24, y0 + 0.60, -L * 0.475, Math.PI / 2);
+    kit.cyl('metal', 0.055, 0.062, 0.22, 10, s * bw * 0.24, y0 + 0.60, -L * 0.475, Math.PI / 2);
     kit.tube('metal', s * bw * 0.45, y0 + 0.40, -L * 0.50, s * bw * 0.45, y0 + 0.72, -L * 0.44, 0.034);
   }
+  kit.flame(0, y0 + 0.60, -L * 0.50 - 0.20, 0.10, 0.40);
 
   addLights(kit, y0 + 0.60, L * 0.472, -L * 0.49, bw * 0.40);
   // cage light pod — pure rally
@@ -652,6 +1067,7 @@ function buildBuggy(kit, spec) {
     kit.cyl('lamp', 0.070, 0.070, 0.04, 12, (i - 1.5) * 0.19, roofY + 0.10, roofF + 0.05, Math.PI / 2);
     kit.cyl('dark', 0.085, 0.085, 0.07, 12, (i - 1.5) * 0.19, roofY + 0.10, roofF + 0.01, Math.PI / 2);
   }
+  kit.glow('head', 0, roofY + 0.10, roofF + 0.10, 1.05);
 }
 
 /* --- TRUCK: cab, bed, bullbar, chunky ----------------------------------- */
@@ -670,7 +1086,7 @@ function buildTruck(kit, spec) {
   for (const s of [-1, 1]) {
     kit.plate('glass', 1.00, 0.50, s * (W * 0.452), cabY + cabH * 0.64, 0.34, 0, s * Math.PI / 2);
     kit.plate('livery', 1.10, 0.42, s * (W * 0.452), cabY + cabH * 0.16, 0.30, 0, s * Math.PI / 2);
-    kit.box('dark', 0.10, 0.16, 0.26, s * hw * 0.98, cabY + cabH * 0.70, 1.02, 0.03);  // mirror
+    kit.blk('dark', 0.10, 0.16, 0.26, s * hw * 0.98, cabY + cabH * 0.70, 1.02);  // mirror
   }
   addDriver(kit, spec, cabY + 0.44, 0.52, 0.30);
 
@@ -695,18 +1111,22 @@ function buildTruck(kit, spec) {
   }
   // snorkel
   kit.cyl('dark', 0.075, 0.075, 1.10, 10, hw * 0.86, cabY + 0.62, 1.02);
-  kit.box('dark', 0.20, 0.16, 0.22, hw * 0.86, cabY + 1.18, 1.10, 0.04);
+  kit.blk('dark', 0.20, 0.16, 0.22, hw * 0.86, cabY + 1.18, 1.10);
+  // twin stacks out the back, and the flare that goes with them
+  for (const s of [-1, 1]) kit.cyl('metal', 0.062, 0.070, 0.26, 10, s * W * 0.20, y0 + 0.50, -L * 0.50, Math.PI / 2);
+  kit.flame(0, y0 + 0.50, -L * 0.50 - 0.22, 0.11, 0.42);
 
   // roof light bar
   const ly = cabY + cabH + 0.18;
   kit.box('dark', W * 0.80, 0.14, 0.16, 0, ly, 1.05, 0.03);
   for (let i = 0; i < 5; i++) kit.cyl('lamp', 0.072, 0.072, 0.05, 12, (i - 2) * W * 0.17, ly, 1.13, Math.PI / 2);
+  kit.glow('head', 0, ly, 1.20, 1.30);
 
   addLights(kit, y0 + 0.74, L * 0.44, -L * 0.49, hw * 0.62);
 }
 
 /* --- WEDGE: low, cab-forward, ducktail ---------------------------------- */
-function buildWedge(kit, spec, v) {
+function buildWedge(kit, spec) {
   const { L, W } = spec.dims;
   const y0 = -spec.comHeight, hw = W * 0.5;
 
@@ -734,19 +1154,13 @@ function buildWedge(kit, spec, v) {
 
   // ducktail + diffuser
   kit.box('paint2', W * 0.84, 0.09, 0.46, 0, y0 + 0.70, -L * 0.44, 0.03, 0.20);
-  for (const s of [-1, 1]) kit.box('paint', 0.05, 0.13, 0.30, s * W * 0.41, y0 + 0.77, -L * 0.44, 0.01);
+  for (const s of [-1, 1]) kit.blk('paint', 0.05, 0.13, 0.30, s * W * 0.41, y0 + 0.77, -L * 0.44);
   kit.box('dark', W * 0.80, 0.10, 0.44, 0, y0 + 0.16, -L * 0.44, 0.02, -0.14);
-  for (let i = -2; i <= 2; i++) kit.box('dark', 0.05, 0.16, 0.42, i * W * 0.16, y0 + 0.20, -L * 0.44, 0.01);
+  for (let i = -2; i <= 2; i++) kit.blk('dark', 0.05, 0.16, 0.42, i * W * 0.16, y0 + 0.20, -L * 0.44);
 
-  // exhausts — the flicker mesh is built separately so it can be animated
+  // exhausts — the flare mesh is built by buildGlowRig so it can be animated
   for (const s of [-1, 1]) kit.cyl('metal', 0.065, 0.075, 0.20, 10, s * 0.22, y0 + 0.30, -L * 0.49, Math.PI / 2);
-  const flame = new THREE.Mesh(
-    new THREE.ConeGeometry(0.09, 0.42, 8, 1, true).rotateX(-Math.PI / 2),
-    v.mats.glow);
-  flame.position.set(0, y0 + 0.30, -L * 0.49 - 0.24);
-  flame.renderOrder = 6;
-  v.chassis.add(flame);
-  v.exhaust = flame;
+  kit.flame(0, y0 + 0.30, -L * 0.49 - 0.24, 0.09, 0.42);
 
   addLights(kit, y0 + 0.44, L * 0.485, -L * 0.485, hw * 0.58);
 }
@@ -754,7 +1168,7 @@ function buildWedge(kit, spec, v) {
 /* --- BIKE: motocross 450 with a rider up on the pegs ---------------------
    Everything is built around three fixed points: the front hub (+0.72 z), the
    rear hub (−0.72 z) and the ground plane (y0). The forks, the swingarm and
-   the shock are NOT built here — they are spanned live by _buildBikeGear so
+   the shock are NOT built here — they are spanned live by buildBikeGear so
    they travel, which on a machine with 400 mm of suspension is most of what
    you actually watch.
 
@@ -763,20 +1177,19 @@ function buildWedge(kit, spec, v) {
    height lands at 1.6 m over the ground, which is what `dims.H` (1.42, plus
    the CoM offset) is sized for — change one and the aero and the collision
    spheres want the other. ------------------------------------------------ */
-function buildBike(kit, spec, v) {
+function buildBike(kit, spec) {
   const zF = spec.wheelbase.front, zR = spec.wheelbase.rear;
   /* Everything below is quoted as HEIGHT ABOVE THE GROUND, because that is
      the number you can check against a photograph. Y() converts to body
      space, where the origin is the centre of mass. */
   const Y = (h) => h - spec.comHeight;
-  const AXLE = spec.wheelR;                    // 0.36 — both hubs at static sag
 
   /* ---- engine and frame. A modern MX frame is a pair of aluminium spars
      wrapping over one very tall cylinder; the spars and the tank shrouds are
      the whole silhouette from three metres away. ---- */
   kit.box('dark', 0.28, 0.30, 0.40, 0, Y(0.50), 0.00, 0.05);              // cases
   kit.box('metal', 0.23, 0.28, 0.23, 0, Y(0.78), 0.05, 0.04, -0.16);      // barrel + head
-  kit.box('dark', 0.19, 0.08, 0.19, 0, Y(0.94), 0.03, 0.03);              // valve cover
+  kit.blk('dark', 0.19, 0.08, 0.19, 0, Y(0.94), 0.03);                    // valve cover
   const HEAD = 1.00, PIVOT = 0.42;             // steering head, swingarm pivot
   for (const s of [-1, 1]) {
     // main spar: head -> over the engine -> down to the pivot
@@ -785,8 +1198,8 @@ function buildBike(kit, spec, v) {
     kit.tube('paint2', s * 0.052, Y(HEAD - 0.16), zF - 0.12, s * 0.082, Y(0.34), 0.12, 0.026);  // downtube
     kit.tube('paint2', s * 0.104, Y(0.82), -0.08, s * 0.092, Y(0.93), zR + 0.28, 0.024);        // subframe
   }
-  kit.box('metal', 0.15, 0.09, 0.13, 0, Y(HEAD + 0.02), zF - 0.11, 0.03); // triple clamp, lower
-  kit.box('metal', 0.19, 0.05, 0.11, 0, Y(HEAD + 0.16), zF - 0.13, 0.02); // triple clamp, upper
+  kit.blk('metal', 0.15, 0.09, 0.13, 0, Y(HEAD + 0.02), zF - 0.11);       // triple clamp, lower
+  kit.blk('metal', 0.19, 0.05, 0.11, 0, Y(HEAD + 0.16), zF - 0.13);       // triple clamp, upper
 
   /* ---- plastics. The tank is nearly invisible on a modern MX bike; the
      shrouds beside it are what you actually see, so they get the colour. ---- */
@@ -794,8 +1207,8 @@ function buildBike(kit, spec, v) {
   for (const s of [-1, 1]) {
     kit.box('paint', 0.075, 0.30, 0.42, s * 0.135, Y(0.90), 0.22, 0.05, 0, 0, s * 0.17);   // shroud
     kit.plate('livery', 0.32, 0.22, s * 0.126, Y(0.82), -0.26, 0, s * Math.PI / 2);        // number plate
-    kit.box('dark', 0.05, 0.19, 0.32, s * 0.122, Y(0.82), -0.26, 0.03);                    // airbox side
-    kit.box('dark', 0.055, 0.16, 0.26, s * 0.115, Y(0.56), -0.34, 0.03);                   // side panel
+    kit.blk('dark', 0.05, 0.19, 0.32, s * 0.122, Y(0.82), -0.26);                          // airbox side
+    kit.blk('dark', 0.055, 0.16, 0.26, s * 0.115, Y(0.56), -0.34);                         // side panel
   }
   kit.box('dark', 0.16, 0.08, 0.62, 0, Y(0.97), -0.14, 0.04, -0.05);      // seat
   kit.box('paint', 0.20, 0.04, 0.38, 0, Y(1.02), zR + 0.30, 0.02, 0.18);  // rear fender
@@ -808,6 +1221,7 @@ function buildBike(kit, spec, v) {
   kit.tube('metal', 0.09, Y(0.60), 0.30, 0.12, Y(0.56), -0.12, 0.025);
   kit.tube('metal', 0.12, Y(0.56), -0.12, 0.14, Y(0.74), zR + 0.32, 0.029);
   kit.cyl('metal', 0.052, 0.058, 0.36, 10, 0.145, Y(0.82), zR + 0.10, Math.PI / 2, 0, 0.10);
+  kit.flame(0.145, Y(0.84), zR - 0.14, 0.065, 0.30);
 
   /* ---- bars, controls, pegs ---- */
   const BAR = HEAD + 0.28, barZ = zF - 0.19;
@@ -815,11 +1229,13 @@ function buildBike(kit, spec, v) {
     kit.cyl('metal', 0.026, 0.026, 0.06, 8, s * 0.070, Y(BAR - 0.05), zF - 0.13);           // riser
     kit.tube('metal', s * 0.070, Y(BAR - 0.02), zF - 0.13, s * 0.33, Y(BAR), barZ, 0.017);  // bar
     kit.cyl('dark', 0.023, 0.023, 0.12, 8, s * 0.365, Y(BAR), barZ, 0, 0, Math.PI / 2);     // grip
-    kit.box('dark', 0.085, 0.085, 0.028, s * 0.33, Y(BAR + 0.02), barZ + 0.06, 0.01);       // handguard
-    kit.box('metal', 0.12, 0.02, 0.085, s * 0.185, Y(0.35), -0.05, 0.01);                   // footpeg
+    kit.blk('dark', 0.085, 0.085, 0.028, s * 0.33, Y(BAR + 0.02), barZ + 0.06);             // handguard
+    kit.blk('metal', 0.12, 0.02, 0.085, s * 0.185, Y(0.35), -0.05);                         // footpeg
   }
   kit.cyl('lamp', 0.068, 0.068, 0.04, 12, 0, Y(HEAD + 0.22), zF + 0.01, Math.PI / 2);       // headlight
-  kit.box('brake', 0.12, 0.06, 0.04, 0, Y(1.04), zR + 0.12, 0.02);                          // tail light
+  kit.blk('brake', 0.12, 0.06, 0.04, 0, Y(1.04), zR + 0.12);                                // tail light
+  kit.glow('head', 0, Y(HEAD + 0.22), zF + 0.06, 0.55);
+  kit.glow('brake', 0, Y(1.04), zR + 0.08, 0.34);
 
   /* ---- rider. Up on the pegs, weight over the back wheel, elbows out: the
      attack position, and the one pose that reads as motocross rather than as
@@ -827,27 +1243,19 @@ function buildBike(kit, spec, v) {
      is measured to the top of it. ---- */
   const PEG = 0.38, KNEE = 0.74, HIP = 1.10, SHOULDER = 1.36;
   for (const s of [-1, 1]) {
-    kit.box('dark', 0.10, 0.08, 0.22, s * 0.185, Y(PEG - 0.02), -0.04, 0.03);              // boot
+    kit.blk('dark', 0.10, 0.08, 0.22, s * 0.185, Y(PEG - 0.02), -0.04);                    // boot
     kit.tube('dark', s * 0.185, Y(PEG + 0.06), -0.03, s * 0.165, Y(KNEE), 0.02, 0.058);    // shin
     kit.tube('dark', s * 0.165, Y(KNEE), 0.02, s * 0.125, Y(HIP), -0.14, 0.066);           // thigh
     kit.tube('paint2', s * 0.155, Y(SHOULDER), -0.06, s * 0.295, Y(BAR + 0.15), barZ + 0.10, 0.050); // upper arm
     kit.tube('paint2', s * 0.295, Y(BAR + 0.15), barZ + 0.10, s * 0.345, Y(BAR + 0.02), barZ, 0.039); // forearm
+    kit.blk('dark', 0.075, 0.070, 0.090, s * 0.352, Y(BAR + 0.01), barZ);                  // glove
   }
   kit.box('dark', 0.26, 0.13, 0.20, 0, Y(HIP + 0.02), -0.16, 0.05);                        // hips
   kit.box('paint2', 0.28, 0.36, 0.22, 0, Y((HIP + SHOULDER) * 0.5 + 0.02), -0.10, 0.08, 0.42); // torso
   kit.plate('livery', 0.26, 0.20, 0, Y(1.24), -0.24, -0.42);                               // back number
   kit.sphere('helmet', 0.142, 0, Y(1.42), 0.10);
-  kit.box('helmet', 0.19, 0.045, 0.15, 0, Y(1.50), 0.17, 0.02, -0.40);                     // peak
-  kit.plate('glass', 0.185, 0.095, 0, Y(1.40), 0.24, 0, 0, 0.10);                          // goggles
-
-  /* ---- pipe flare. One can, so one cone, at the silencer tip. */
-  const flame = new THREE.Mesh(
-    new THREE.ConeGeometry(0.065, 0.30, 8, 1, true).rotateX(-Math.PI / 2),
-    v.mats.glow);
-  flame.position.set(0.145, Y(0.84), zR - 0.14);
-  flame.renderOrder = 6;
-  v.chassis.add(flame);
-  v.exhaust = flame;
+  kit.blk('helmet', 0.19, 0.045, 0.15, 0, Y(1.50), 0.17, -0.40);                           // peak
+  kit.plate('visor', 0.185, 0.095, 0, Y(1.40), 0.252, 0, 0, 0.10);                         // goggles
 }
 
 /** Stretch a unit-length +Z member so it spans exactly from a to b. */

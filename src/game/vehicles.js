@@ -37,6 +37,17 @@
      motorForce must satisfy  drive.fadeTail · motorForce > drag(topSpeed),
              or the car will never reach the top speed printed on its card.
              drag(topSpeed) = aero + rolling resistance on DIRT.
+
+   Two fields carry no physics at all and are here anyway, because they are
+   identity and identity belongs with the machine rather than with the model
+   kit that draws it:
+
+     team    the wordmark painted down the flank. `name` is the MACHINE
+             ('RIDGEBACK'); `team` is who entered it, and a livery that says
+             the model name twice looks like a brochure, not a race entry.
+     number  the works car's race number. Only livery 0 wears it — every AI
+             variant draws from the pool in vehicle-art — so it is the one
+             number a player ever sees on their own car.
    ============================================================ */
 
 export const VEHICLES = [
@@ -51,6 +62,8 @@ export const VEHICLES = [
     id: 'hopper',
     name: 'DUNE HOPPER',
     desc: 'Sport side-by-side. Forgiving, floaty, quick everywhere.',
+    team: 'SUNSTRIKE WORKS',
+    number: 7,
     color: 0x2857e0,
     bodyStyle: 'buggy',
 
@@ -96,6 +109,8 @@ export const VEHICLES = [
     id: 'ridgeback',
     name: 'RIDGEBACK',
     desc: 'Two tonnes of bullbar. Planted, torquey, allergic to straights.',
+    team: 'IRONHIDE HAUL',
+    number: 12,
     color: 0x3f9d54,
     bodyStyle: 'truck',
 
@@ -142,6 +157,8 @@ export const VEHICLES = [
     id: 'redline',
     name: 'REDLINE',
     desc: 'Cab-forward wedge. Fastest thing here, and it knows it.',
+    team: 'REDLINE MOTORSPORT',
+    number: 23,
     color: 0xe1252b,
     bodyStyle: 'wedge',
 
@@ -216,6 +233,8 @@ export const VEHICLES = [
     id: 'moto',
     name: 'HORNET',
     desc: 'Motocross 450. Half the weight, twice the air, no margin at all.',
+    team: 'HORNET RACING',
+    number: 41,
     color: 0xe8c21a,
     bodyStyle: 'bike',
 

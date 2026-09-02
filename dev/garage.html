@@ -7,8 +7,11 @@
 <style>
   html,body{margin:0;height:100%;background:#0b0d10;overflow:hidden}
   canvas{display:block;width:100%;height:100%}
-  #stats{position:fixed;top:8px;left:8px;color:#9fe;font:12px/1.6 ui-monospace,monospace;
-         background:rgba(0,0,0,.6);padding:8px 11px;border-radius:6px;white-space:pre}
+  /* The triangle census runs to a dozen-odd lines, so the panel is capped and
+     scrolls rather than growing past the bottom of a laptop screen. */
+  #stats{position:fixed;top:8px;left:8px;color:#9fe;font:12px/1.45 ui-monospace,monospace;
+         background:rgba(0,0,0,.62);padding:8px 11px;border-radius:6px;white-space:pre;
+         max-height:calc(100vh - 32px);overflow:auto}
   #err{position:fixed;bottom:8px;left:8px;right:8px;color:#f66;font:12px ui-monospace,monospace;white-space:pre-wrap}
 </style>
 <script type="importmap">
