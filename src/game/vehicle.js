@@ -107,6 +107,39 @@ export class Vehicle {
     // the props contract uses so a Vehicle collides correctly outside race.js.
     this.collideR = this.collRadius;
 
+    /* ---- chassis hull: the eight points that hit the ground when the wheels
+       do not ----
+       The sphere set above is a car-to-car ENVELOPE — deliberately fat, and
+       for the Hopper it is already 34 cm underground with the car parked. It
+       cannot be reused here. This is a tight box instead, and its FLOOR is the
+       load-bearing number: put it at full bump plus the failsafe margin and a
+       car on its wheels can never touch it, which is what lets the hull carry
+       real impulses without arguing with the suspension on every landing.
+
+           floor = (suspTravel − sag) + floorMargin   above the contact patch
+
+       Everything else follows the bounding box, inset so the wheels stand
+       proud of it and meet a kerb before the bodywork does. */
+    const hi = TUNE.sim.hullInset;
+    this.hullFloor = -spec.comHeight + (spec.suspTravel - this.sag) + TUNE.sim.floorMargin;
+    this.hullRoof = -spec.comHeight + H;
+    this.hullHX = W * 0.5 * hi;
+    this.hullHZ = L * 0.5 * hi;
+    // Static ground clearance of the hull with the car at rest, published for
+    // the gate in dev/vehicle-check.mjs: it must stay positive at full bump.
+    this.hullClearance = this.hullFloor + spec.comHeight;
+    this.hull = [];
+    for (const sy of [this.hullFloor, this.hullRoof]) {
+      for (const sx of [-this.hullHX, this.hullHX]) {
+        for (const sz of [-this.hullHZ, this.hullHZ]) {
+          this.hull.push(new THREE.Vector3(sx, sy, sz));
+        }
+      }
+    }
+    // Broad-phase reach: no hull point can be further than this from the COM.
+    this.hullReach = Math.hypot(this.hullHX, this.hullHZ) +
+      Math.max(Math.abs(this.hullFloor), Math.abs(this.hullRoof));
+
     /* ---- wheels ---- */
     this.wheels = [];
     for (const front of [true, false]) {
@@ -119,6 +152,7 @@ export class Vehicle {
           spin: 0, spinVel: 0,
           comp: this.sag, compVel: 0,
           contact: false,
+          align: 1, alignMul: 1,     // strut vs surface normal — see TUNE.susp.minAlign
           normal: new THREE.Vector3(0, 1, 0),
           worldPos: new THREE.Vector3(),
           load: 0, slipLong: 0, slipLat: 0,
@@ -136,6 +170,7 @@ export class Vehicle {
     this.rearGripMul = 1;            // handbrake grip cut, recovers over time
     this.airborne = false; this.airTime = 0;
     this.contacts = 0;
+    this.hullDown = false;           // a hull point was on the ground last substep
     this.flipTimer = 0;
     this.hardHit = 0;                // peak impact m/s THIS frame — reset by step()
     this.lastImpact = 0;
@@ -233,6 +268,7 @@ export class Vehicle {
     for (const w of this.wheels) {
       w.comp = this.sag; w.compVel = 0; w.spinVel = 0; w.spin = 0;
       w.contact = true; w.load = this.cornerLoad;
+      w.align = 1; w.alignMul = 1;
       w.slipLat = 0; w.slipLong = 0; w.steer = 0;
       w.normal.copy(_n1);
       w.worldPos.copy(this.pos).addScaledVector(_n1, -(S.comHeight - S.wheelR));
@@ -240,6 +276,7 @@ export class Vehicle {
     this.steerNorm = 0; this.steerAngle = 0; this.rearGripMul = 1;
     this.airborne = false; this.airTime = 0; this.flipTimer = 0;
     this.hardHit = 0; this.lastImpact = 0; this.contacts = 4;
+    this.hullDown = false;
     this.slipLat = 0; this.slipLong = 0; this.motorLoad = 0;
     this.gear = 0; this._blip = 0;
     this._rpmRaw = TUNE.drive.rpmIdle; this.rpmNorm = TUNE.drive.rpmIdle;
@@ -486,9 +523,31 @@ export class Vehicle {
       const gh = this.terrain.heightAt(_p2.x, _p2.z);
       this.terrain.normalAt(_p2.x, _p2.z, S.wheelR * 0.8, w.normal);
 
-      let comp = gh - (_p2.y - S.wheelR);
+      /* ---- compression, measured ALONG THE STRUT ----
+         `align` is how much the strut axis agrees with the surface normal
+         under it. The old measure was a bare vertical distance, which is only
+         the strut length when the strut is vertical — and, worse, carried no
+         notion of the strut pointing the WRONG WAY. Solving the droop-hub's
+         contact point against the local ground plane gives both at once:
+
+             comp = (gh − D.y)·n.y / (up·n) + wheelR
+
+         which is identical to the old expression on flat ground with the car
+         upright (n.y = align = 1), and correctly reports a strut that cannot
+         reach the ground at all once the car is over on its side. */
+      const align = up.dot(w.normal);
+      w.align = align;
+      let comp;
+      if (align > T.susp.minAlign) {
+        comp = (gh - _p2.y) * w.normal.y / align + S.wheelR;
+      } else {
+        comp = -T.susp.droop;                 // strut points at the sky: no contact
+      }
       comp = clamp(comp, -T.susp.droop, S.suspTravel + 0.35);
-      w.contact = comp > 0;
+      /* Faded, not cut. A car sliding onto its side sheds load over 0.2 of
+         align instead of dropping four corners in one substep. */
+      w.alignMul = sstep(T.susp.minAlign, T.susp.minAlign + T.susp.alignFade, align);
+      w.contact = comp > 0 && w.alignMul > 0;
       if (w.contact) contacts++;
       w.compVel = (comp - w.comp) / dt;
       w.comp = comp;
@@ -507,7 +566,16 @@ export class Vehicle {
       }
     }
     this.contacts = contacts;
-    this.airborne = contacts === 0;
+    /* Airborne means NOTHING is touching, not "no wheel is touching". A car
+       resting on its roof has four struts pointing at the sky and zero wheel
+       contacts; calling that airborne left it flying forever — airTime
+       climbing, hang gravity on, and `landEdge` never firing, so the trick
+       system never classified the crash and race.js never saw a landing.
+       `hullDown` is set by _hullContact at the END of the previous substep,
+       so it lags by one 2.8 ms substep. That is the same lag `landEdge`
+       already documents, and for the same reason: it is the last substep that
+       was ACTUALLY off the ground that we want to measure. */
+    this.airborne = contacts === 0 && !this.hullDown;
 
     /* ---- pass 2: suspension + tyres ---- */
     const force = _F.set(0, 0, 0);
@@ -535,11 +603,17 @@ export class Vehicle {
       const partner = this.wheels[i ^ 1];       // 0↔1 and 2↔3 are the same axle
       const over = Math.max(0, w.comp - S.suspTravel);
       const arb = partner.contact ? this.arbK * (w.comp - partner.comp) : 0;
+      const cvel = clamp(w.compVel, -T.susp.compVelClamp, T.susp.compVelClamp);
+      /* Bump-stop damping. Zero in normal driving because `over` is zero, and
+         it is the term that stops a landing being a trampoline: pinned at the
+         stop the stop now DISSIPATES on the way in and resists on the way back
+         out, instead of handing every joule straight back to the car. */
       let fs = S.suspK * w.comp
-        + S.suspC * clamp(w.compVel, -T.susp.compVelClamp, T.susp.compVelClamp)
+        + S.suspC * cvel
         + this.bumpStopK * over * over
+        + S.suspC * T.susp.bumpStopC * over * cvel
         - arb;
-      fs = clamp(fs, 0, this.maxSpringForce);
+      fs = clamp(fs, 0, this.maxSpringForce) * w.alignMul;
 
       _p3.copy(up).multiplyScalar(fs);
       force.add(_p3);
@@ -664,7 +738,7 @@ export class Vehicle {
        that turns a kicker into a set piece without touching ground handling.
        Touchdown restores full weight instantly, so landings still thump. */
     let gMul = 1;
-    if (contacts === 0) {
+    if (this.airborne) {
       gMul = 1 - (1 - T.air.hangGravity) * sstep(T.air.hangLo, T.air.hangHi, this.airTime);
     }
     force.y -= this.mass * G * gMul;
@@ -753,6 +827,13 @@ export class Vehicle {
       torque.addScaledVector(fwd, -this.omega.dot(fwd) * 0.8 * this.Ibody.z);
       torque.addScaledVector(rgt, -this.omega.dot(rgt) * 0.8 * this.Ibody.x);
 
+    } else if (this.hullDown) {
+      /* ---- down, but not on the wheels ----
+         No air control and no landing assist: the car is ON THE GROUND, just
+         not the right way up. The hull impulses and their friction are the
+         entire model here, and airTime deliberately stops climbing — a car
+         sliding on its roof is not having a flight. */
+      this.airTime = 0;
     } else {
       /* ============================================================
          AIRBORNE — free rotation, plus a predictive landing assist
@@ -845,11 +926,16 @@ export class Vehicle {
       this.quat.premultiply(_q1).normalize();
     }
 
+    /* ---- the chassis on the ground ----
+       Whatever is not a tyre lands here. See _hullContact. */
+    this._hullContact(dt, up);
+
     /* ---- hard floor failsafe ----
-       A tunnelling guard, not a bump stop: it sits below the lowest legitimate
-       centre-of-mass height (full bump, minus a margin). If this fires during
-       ordinary driving then suspTravel and comHeight disagree — fix the spec,
-       do not raise the floor. */
+       A tunnelling guard, and now ONLY that: the hull above resolves every
+       landing a car can actually reach, so this is what catches a teleport or
+       a dropped frame that put the centre of mass under the terrain outright.
+       If it fires in ordinary driving then suspTravel and comHeight disagree —
+       fix the spec, do not raise the floor. */
     const bh = this.terrain.heightAt(this.pos.x, this.pos.z);
     const minY = bh + Math.max(0.05, S.comHeight - S.suspTravel - T.sim.floorMargin);
     if (this.pos.y < minY) {
@@ -864,6 +950,139 @@ export class Vehicle {
     /* ---- flip watchdog ---- */
     if (up.y < T.sim.flipUp) this.flipTimer += dt; else this.flipTimer = 0;
     this.odo += Math.abs(vFwd) * dt;
+  }
+
+  /* ============================================================
+     THE CHASSIS ON THE GROUND
+     ------------------------------------------------------------
+     Everything that is not a tyre lands here: roofs, doors, noses, and the
+     belly of a car that came down on the lip of a jump.
+
+     What was here before was a clamp on pos.y with a restitution on vel.y.
+     That is a pogo stick, for two reasons, and a car that landed on its roof
+     found both of them. It had no ANGULAR response, so nothing about hitting
+     the ground ever slowed a tumble down — the car kept rotating at the rate
+     it arrived with, and each rotation fed the suspension a fresh reason to
+     fire. And it had no FRICTION, so a car on its roof could not scrub the
+     speed it had; it skated, bounced, skated, bounced.
+
+     So: eight points on the body box, each resolved as a real contact with
+     the terrain — push-out, a near-inelastic normal impulse, and a friction
+     impulse, all applied at the contact point through r × J so they take the
+     spin out as well as the speed. Restitution is 0.04. A body panel hitting
+     dirt does not bounce; it thuds, and then it grinds to a halt.
+
+     ORDER MATTERS: this runs AFTER integration and AFTER the suspension, so
+     it is the last word on where the car is. And because the hull floor is
+     set to full bump plus the failsafe margin (see the constructor), a car on
+     its wheels never reaches it — the two systems never argue.
+     ============================================================ */
+  _hullContact(dt, up) {
+    const T = TUNE.sim;
+    /* Cheap out of the common case. Upright with a wheel down is ordinary
+       driving, which is most frames of most races, and it cannot touch the
+       hull. Everything else pays for the lookups. */
+    if (up.y > 0.55 && this.contacts > 0) { this.hullDown = false; return 0; }
+
+    // One height sample at the centre of mass as a prefilter: a hull point
+    // more than hullReach above it cannot be near the ground.
+    const cy = this.terrain.heightAt(this.pos.x, this.pos.z);
+    if (this.pos.y - cy > this.hullReach + 0.5) { this.hullDown = false; return 0; }
+
+    let deepest = 0, touched = false;
+    for (let i = 0; i < this.hull.length; i++) {
+      // hull point → world
+      _h1.copy(this.hull[i]).applyQuaternion(this.quat);      // arm from the COM
+      _h2.copy(_h1).add(this.pos);                            // world position
+      if (_h2.y - cy > this.hullReach) continue;              // still well clear
+
+      const gh = this.terrain.heightAt(_h2.x, _h2.z);
+      if (_h2.y - gh > 0.6) continue;                         // not close enough to matter
+      this.terrain.normalAt(_h2.x, _h2.z, 0.5, _h3);
+
+      // signed distance to the local ground plane through (x, gh, z)
+      const pen = -((_h2.y - gh) * _h3.y);
+      if (pen <= 0) continue;
+      touched = true;
+      if (pen > deepest) deepest = pen;
+
+      // positional push-out, along the surface normal
+      const push = Math.min(pen * T.hullPushOut, T.hullMaxPush);
+      this.pos.addScaledVector(_h3, push);
+      _h2.addScaledVector(_h3, push);
+      _h1.copy(_h2).sub(this.pos);                            // arm, after the push
+
+      /* velocity AT THE POINT — ω × r included. This is the whole reason the
+         hull can stop a tumble that the old clamp could not even see. */
+      _h4.copy(this.vel).add(_h5.crossVectors(this.omega, _h1));
+      const vn = _h4.dot(_h3);
+      if (vn >= 0) continue;                                  // already separating
+
+      /* Effective mass along the normal at this arm:
+             1/m + n · (I⁻¹ (r × n)) × r
+         with the body-frame diagonal inertia, so a corner impact resists
+         through the axis it actually rotates about. */
+      _h5.crossVectors(_h1, _h3);                             // r × n, world
+      _hq.copy(this.quat).invert();
+      _h6.copy(_h5).applyQuaternion(_hq);                     // → body
+      _h6.set(_h6.x / this.Ibody.x, _h6.y / this.Ibody.y, _h6.z / this.Ibody.z);
+      _h6.applyQuaternion(this.quat);                         // I⁻¹(r × n) → world
+      _h5.crossVectors(_h6, _h1);                             // (I⁻¹(r×n)) × r
+      const invMass = 1 / this.mass + _h5.dot(_h3);
+      if (!(invMass > 1e-6)) continue;
+
+      const closing = -vn;
+      const jn = closing * (1 + T.hullRestitution) / invMass;
+      this._applyImpulse(_h3, jn, _h1);
+
+      /* friction at the contact — this is what turns a roof landing into a
+         slide that ENDS. Capped as a fraction of the normal impulse, so a
+         graze scrubs a little and a flat drop scrubs a lot. */
+      _h4.addScaledVector(_h3, -vn);                          // tangential velocity
+      const tl = _h4.length();
+      if (tl > 1e-4) {
+        _h4.divideScalar(tl);
+        _h5.crossVectors(_h1, _h4);
+        _h6.copy(_h5).applyQuaternion(_hq);
+        _h6.set(_h6.x / this.Ibody.x, _h6.y / this.Ibody.y, _h6.z / this.Ibody.z);
+        _h6.applyQuaternion(this.quat);
+        _h5.crossVectors(_h6, _h1);
+        const invT = 1 / this.mass + _h5.dot(_h4);
+        if (invT > 1e-6) {
+          const jt = Math.min(tl / invT, T.hullFriction * jn);
+          this._applyImpulse(_h4, -jt, _h1);
+        }
+      }
+
+      if (closing > TUNE.collide.minSpeed) {
+        this.hardHit = Math.max(this.hardHit, closing);
+        this.lastImpact = closing;
+      }
+    }
+
+    /* Extra angular damping while any hull point is down. The impulses above
+       are correct but they act at one point at a time, and a car spinning on
+       its roof presents a new point every few substeps; without this it can
+       keep a rotation alive by never letting one contact finish. Contact with
+       the ground on a panel is not frictionless, and this is that. */
+    if (touched) {
+      const k = Math.max(0, 1 - T.hullAngDamp * dt);
+      this.omega.multiplyScalar(k);
+    }
+    this.hullDown = touched;
+    return deepest;
+  }
+
+  /** Impulse `j` along unit `n`, applied at arm `r` from the centre of mass.
+      Linear and angular both, with the body-frame inertia. */
+  _applyImpulse(n, j, r) {
+    this.vel.addScaledVector(n, j / this.mass);
+    _h7.crossVectors(r, n).multiplyScalar(j);                 // torque impulse, world
+    _hq2.copy(this.quat).invert();
+    _h7.applyQuaternion(_hq2);                                // → body
+    _h7.set(_h7.x / this.Ibody.x, _h7.y / this.Ibody.y, _h7.z / this.Ibody.z);
+    _h7.applyQuaternion(this.quat);                           // Δω → world
+    this.omega.add(_h7);
   }
 
   /* ============================================================
@@ -1178,6 +1397,12 @@ const _p4 = new THREE.Vector3(), _p5 = new THREE.Vector3(), _p6 = new THREE.Vect
 const _p7 = new THREE.Vector3(), _p8 = new THREE.Vector3(), _p9 = new THREE.Vector3();
 const _p10 = new THREE.Vector3(), _p11 = new THREE.Vector3(), _p12 = new THREE.Vector3();
 const _n1 = new THREE.Vector3(), _n2 = new THREE.Vector3();
+// _hullContact / _applyImpulse only — kept apart from _p1.._p12 because the
+// hull runs after the integrator, which is still holding those.
+const _h1 = new THREE.Vector3(), _h2 = new THREE.Vector3(), _h3 = new THREE.Vector3();
+const _h4 = new THREE.Vector3(), _h5 = new THREE.Vector3(), _h6 = new THREE.Vector3();
+const _h7 = new THREE.Vector3();
+const _hq = new THREE.Quaternion(), _hq2 = new THREE.Quaternion();
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 /* Air-assist scratch, kept separate from the _p and _q sets because
    _landAssist runs INSIDE the airborne branch of _substep, and _p1.._p5 plus

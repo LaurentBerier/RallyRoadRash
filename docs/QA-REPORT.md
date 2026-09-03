@@ -1,5 +1,87 @@
 # RALLY ROAD RASH — QA report
 
+## Pass 6 — landings that are not on the tyres (2026-09-03, branch `glow-up`)
+
+**Reported:** "the cars start bouncing around as if they had no weight, especially
+when it's not on their tyres." **Reproduced, root-caused, fixed, gated.**
+
+### The bug: the suspension did not know which way it pointed
+
+`_substep` measured wheel compression as a bare VERTICAL distance —
+`comp = gh - (hub.y - wheelR)` — and then applied the resulting spring force
+along the body's own up axis. That is only the same thing when the car is
+upright. Roll it past ~90° and the two disagree completely: four struts pointing
+at the sky still measured as fully compressed, saturated the bump stop, and fired
+**28 g per corner along an axis that now pointed at the ground.** The suspension
+drove the car INTO the terrain, the point-clamp floor guard reflected `vel.y`,
+and the pair pumped.
+
+Traced, Hopper, 5 m drop, inverted:
+
+```
+t1.03  y 0.23  vy -13.84  up.y -0.34   2 wheels "in contact", 78.8 kN each
+t1.05  y 0.11  vy  +1.47              ← floor guard reflects
+t1.25  y 0.77  vy  +8.06  up.y  0.88  ← the still-compressed springs, now
+t1.33  y 1.41  vy  +7.23                pointing UP, fire the car off the ground
+```
+
+It reached **10.8 m from a 5 m drop.** Energy audit over 692 randomised
+arrivals: worst case **4.35× the energy the car arrived with.**
+
+### Three defects, three fixes
+
+| | fix |
+|---|---|
+| strut had no notion of its own direction | compression solved ALONG the strut against the local ground plane, gated on `up·n > TUNE.susp.minAlign` and faded over `alignFade`. Reduces to the old expression exactly when upright on the flat. |
+| bump stop was a pure spring — it returned every joule | `TUNE.susp.bumpStopC`, damping proportional to overtravel. Zero in normal driving, strongest where the trampoline was. |
+| nothing but a `pos.y` clamp held the chassis up | `Vehicle._hullContact` — eight points on the body box, resolved against the terrain with push-out, a near-inelastic normal impulse and friction, all applied through `r × J` so a roof landing sheds SPIN as well as speed. The old clamp had no angular term at all, which is why the tumble never stopped. |
+
+A fourth fell out of it: `airborne` now means "nothing is touching", not "no
+WHEEL is touching". A car resting on its roof used to report `airborne === true`
+for ever — `airTime` climbing, hang gravity on, `landEdge` never firing — and
+because race.js gates BOTH `wedged` and `stuck` recovery on `!v.airborne`, **the
+recovery net could not see a rolled car at all.**
+
+### Result
+
+| | before | after |
+|---|---|---|
+| worst energy after touchdown (692 arrivals) | **4.35×** | **0.936×** |
+| 5 m inverted drop, peak height after contact | 10.8 m | 1.3 m |
+| upward velocity injected on landing | 13.7 m/s | 0.3 m/s |
+| re-launches after an inverted landing | 2–9 | **0** |
+| tumbling arrivals on rough ground, clean | 202/260 | **260/260** |
+| physics cost, 8-car frame | 62.7 µs | 64.3 µs (+2.6 %) |
+
+Upright handling is untouched: acceleration, braking, the 6 m landing, stability,
+collision and fuzz are bit-identical; cornering radii move < 0.1 %. `dev/vehicle-check.mjs`
+grew section **(k)**, which fails 19 checks against the old physics and passes
+159/159 against the new.
+
+### The one thing this changed that is NOT a bug — needs a decision
+
+The energy leak was **acting as a self-righting mechanism.** A rolled car used to
+be bounced back onto its wheels; now it stays put, which is correct, and the
+recovery net has to do the work it was always meant to do. Over the 16-race
+`qa-drive` sweep:
+
+| | baseline | fixed |
+|---|---|---|
+| `flip` recoveries | 5 | **88** |
+| `off` recoveries | 276 | **216** (better) |
+| rival mean speed | — | equal or faster on 3 of 4 stages |
+| player resets / DNF | 98 / **0** | 97 / **0** |
+| rival DNF | 28 | **42** |
+
+Rivals drive better and leave the road less, but a rival that rolls now costs
+itself 2.5 s of `flipTime` plus a backwards respawn instead of being bounced back
+upright for free. **Shortening the dwell for a settled flipped car was tried and
+does not pay** — 0.9 s moved rival DNF only 42 → 41 while pushing total resets
+530 → 588 and player resets 97 → 111, because the cost is the respawn penalty,
+not the wait. Left alone deliberately: whether a flipped car should self-right,
+recover faster, or simply stay flipped is a DESIGN call, not a physics one.
+
+
 ## Pass 5 — canyon difficulty, rival AI, power-up legibility (2026-09-02, branch `glow-up`)
 
 Three user-reported complaints, measured rather than guessed. **Two are fixed and

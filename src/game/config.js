@@ -140,6 +140,23 @@ export const TUNE = {
                             //       counts as a "hit" for hardHit.
     hitVel: 3.0,            // m/s of compression velocity below which a landing is not
                             //       worth reporting to feel/audio.
+
+    /* A strut can only push on ground it is ABOVE. `align` is up·n — how much
+       the strut axis lines up with the surface normal under it — and below
+       this the wheel is simply not touching, whatever the height probe says.
+       Without the gate a car on its roof measures four compressed springs and
+       fires them along its own up axis, which by then points at the ground:
+       the suspension drives the car INTO the terrain, the floor guard bounces
+       it back, and the pair pumps until the car is 10 m up. Faded, not cut, so
+       a car sliding onto its side sheds load instead of dropping it. */
+    minAlign: 0.30,         // up·n below which a strut carries no load at all.
+    alignFade: 0.20,        // width of the fade-in above minAlign.
+
+    /* The bump stop is rubber, not a spring: it has to LOSE the energy it
+       takes. Damping proportional to overtravel means it is absent in normal
+       driving (over = 0) and strongest exactly where the trampoline was —
+       pinned at the stop after a big drop. */
+    bumpStopC: 26,          // N·s/m per metre of overtravel, as a multiple of suspC.
   },
 
   /* ---------------------------------------------------------------
@@ -595,6 +612,31 @@ export const TUNE = {
                             //       bump stop — if it fires in normal driving, the
                             //       suspension travel is wrong.
     floorBounce: 0.12,      // restitution of the hard floor. Just enough to not stick.
+
+    /* ---- the chassis hull ----
+       Eight points on the body box, resolved against the terrain with real
+       impulses. This is what a landing that is NOT on the tyres hits. The
+       point-clamp failsafe below could only ever hold pos.y and flip vel.y,
+       which on a roof landing is a pogo stick: no angular response, so the
+       tumble never stopped, and restitution with nothing to scrub it meant
+       every touch gave the energy back.
+
+       The floor of the hull sits exactly where the failsafe plane used to —
+       full bump plus floorMargin — so a car on its wheels never touches it.
+       Verified per vehicle by dev/vehicle-check.mjs (k). */
+    hullInset: 0.94,        // hull half-extents as a fraction of the bounding box, so
+                            //       the wheels stick out past it and take kerbs first.
+    hullRestitution: 0.04,  // a body panel on dirt does not bounce. This is the number
+                            //       that ends the pogo — do not raise it.
+    hullFriction: 0.72,     // tangential impulse cap as a fraction of the normal one.
+                            //       High: sheet metal on dirt scrubs hard, and a roof
+                            //       landing should stop, not skate.
+    hullPushOut: 0.55,      // fraction of remaining penetration resolved per substep.
+    hullMaxPush: 0.25,      // m — cap on positional correction per point per substep.
+    hullAngDamp: 6.0,       // 1/s of extra angular damping while any hull point is
+                            //       down. A car grinding on its roof must stop
+                            //       tumbling; tyre-less contact has no other path to
+                            //       shed spin.
     flipUp: 0.25,           // body up.y below this counts as flipped.
     flipHold: 0.35,         // s it must stay there — a barrel roll through inverted is
                             //       not a flip, landing on the roof is.

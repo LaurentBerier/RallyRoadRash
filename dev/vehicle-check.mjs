@@ -615,6 +615,131 @@ head('(j) VISUALS — procedural build + dispose (DOM stubbed)');
   delete globalThis.document;
 }
 
+/* ============================================================
+   (k) LANDING ON ANYTHING BUT THE TYRES
+   ------------------------------------------------------------
+   The regression this section exists for: a car that came down inverted used
+   to GAIN energy. The suspension probe was a bare vertical measure with no
+   idea which way the strut pointed, so four struts aimed at the sky still read
+   as fully compressed, fired 28 g a corner along the body's own up axis —
+   which by then pointed at the ground — and drove the car into the terrain.
+   The floor guard bounced it back, the springs fired again, and a 5 m drop
+   came off the ground at 13 m/s and reached 10 m. It looked exactly like a
+   car with no weight.
+
+   The gate is ENERGY. Total mechanical energy after touchdown may not exceed
+   what the car arrived with, at any attitude, on any vehicle. Everything else
+   here — the re-launch count, the settle — is a symptom; this is the disease.
+   ============================================================ */
+head('(k) LANDING NOT ON THE TYRES — no energy may be created');
+{
+  /* The invariant the whole hull rests on: with the car on its wheels at FULL
+     BUMP, the hull floor is still above the ground. If this fails the hull and
+     the suspension fight each other on every hard landing. */
+  for (const S of VEHICLES) {
+    const v = make(S.id, flat());
+    const atFullBump = v.hullClearance - (S.suspTravel - v.sag);
+    ok(`${S.id}: hull floor clears full bump`, atFullBump > 0.005,
+      `${f(atFullBump * 1000, 1)} mm of daylight at full compression`);
+  }
+
+  const energy = (v) => {
+    const q = v.quat.clone().invert();
+    const wb = v.omega.clone().applyQuaternion(q);
+    return 0.5 * v.mass * v.vel.lengthSq() +
+      v.mass * G * (v.pos.y - v.terrain.heightAt(v.pos.x, v.pos.z)) +
+      0.5 * (v.Ibody.x * wb.x ** 2 + v.Ibody.y * wb.y ** 2 + v.Ibody.z * wb.z ** 2);
+  };
+
+  /* 0° is the control: the same drop on the wheels must be unaffected. 90° is
+     a door landing, 180° is flat on the roof, and 100° is the one that used to
+     be worst — just past the point where a strut can reach the ground. */
+  for (const S of VEHICLES) {
+    let worstE = 0, worstVy = 0, worstAngle = 0, relaunches = 0, allFinite = true;
+    for (const deg of [0, 45, 90, 100, 135, 180]) {
+      const v = make(S.id, flat());
+      v.pos.y += 6;
+      v.quat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), deg * Math.PI / 180);
+      v.vel.set(0, 0, 15);
+      const e0 = energy(v);
+      let t = 0, down = false, wasAir = true, peakE = 0, peakVy = 0;
+      while (t < 8) {
+        v.step(DT, ctl(0)); t += DT;
+        if (!finite(v)) { allFinite = false; break; }
+        if (!v.airborne) down = true;
+        if (down) {
+          peakE = Math.max(peakE, energy(v));
+          peakVy = Math.max(peakVy, v.vel.y);
+          if (!wasAir && v.airborne) relaunches++;
+        }
+        wasAir = v.airborne;
+      }
+      const ratio = peakE / e0;
+      if (ratio > worstE) { worstE = ratio; worstAngle = deg; }
+      worstVy = Math.max(worstVy, peakVy);
+    }
+    info(`${S.id.padEnd(10)} worst energy after touchdown ${f(worstE, 3)}× (at ${worstAngle}°)   ` +
+      `peak upward vy ${f(worstVy)} m/s   re-launches ${relaunches}`);
+    ok(`${S.id}: a landing never creates energy`, worstE <= 1.02, `${f(worstE, 3)}×`);
+    ok(`${S.id}: the ground does not fire it back up`, worstVy < 3.0, `${f(worstVy)} m/s`);
+    ok(`${S.id}: it does not pogo`, relaunches <= 2, `${relaunches} re-launches`);
+    ok(`${S.id}: finite through every attitude`, allFinite);
+  }
+
+  /* A car at rest on its roof must report !airborne. This is not cosmetic:
+     race.js gates BOTH `wedged` and `stuck` recovery on !v.airborne, so while
+     a rolled car counted as flying the recovery net could not see it at all
+     and only the up.y < 0.25 flip path could ever bring it back. */
+  {
+    const v = make('hopper', flat());
+    v.pos.y += 3;
+    v.quat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI);
+    for (let t = 0; t < 5; t += DT) v.step(DT, ctl(0));
+    info(`resting after a roof landing: airborne ${v.airborne}, hullDown ${v.hullDown}, ` +
+      `|v| ${f(v.vel.length(), 3)}, |ω| ${f(v.omega.length(), 3)}, up.y ${f(v.up.y)}`);
+    ok('a car down on its bodywork is not "airborne"', !v.airborne);
+    ok('…and it has come to rest, not settled into a bounce',
+      v.vel.length() < 0.6 && v.omega.length() < 0.6,
+      `|v| ${f(v.vel.length(), 3)}, |ω| ${f(v.omega.length(), 3)}`);
+    ok('…so airTime is not still climbing', v.airTime < 0.1, `${f(v.airTime, 2)} s`);
+  }
+
+  /* The strut gate itself, as an INVARIANT rather than one probe: over a long
+     tumble at every attitude a car can reach, a strut that does not point at
+     the ground must never carry load. This is the check that would have caught
+     the original bug at its source — four skyward struts reporting 28 g each. */
+  {
+    let worstBadLoad = 0, samples = 0, gated = 0, minSeen = 1;
+    for (const S of VEHICLES) {
+      for (const deg of [70, 90, 110, 140, 180]) {
+        const v = make(S.id, flat());
+        v.pos.y += 4;
+        v.quat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), deg * Math.PI / 180);
+        v.vel.set(0, 0, 18); v.omega.set(0, 0, 2.5);
+        for (let t = 0; t < 4; t += DT) {
+          v.step(DT, ctl(0));
+          for (const w of v.wheels) {
+            samples++;
+            if (w.align < minSeen) minSeen = w.align;
+            if (w.align <= TUNE.susp.minAlign) {
+              gated++;
+              if (w.load > worstBadLoad) worstBadLoad = w.load;
+            }
+          }
+        }
+      }
+    }
+    info(`${samples} wheel-substeps of tumbling: ${gated} had a strut that cannot ` +
+      `reach the ground (align down to ${f(minSeen, 2)}); heaviest load on one ` +
+      `${f(worstBadLoad, 1)} N`);
+    // The gate is worthless if it never enters the branch, so assert that too.
+    ok('the tumble actually drives struts past the align gate', gated > 1000,
+      `${gated} gated wheel-substeps`);
+    ok('a strut pointing away from the ground never carries load', worstBadLoad < 1,
+      `${f(worstBadLoad, 1)} N`);
+  }
+}
+
 /* ---------------- verdict ---------------- */
 console.log(`\n${failures ? '\x1b[31m' : '\x1b[32m'}${checks - failures}/${checks} checks passed\x1b[0m`);
 if (failures) { console.log(`\x1b[31m${failures} FAILURE(S)\x1b[0m`); process.exit(1); }
