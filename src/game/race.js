@@ -32,8 +32,8 @@ import { SURF, SURFACES } from '../world/surfaces.js';
 import { DUST_KIND } from '../world/dust.js';
 import { RaceTracker, formatTime } from './racecore.js';
 import { AIDriver, makeGridProfiles } from './ai.js';
-import { ItemWorld } from './itemworld.js';
-import { ITEMS } from './items.js';
+import { Arsenal } from './arsenal.js';
+import { PICKUP } from './weapons.js';
 import { RaceFX } from './racefx.js';
 import { CAM } from './camera.js';
 import { applyResult, TRACK_ORDER, shouldTip, markTip } from './progression.js';
@@ -65,6 +65,8 @@ const IMPACT_MIN = 2.0;             // m/s of closing speed worth hearing
 const BOOST = TUNE.boost;           // read every frame in _wheelEffects
 
 const AI_NAMES = ['MARA', 'JUKKA', 'REY', 'OTTO', 'SANNE'];
+/* The one thing anybody can be hit with, as the race log names it. */
+const WEAPON_NAME = 'ROCKET';
 /* Minimap dots have to be told apart at four pixels across, which the three
    car colours cannot do on their own. The player keeps their car's colour. */
 const RIVAL_COLORS = [0x36a8ff, 0x7ee06a, 0xffd23f, 0xc46bff, 0xff5f56];
@@ -160,16 +162,19 @@ export class Race {
       checkpoints: this.trackData.checkpoints
     });
 
-    /* ---- power-ups ----
-       Built after the tracker because the drop roulette reads race position,
-       and handed the SEEDED race stream so a sweep in dev/qa-drive.js stays
-       reproducible between builds. `items` false is the purist toggle: the
-       system still exists, it is simply inert and invisible. */
-    this.items = new ItemWorld({
+    /* ---- the arsenal ----
+       Rockets on every roof, crates and nitro cans on the road. Sited off
+       the TRACK seed, not the race stream, so the layout is a property of
+       the stage and a sweep in dev/qa-drive.js stays reproducible between
+       builds. `weapons` false is the purist toggle: the system still exists,
+       it is simply inert and invisible. (`items` is read as a fallback until
+       main.js's option bag is renamed — contract 8.10.) */
+    const weaponsOn = (o.weapons === undefined ? o.items : o.weapons) !== false;
+    this.arsenal = new Arsenal({
       scene: this.engine.scene, terrain: this.terrain, trackData: this.trackData,
       dust: this.dust, audio: this.audio, feel: this.feel, engine: this.engine,
-      racers: this.racers, tracker: this.tracker, rng: this.rng,
-      enabled: o.items !== false, vfx: this.vfx,
+      props: this.props, racers: this.racers, tracker: this.tracker, rng: this.rng,
+      seed: this.trackDef.seed, enabled: weaponsOn, vfx: this.vfx,
     });
     /* Presentation. Everything this object does is a sound, a particle or a
        shake; nothing it does can change the race. See racefx.js. */
@@ -178,17 +183,18 @@ export class Race {
       hud: this.hud, engine: this.engine, vfx: this.vfx,
     });
     /* Set at the green flag and never cleared mid-race: a record set with
-       items on is FLAGGED as such, and toggling them off on the last lap must
-       not launder it. */
-    this.itemsFlag = false;
+       weapons on is FLAGGED as such, and toggling them off on the last lap
+       must not launder it. The record field keeps its old name (`itemsTotal`
+       / `itemsLap` in progression.js are a locked whitelist). */
+    this.weaponsFlag = false;
 
     /* ---- reusable per-frame payloads ---- */
     this._pctl = { throttle: 0, steer: 0, brake: 0, handbrake: 0, roll: 0 };
     this._aictx = {
       vehicles: this.racers.map(r => r.vehicle), tracker: this.tracker,
-      // Read-only view of the item world, so a driver can aim, dodge and
-      // decide whether a box is worth the detour. See ai-items.js.
-      items: this.items, myId: 0, state: 'countdown',
+      // Read-only view of the arsenal, so a driver can aim, dodge and decide
+      // whether a crate is worth the detour (contract 8.11). See ai-weapons.js.
+      arsenal: this.arsenal, myId: 0, state: 'countdown',
       /* Who the field is actually racing. AI_BALANCE.player reads the gap to
          this slot; without it the grid balances beautifully against itself
          while the player watches it disappear. */
@@ -220,9 +226,11 @@ export class Race {
     this._hudVeh.trick = this._hudTrick;
     this._hudDots = this.racers.map(r => ({ x: 0, z: 0, color: r.color, isPlayer: r.isPlayer }));
     this._hudRival = { name: '', gap: 0 };
-    this._hudItem = {
-      enabled: true, id: -1, name: '', col: 0, charges: 0, rolling: false,
-      seq: 0, icon: '', use: '', hint: '',
+    /* Contract 8.3: the `item` block is REPLACED, not extended. Pre-allocated;
+       the one string is a constant the Arsenal picks by kind. */
+    this._hudArsenal = {
+      enabled: true, ammo: 0, ammoCap: 0, reloadT: 0, nitroT: 0,
+      pickupSeq: 0, pickupKind: -1, pickupText: '', fireSeq: 0,
     };
     /* Hit / dealt / pad / land, as sequence numbers. hud.js has drawn the race
        log since wave 5 and nothing ever handed it an event, so `#hLog` has
@@ -236,16 +244,14 @@ export class Race {
     };
     this._hudPayload = {
       race: this._hudRace, vehicle: this._hudVeh, dots: this._hudDots,
-      rival: null, item: this._hudItem, events: this._hudEvents,
+      rival: null, arsenal: this._hudArsenal, events: this._hudEvents,
     };
-    /* Last-seen edges of ItemWorld's own counters. Separate from the HUD's,
-       because one items event can produce a different HUD event depending on
-       who it happened to. */
+    /* Last-seen edges of the Arsenal's own counters. Separate from the HUD's,
+       because one arsenal event can produce a different HUD event depending
+       on who it happened to. */
     this._lastHitSeq = 0; this._lastPadSeq = 0;
-    this._lastFireSeq = 0; this._lastNoteSeq = 0;
+    this._lastFireSeq = 0; this._lastNoteSeq = 0; this._lastPickSeq = 0;
     this._tipPadSeq = 0;
-    /* A FIRE pressed during the roulette, held until the item lands. */
-    this._fireQueued = null;
 
     this._enterGrid(true);
   }
@@ -287,7 +293,7 @@ export class Race {
         spec, vehicle: v, ai: null,
         slot: i,
         wasAir: false, airPeak: 0,
-        /* Trick columns. Always present, never lazily added: itemworld.js
+        /* Trick columns. Always present, never lazily added: arsenal.js
            reads racer rows through a fixed shape and a hidden class change
            mid-race costs more than the three slots do. */
         style: 0, bestTrick: 0, trickSeq: 0,
@@ -328,8 +334,8 @@ export class Race {
     }
 
     this.state = RS.GRID; this.stateT = 0;
-    this.items.resetAll();
-    this.itemsFlag = false;
+    this.arsenal.resetAll();
+    this.weaponsFlag = false;
     this.raceTime = 0; this.countdownN = -1; this._beat = -1;
     this.resetHold = 0; this._resultsShown = false;
     this._wrongWay = false; this._offCourse = 0; this._playerPos = PLAYER_SLOT + 1;
@@ -349,9 +355,11 @@ export class Race {
     this.input.showTouch(true);
 
     /* Audio obligation: character, then the car layer, then the score — all
-       before the first beep, so the countdown lands into a live mix. */
+       before the first beep, so the countdown lands into a live mix. The
+       stage picks its own theme (contract 8.7); guarded until it lands. */
     this.audio.setEngineCharacter(this.playerSpec);
     this.audio.setDriving(true);
+    if (this.audio.setRaceTheme) this.audio.setRaceTheme(this.trackDef.theme);
     this.audio.setMusicMode('race');
 
     if (first) {
@@ -370,11 +378,13 @@ export class Race {
      ============================================================ */
   togglePause() { this.paused ? this.resume() : this.pause(); }
 
-  /** The ITEMS setting, applied live — a pause-screen toggle takes effect now. */
-  setItemsEnabled(on) {
-    this.items.setEnabled(on);
-    if (on) this.itemsFlag = this.itemsFlag || this.state >= RS.RUNNING;
+  /** The WEAPONS setting, applied live — a pause-screen toggle takes effect now. */
+  setWeaponsEnabled(on) {
+    this.arsenal.setEnabled(on);
+    if (on) this.weaponsFlag = this.weaponsFlag || this.state >= RS.RUNNING;
   }
+  /** The setting's old name (contract 8.10). main.js swaps to the new one. */
+  setItemsEnabled(on) { this.setWeaponsEnabled(on); }
 
   pause() {
     if (this.paused || this.state === RS.RESULTS) return;
@@ -409,9 +419,8 @@ export class Race {
     this.terrain.clearDent();
     this.terrain.clearTrails();
     this.dust.clear();
-    this.items.resetAll();
+    this.arsenal.resetAll();
     this.tracker.resetAll();
-    this._fireQueued = null;
     this._enterGrid(false);
     this.input.lock();
     this.input.showTouch(true);
@@ -447,23 +456,16 @@ export class Race {
 
     const live = this.state === RS.RUNNING || this.state === RS.FINISHED;
     if (this.state !== RS.RESULTS) {
-      /* Items step BEFORE the cars, so a hit landed this frame is felt this
-         frame rather than next. See the header note in itemworld.js. */
-      /* FIRE, with a 0.7 s memory. `hasItem` is false for the whole roulette,
-         so a press during it used to be eaten silently — and the roulette is
-         exactly when a player looks at the card and reaches for the key. Queue
-         it and fire on the frame the item lands. */
+      /* FIRE — F, X on a pad, the on-screen FIRE. All three land on KeyF in
+         input.js, so one edge covers them; holding reverse fires behind. No
+         queue: a rack is either loaded or it is not, and an empty one says
+         so itself (Arsenal.fire). */
       if (live && this.input.hit('KeyF')) {
-        const back = (raw.throttle || 0) < -0.25;
-        if (this.items.hasItem(PLAYER_SLOT)) this.items.fire(PLAYER_SLOT, back);
-        else this._fireQueued = { back };
+        this.arsenal.fire(PLAYER_SLOT, (raw.throttle || 0) < -0.25);
       }
-      if (live && this._fireQueued && this.items.hasItem(PLAYER_SLOT)) {
-        this.items.fire(PLAYER_SLOT, this._fireQueued.back);
-        this._fireQueued = null;
-      }
-      if (!live) this._fireQueued = null;
-      this.items.step(dt, live);
+      /* The arsenal steps BEFORE the cars, so a hit landed this frame is
+         felt this frame rather than next. See the header note in arsenal.js. */
+      this.arsenal.step(dt, live);
       this._stepVehicles(dt, raw);
       if (live) {
         this.raceTime += dt;
@@ -480,7 +482,7 @@ export class Race {
        and a wheel frozen at the chassis origin is visible from every angle.
        Headless vehicles no-op on the root check. */
     for (const r of this.racers) r.vehicle.updateVisuals(dt);
-    this.items.updateVisuals(dt, this.engine.camera);
+    this.arsenal.updateVisuals(dt, this.engine.camera);
 
     /* ---- camera, then the world it looks at ---- */
     this._look.lookX = raw.lookX || 0;
@@ -523,13 +525,13 @@ export class Race {
             this.audio.countdownGo();
             this.hud.countdown('GO');
             this.state = RS.RUNNING; this.stateT = 0;
-            this.itemsFlag = this.itemsFlag || this.items.enabled;
+            this.weaponsFlag = this.weaponsFlag || this.arsenal.enabled;
             this.raceTime = 0;
           }
         }
         if (this.stateT >= COUNT_TIME && this.state === RS.COUNTDOWN) {
           this.state = RS.RUNNING; this.stateT = 0; this.raceTime = 0;
-          this.itemsFlag = this.itemsFlag || this.items.enabled;
+          this.weaponsFlag = this.weaponsFlag || this.arsenal.enabled;
         }
         break;
       }
@@ -569,27 +571,23 @@ export class Race {
         // lights it holds the brake. Either way it only ever returns a ctl.
         this._aictx.myId = r.id;
         this._aictx.position = r.pos;
-        this._aictx.item = this.items.itemOf(r.id);
         ctl = r.ai.update(dt, this._aictx);
+        /* The AI raises a hand; the Arsenal decides whether the tube is
+           loaded. Either way the latch is consumed, so a reloading driver
+           re-decides on its own clock rather than hammering the trigger. */
         if (r.ai.wantsFire) {
-          this.items.fire(r.id, !!r.ai.fireBack);
+          this.arsenal.fire(r.id, !!r.ai.fireBack);
           if (r.ai.notifyFired) r.ai.notifyFired();
         }
       }
-      /* A rocket sled drives itself. Overwriting the ctl in place is exactly
-         what the countdown lock above does, so there is no new mechanism
-         here and no new field on ctl. */
-      if (!locked) this.items.pilot(r.id, ctl);
       v.step(dt, ctl);
 
       if (r.ghostT > 0) {
         r.ghostT -= dt;
         if (r.ghostT <= 0) r.ghostT = 0;
       }
-      /* ONE writer. The respawn ghost and the sled's pass-through ghost are
-         two independent reasons to be intangible; composing them here is what
-         stops the recovery system's countdown quietly cancelling a sled. */
-      v.ghost = r.ghostT > 0 || this.items.isGhost(r.id);
+      // ONE writer: the respawn ghost is the only reason to be intangible now.
+      v.ghost = r.ghostT > 0;
     }
 
     /* All fifteen pairs, exactly once. hardHit is read AFTER this. */
@@ -601,10 +599,6 @@ export class Race {
     }
 
     for (const r of this.racers) {
-      /* props.resolve() does not check `ghost` — it pushes anything out of a
-         rock. A sled that bounced off the first boulder it met would be a
-         comeback item that ends in a ditch, so it is the one exception. */
-      if (this.items.isSledding(r.id)) continue;
       const impact = this.props.resolve(r.vehicle);
       if (impact > IMPACT_MIN) this.fx.contact(r, null, impact, this.player);
     }
@@ -623,10 +617,10 @@ export class Race {
        second — a three-wide corner exit would otherwise machine-gun. */
     const order = this.tracker.standings();
     for (let i = 0; i < order.length; i++) this.racers[order[i]].pos = i + 1;
-    /* Seconds adrift of the leader, by pace. items.js uses it to roll a badly
-       beaten racer one row further back than their POSITION says — without
-       it, a table keyed only on position quietly stops helping the moment the
-       field spreads out, which is exactly when it should be helping most. */
+    /* Seconds adrift of the leader, by pace. Telemetry now (the drop table
+       that rolled off it went with the roulette in wave 8); kept on the row
+       because dev/qa-drive.js and the results projection read gaps in
+       seconds, not metres. */
     if (order.length) {
       const lead = this.tracker.progress(order[0]);
       for (let i = 0; i < order.length; i++) {
@@ -956,13 +950,12 @@ export class Race {
     v.ghost = true;
     r.ghostT = TUNE.reset.ghostTime;
     r.flipT = 0; r.stuckT = 0; r.offT = 0;
-    // A shot queued during the roulette is not still wanted from the last gate.
-    if (r.isPlayer) this._fireQueued = null;
     /* The respawn teleports BACKWARD along the race line, so the watchdog
        baseline must re-arm from here or it fires again on arrival. */
     r.bestS = null; r.noProgT = 0;
     r.wasAir = false; r.airPeak = 0;
-    this.items.notifyReset(r.id);
+    // AFTER placeAt: the Arsenal re-publishes the rack the same frame (8.1).
+    this.arsenal.notifyReset(r.id);
     for (let w = 0; w < 4; w++) r.lastGround[w].has = false;
     this.tracker.notifyTeleport(r.id, _sp.x, _sp.z);
 
@@ -1051,7 +1044,10 @@ export class Race {
     /* The final lap, as a level — hud.js takes the edge off it itself. */
     hr.finalLap = hr.lap >= this.laps && this.state === RS.RUNNING;
 
-    this.items.hudFor(PLAYER_SLOT, this._hudItem);
+    const ha = this.arsenal.hudFor(PLAYER_SLOT, this._hudArsenal);
+    /* The touch FIRE button carries the "loaded" signal itself — a keycap
+       means nothing to a thumb. input.js only touches the DOM on a change. */
+    if (this.input.armFire) this.input.armFire(ha.enabled && ha.ammo > 0);
     this._feedEvents();
     this._firstRunTips();
     const hv = this._hudVeh;
@@ -1131,7 +1127,7 @@ export class Race {
     }
 
     const res = applyResult(this.profile, this.trackDef.id, playerPos,
-      playerTotal == null ? Infinity : playerTotal, playerBest, this.itemsFlag);
+      playerTotal == null ? Infinity : playerTotal, playerBest, this.weaponsFlag);
     this.profile = res.profile;
     Save.writeProfile(this.profile);
     this.onProfile(this.profile);
@@ -1176,11 +1172,14 @@ export class Race {
     const fire = m === 'pad' ? 'X' : m === 'touch' ? 'the FIRE button' : 'F';
     const back = m === 'pad' ? 'LT' : m === 'touch' ? 'BRAKE' : '\u2193';
     let id = null, text = '';
-    if (this._hudItem.enabled && this._hudItem.name && !this._hudItem.rolling &&
+    /* The rack is loaded from the grid, so the rockets tip has no pickup to
+       wait for: a couple of seconds into the first green flag is the moment
+       a player has a hand free to read it. The tip id keeps its old name —
+       `profile.tips` is a strict whitelist (6.10). */
+    if (this._hudArsenal.enabled && this.state === RS.RUNNING && this.raceTime > 2.5 &&
       shouldTip(this.profile, 'items')) {
       id = 'items';
-      text = `Drive through the glowing boxes. ${fire} fires what you got — ` +
-        `hold ${back} to send it backwards.`;
+      text = `ROCKETS: ${fire} fires, hold ${back} to fire behind.`;
     } else if (this._hudVeh.driftTier > 0 && shouldTip(this.profile, 'drift')) {
       id = 'drift';
       text = 'Mini-turbo charged. Let the handbrake go and the boost fires ' +
@@ -1198,16 +1197,13 @@ export class Race {
   }
 
   /**
-   * ItemWorld's event block -> the HUD's race log. Sequence numbers in, names
-   * out: the log has been drawn since wave 5 and nothing has ever handed it an
-   * event, so #hLog has been an empty box in the corner of the screen. The
-   * translation is here rather than in hud.js because names of racers are
-   * race.js's business and ItemWorld only knows slot indices.
+   * The Arsenal's event block -> the HUD's race log. Sequence numbers in,
+   * names out. The translation is here rather than in hud.js because names
+   * of racers are race.js's business and the Arsenal only knows slot
+   * indices. No closures: this runs every frame.
    */
   _feedEvents() {
-    const ev = this.items.events, he = this._hudEvents;
-    const nameOf = (i) => (i >= 0 && this.racers[i]) ? this.racers[i].name : '';
-    const itemOf = (i) => (i >= 0 && ITEMS[i]) ? ITEMS[i].name : '';
+    const ev = this.arsenal.events, he = this._hudEvents;
 
     /* One `hitSeq` covers everybody, so read the target to decide whether this
        one happened TO the player or was dealt BY them — both are worth saying
@@ -1216,26 +1212,26 @@ export class Race {
       this._lastHitSeq = ev.hitSeq | 0;
       if (ev.hitTarget === PLAYER_SLOT) {
         he.hitSeq++;
-        he.hitBy = nameOf(ev.hitOwner);
-        he.hitWith = itemOf(ev.hitItem);
+        he.hitBy = this._nameOf(ev.hitOwner);
+        he.hitWith = WEAPON_NAME;
       } else if (ev.hitOwner === PLAYER_SLOT) {
         he.dealtSeq++;
-        he.dealtTo = nameOf(ev.hitTarget);
-        he.dealtWith = itemOf(ev.hitItem);
+        he.dealtTo = this._nameOf(ev.hitTarget);
+        he.dealtWith = WEAPON_NAME;
       }
     }
     if (ev.padSeq !== this._lastPadSeq) {
       this._lastPadSeq = ev.padSeq;
       if (ev.padRacer === PLAYER_SLOT) he.padSeq++;
     }
-    /* A rival firing something near you is the whole answer to "the AI never
-       uses items" — it fires constantly and none of it has ever been visible. */
+    /* A rival firing near you is the whole answer to "the AI never shoots"
+       — it shoots constantly, and the log is where that becomes legible. */
     if ((ev.fireSeq | 0) !== this._lastFireSeq) {
       this._lastFireSeq = ev.fireSeq | 0;
       if (ev.fireRacer >= 0 && ev.fireRacer !== PLAYER_SLOT && ev.fireNear) {
         he.rivalFireSeq++;
-        he.rivalFireBy = nameOf(ev.fireRacer);
-        he.rivalFireWith = itemOf(ev.fireItem);
+        he.rivalFireBy = this._nameOf(ev.fireRacer);
+        he.rivalFireWith = WEAPON_NAME;
       }
     }
     if ((ev.noteSeq | 0) !== this._lastNoteSeq) {
@@ -1243,7 +1239,20 @@ export class Race {
       he.noteSeq++;
       he.noteText = ev.noteText || '';
     }
+    /* The player's own pickups. A crate shows on the ammo counter; the can
+       is the one that needs SAYING, because its whole effect is over in a
+       second and a half and nothing else on screen names it. (The arsenal
+       payload carries `pickupSeq`/`pickupText` for the HUD as well — if
+       hud.js grows its own callout, this banner is the one to drop.) */
+    if ((ev.pickSeq | 0) !== this._lastPickSeq) {
+      this._lastPickSeq = ev.pickSeq | 0;
+      if (ev.pickRacer === PLAYER_SLOT && ev.pickItem === PICKUP.NITRO) {
+        this.hud.banner('NITRO', 'good', 1.1);
+      }
+    }
   }
+
+  _nameOf(i) { return (i >= 0 && this.racers[i]) ? this.racers[i].name : ''; }
 
   /* ============================================================
      TEARDOWN — Race owns the world it was handed
@@ -1252,14 +1261,13 @@ export class Race {
     if (this._disposed) return;
     this._disposed = true;
 
-    this.items.dispose();
+    this.arsenal.dispose();
     for (const r of this.racers) r.vehicle.dispose();
     this.racers.length = 0;
 
     this.props.dispose();
     this.sky.dispose();
     this.dust.clear();
-    this.items.resetAll();
     this.dust.dispose();
     /* Race owns the world it was handed, and the pool is part of it — it was
        the one member of App.world that leaked on every quit. */

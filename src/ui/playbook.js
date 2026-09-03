@@ -1,79 +1,48 @@
 /* ============================================================
    RALLY ROAD RASH — THE PLAYBOOK
    ------------------------------------------------------------
-   The screen the game did not have. Before this, a power-up had a name in a
-   HUD corner and nothing else anywhere: no icon, no description, no hint
-   that the drop table is rigged by position, and no mention at all of the
-   air controls or the trick modifier. A player could finish the championship
-   without ever learning that holding DRIFT in the air turns steering into a
-   barrel roll.
+   The screen the game did not have. Before this, a pickup had a name in a
+   HUD corner and nothing else anywhere: no icon, no description, no mention
+   at all of the air controls or the trick modifier. A player could finish
+   the championship without ever learning that holding DRIFT in the air
+   turns steering into a barrel roll.
 
    Four tabs, and the split is by WHEN you need it: DRIVE is the ground game,
-   AIR & TRICKS is everything that happens off it, POWER-UPS is the item set,
-   CONTROLS is the reference you come back to.
+   AIR & TRICKS is everything that happens off it, ARSENAL is the weapon and
+   pickup set, CONTROLS is the reference you come back to.
 
    This module returns MARKUP, not DOM. ui.js owns the container, the focus
    attributes and the escaping helper, because the focus manager is shared
    and must not be reimplemented per screen. Icons are emitted as
    `<canvas data-ico>` placeholders and painted in one pass by icons.js.
-   ============================================================ */
-import { ITEMS, DROP_WEIGHTS } from '../game/items.js';
 
-export const PLAYBOOK_TABS = ['DRIVE', 'AIR & TRICKS', 'POWER-UPS', 'CONTROLS'];
+   Wave 8: this tab used to read `ITEMS`/`DROP_WEIGHTS` straight out of
+   game/items.js and render one card per rollable item plus a "drawn by"
+   line derived from the drop table. items.js is gone — P3 deleted it this
+   wave along with the roulette it described — so ARSENAL is written copy
+   below, the same way DRIVE and AIR are, rather than data-driven. */
+
+export const PLAYBOOK_TABS = ['DRIVE', 'AIR & TRICKS', 'ARSENAL', 'CONTROLS'];
 
 /* ------------------------------------------------------------------
-   Extra binding rows that exist in the game but were in none of the
-   tables. FIRE is the headline omission — the game ships a whole item
-   system and never told anyone which key throws one.
+   Extra binding rows that exist in the game but are not in the base method
+   tables (ui.js BINDINGS) above. FIRE and barrel-roll used to be the missing
+   rows here too, but joined BINDINGS directly in a later wave — repeating
+   them here would just show every row twice.
    ------------------------------------------------------------------ */
 const EXTRA_ROWS = {
   kb: [
-    ['Fire power-up', 'F'],
-    ['Fire it backwards', 'hold S + F'],
-    ['Barrel roll (airborne)', 'Q / E'],
     ['Trick modifier', 'hold SPACE + steer'],
   ],
   pad: [
-    ['Fire power-up', 'X'],
-    ['Fire it backwards', 'hold LT + X'],
-    ['Barrel roll (airborne)', 'LB / RB'],
     ['Trick modifier', 'hold A + stick'],
   ],
   touch: [
-    ['Fire power-up', 'FIRE'],
-    ['Fire it backwards', 'BRAKE + FIRE'],
-    ['Barrel roll (airborne)', 'DRIFT + steer'],
     ['Trick modifier', 'hold DRIFT + steer'],
   ],
 };
 
 const METHOD_TITLE = { kb: 'KEYBOARD', pad: 'GAMEPAD', touch: 'TOUCH' };
-
-/**
- * Which positions draw an item, and where it peaks.
- * Derived from DROP_WEIGHTS rather than written down, so a balance change is
- * still a data change (items.js header) and the playbook cannot go stale.
- */
-export function drawnBy(id) {
-  const rows = [];
-  let peak = -1, peakShare = -1;
-  for (let p = 0; p < DROP_WEIGHTS.length; p++) {
-    const w = DROP_WEIGHTS[p];
-    let tot = 0;
-    for (let i = 0; i < w.length; i++) tot += w[i];
-    if (!(w[id] > 0)) continue;
-    rows.push(p + 1);
-    const share = w[id] / Math.max(1, tot);
-    if (share > peakShare) { peakShare = share; peak = p + 1; }
-  }
-  if (!rows.length) return { where: 'never drawn', peak: '' };
-  const a = rows[0], b = rows[rows.length - 1];
-  const contiguous = rows.length === b - a + 1;
-  const where = rows.length === DROP_WEIGHTS.length ? 'any position'
-    : contiguous ? (a === b ? `P${a} only` : `P${a}–P${b}`)
-      : rows.map(p => 'P' + p).join(' · ');
-  return { where, peak: `peaks at P${peak} (${Math.round(peakShare * 100)}%)` };
-}
 
 /* ============================================================
    COPY
@@ -138,6 +107,31 @@ const AIR = [
     'carry speed into, a small ring is a kicker you can take flat.'],
 ];
 
+/* No roulette, no rubber-banded drop table — everything here is a fixed
+   pickup on the road, and boost pads and the drift boost were never
+   pickups at all. Settings → WEAPONS turns off the top three; pads and the
+   drift boost stay either way, which is worth saying since a player who
+   switched weapons off would otherwise wonder why the road still glows. */
+const ARSENAL = [
+  ['rocket', 'ROCKETS',
+    'One tube, six to twelve rounds depending on the machine. FIRE sends one straight ' +
+    'ahead; hold the back key as you press FIRE and it launches behind you instead — the ' +
+    'one answer to somebody who just passed you.'],
+  ['crate', 'AMMO CRATES',
+    'The boxes on the racing line. Drive through one and the tube tops up on the spot, no ' +
+    'roulette and no wait. Run dry and FIRE does nothing until the next crate.'],
+  ['nitro', 'NITRO CANS',
+    'A timed speed burn the moment you drive through one — no aiming, no button, it just ' +
+    'goes. Time one through a drift release and that is the fastest you move all race.'],
+  ['pad', 'BOOST PADS',
+    'Track furniture, not a pickup. The cyan chevrons painted on the road work with ' +
+    'WEAPONS switched off — cross one square-on for a push worth more than any drift tier.'],
+  ['boost', 'THE DRIFT BOOST',
+    'Hold DRIFT through a corner and the tyre dust changes colour as a charge builds; let ' +
+    'go and it fires as a mini-turbo. Handling, not a weapon — it never turns off, whatever ' +
+    'WEAPONS is set to.'],
+];
+
 /* ============================================================
    MARKUP
    ============================================================ */
@@ -152,7 +146,7 @@ const AIR = [
  */
 export function playbookHTML(tab, method, bindings, esc) {
   const e = esc || ((s) => String(s == null ? '' : s));
-  if (tab === 2) return itemsHTML(e);
+  if (tab === 2) return arsenalHTML(e);
   if (tab === 3) return controlsHTML(method, bindings, e);
   return notesHTML(tab === 1 ? AIR : DRIVE, e);
 }
@@ -168,21 +162,17 @@ function notesHTML(rows, e) {
   return h + '</div>';
 }
 
-function itemsHTML(e) {
-  let h = '<p class="pb-lead">One slot, one item. A box you drive through rolls for a ' +
-    'moment before it settles, and what it can roll is decided by WHERE YOU ARE: ' +
-    'the leader draws defence and nothing else, last place draws comeback tools.</p>' +
+function arsenalHTML(e) {
+  let h = '<p class="pb-lead">What you pick up is what you get — no roulette, no waiting ' +
+    'for it to land. The ammo count on the HUD says exactly how much of it you are ' +
+    'carrying.</p>' +
     '<div class="pb-items">';
-  for (const it of ITEMS) {
-    const d = drawnBy(it.id);
-    const col = '#' + ((it.col >>> 0) & 0xffffff).toString(16).padStart(6, '0');
-    h += `<article class="pb-item" style="--ic:${col}">` +
-      `<canvas class="ico" data-ico="${e(it.icon || 'nitro')}" data-size="38" data-accent="${col}" aria-hidden="true"></canvas>` +
+  for (const [ico, title, body] of ARSENAL) {
+    h += `<article class="pb-item">` +
+      `<canvas class="ico" data-ico="${e(ico)}" data-size="38" aria-hidden="true"></canvas>` +
       `<div class="pb-item-body">` +
-      `<h4>${e(it.name)}${it.charges > 1 ? `<span class="pb-charges">${it.charges}×</span>` : ''}</h4>` +
-      `<p>${e(it.desc || '')}</p>` +
-      `<p class="pb-tip"><b>TIP</b>${e(it.tip || '')}</p>` +
-      `<p class="pb-who"><b>DRAWN BY</b>${e(d.where)}${d.peak ? ' · ' + e(d.peak) : ''}</p>` +
+      `<h4>${e(title)}</h4>` +
+      `<p>${e(body)}</p>` +
       `</div></article>`;
   }
   return h + '</div>';

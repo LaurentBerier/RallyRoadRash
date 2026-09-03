@@ -7,8 +7,9 @@
    the driver, the returned `ctl` is the SAME object every frame, and the
    per-track route tables are built once and shared through a WeakMap.
 
-   The item brain — targeting, the roster policy, the canned air tricks —
-   is `ai-items.js`. This file is the driver.
+   The trigger finger — the lead-aim solution and when to hold — is
+   `ai-weapons.js`; the canned air tricks are `ai-tricks.js`. This file is
+   the driver.
 
    THE DRIVER MODEL IN TWELVE LINES
    --------------------------------
@@ -38,7 +39,7 @@
       In the 40 m before a GAP the target is floored at 0.98× line speed
       regardless of skill — that is what makes the canyon 24.2 m/s.
    7. REAL AIR IS ALL ZERO — steer, throttle, brake, roll: nothing. The only
-      exception is a canned trick planned at the lip (ai-items.js), which
+      exception is a canned trick planned at the lip (ai-tricks.js), which
       holds ONE input until the rotation is predicted to arrive and then
       goes hands-off too, because that tail is when the align assist runs.
       A ROCK HOP IS NOT REAL AIR. The blackout used to start after 0.12 s of
@@ -56,10 +57,12 @@
       ±min(2.8, halfWidth − 1.5) toward the freer side, dropped if they are
       pulling away; alongside (<1.9 m) adds repulsion. We lift, never
       brake-check, and aggression decides how late.
-   9. Items: `ctx.items` (contract 6.7) is read-only and optional. Threats
-      inside 40 m and ±2.5 m buy 1.8 m of dodge; with an empty slot and a
-      clear road, the nearest box inside 120 m (or pad inside 60 m) is
-      worth steering at.
+   9. The arsenal: `ctx.arsenal` (contract 8.11) is read-only and optional.
+      Rockets inside 40 m and ±2.5 m buy 1.8 m of dodge; with a clear road
+      the nearest nitro can inside 90 m is always worth steering at (it
+      fires on contact), a crate inside 120 m only while the rack is under
+      half, and a pad inside 60 m beats both. Firing is ai-weapons.js: a
+      4 Hz decision off the same rival scan the overtaking uses.
   10. Routes: every entry in `trackData.routes[]` becomes one stitched
       alternate lap, decided once per approach with
       p = AI_SHORTCUT.base + aiBias·skill. See AI_SHORTCUT.
@@ -90,15 +93,17 @@
 import { paintAt, spanHas, LAT_ACCEL } from '../world/track.js';
 import { SURFACES } from '../world/surfaces.js';
 import { G, TUNE } from './config.js';
+import { AI_WEAPON, decideFire, validateFire, weaponStyleFor } from './ai-weapons.js';
 import {
-  AI_ITEM, decideFire, validateFire, itemStyleFor,
   predictAirTime, rollTrickIntent, planAirTrick, stepAirTrick, clearAirTrick,
   TRICK_PLAN,
-} from './ai-items.js';
+} from './ai-tricks.js';
+import { PICKUP, launcherFor } from './weapons.js';
 
-/* The item brain lives in ai-items.js — targeting, the roster policy and the
-   canned air tricks. Re-exported so nothing outside has to know it moved. */
-export { AI_ITEM, ITEM_STYLE, itemStyleFor, TRICKS_AVAILABLE } from './ai-items.js';
+/* The trigger finger lives in ai-weapons.js and the canned air tricks in
+   ai-tricks.js. Re-exported so nothing outside has to know where. */
+export { AI_WEAPON, WEAPON_STYLE, weaponStyleFor } from './ai-weapons.js';
+export { TRICKS_AVAILABLE } from './ai-tricks.js';
 
 /* ---------------------------------------------------------------
    The balancing knob. Documented above; exported so the integrator can
@@ -248,10 +253,12 @@ const THREAT_AHEAD = 40;      // m — how far up the road an incoming counts
 const THREAT_LAT = 2.5;       // m — …and how close to my line
 const THREAT_OFF = 1.8;       // m of lateral offset a threat is worth
 
-const BOX_SEEK = 120;         // m ahead — worth a detour for a power-up
+const CRATE_SEEK = 120;       // m ahead — worth a detour for rockets, rack permitting
+const CAN_SEEK = 90;          // m ahead — a can is always worth it: it fires on contact
 const PAD_SEEK = 60;          // m ahead — a pad is worth more, and closer
-/* MAX_PROJ + MAX_HAZ in itemworld.js. Sized here rather than imported so
-   ai.js keeps its "no three in the import graph" property. If itemworld
+const SEEK_AMMO = TUNE.weapons ? TUNE.weapons.ammoCap * 0.5 : 6;   // below this, crates matter
+/* MAX_PROJ in arsenal.js, with room. Sized here rather than imported so
+   ai.js keeps its "no three in the import graph" property. If the arsenal
    grows a pool, `threats()` simply stops early — it fills to out.x.length. */
 const MAX_THREATS = 20;
 
@@ -581,18 +588,18 @@ export class AIDriver {
        modifier works in the dev check and silently not in the game. */
     this.ctl = { throttle: 0, steer: 0, brake: 0, handbrake: 0, roll: 0 };
 
-    /* Item firing, latched exactly like `wantsReset`: this driver never acts,
+    /* Firing, latched exactly like `wantsReset`: this driver never acts,
        it only ever raises a hand, and race.js polls it. Keeping it out of
        `ctl` is deliberate — ctl is copied through three separate scratch
        objects and a sixth field would be silently dropped by all of them. */
     this.wantsFire = false;
     this.fireBack = false;
     this.fireT = 0;
-    this._fireItem = -1;
-    this.itemStyle = p.itemStyle || itemStyleFor(p);
-    this.itemAge = 0;         // s the current item has been held
-    this.sinceFire = 99;      // s since the last shot (the triple's spacing)
-    this._lastItem = -1;
+    this.weaponStyle = p.weaponStyle || weaponStyleFor(p);
+    this.sinceFire = 99;      // s since the last shot (telemetry)
+    /* The muzzle speed the lead-aim solves against — this machine's, from
+       the launcher table, read once. */
+    this.rocketSpeed = spec && spec.id ? launcherFor(spec.id).speed : 0;
 
     /* THE TARGETING BLOCK, cleared at the top of every rival scan. The
        previous version only ever wrote these DOWNWARD, so one close pass on
@@ -616,7 +623,7 @@ export class AIDriver {
     this.behindSec = 0;
     this.playerGapSec = 0;    // + = the player is ahead of me (AI_BALANCE.player)
 
-    /* Caller-owned scratch for the two read-only ItemWorld accessors. Both
+    /* Caller-owned scratch for the three read-only Arsenal accessors. All
        are filled in place; nothing here is ever reallocated. */
     this._threats = {
       n: 0,
@@ -624,12 +631,12 @@ export class AIDriver {
       vx: new Float32Array(MAX_THREATS), vz: new Float32Array(MAX_THREATS),
       r: new Float32Array(MAX_THREATS), kind: new Int8Array(MAX_THREATS),
     };
-    this._box = { found: 0, s: 0, lat: 0, x: 0, z: 0, dist: -1 };
+    this._pick = { found: 0, s: 0, lat: 0, x: 0, z: 0, dist: -1, kind: -1 };
     this._pad = { found: 0, s: 0, lat: 0, x: 0, z: 0, dist: -1 };
     this.threatOff = 0;       // telemetry: the dodge component of `offset`
-    this.seekOff = 0;         // …and the box/pad component
+    this.seekOff = 0;         // …and the pickup/pad component
 
-    /* Canned air tricks (ai-items.js). All of it cleared by notifyReset. */
+    /* Canned air tricks (ai-tricks.js). All of it cleared by notifyReset. */
     this.trickPlan = TRICK_PLAN.NONE;
     this.trickTarget = 0;     // rad of rotation the release is waiting for
     this.trickDir = 0;
@@ -701,15 +708,13 @@ export class AIDriver {
   /** race.js consumed the fire request. */
   notifyFired() {
     this.wantsFire = false; this.fireBack = false; this.fireT = 0;
-    this._fireItem = -1;
-    this.sinceFire = 0;       // the triple's minimum spacing runs off this
+    this.sinceFire = 0;
   }
 
   /** Race flow calls this once it has actually performed the respawn. */
   notifyReset() {
     this.wantsReset = false;
     this.wantsFire = false; this.fireBack = false; this.fireT = 0;
-    this._fireItem = -1;
     this.flipT = 0; this.stuckT = 0; this.offT = 0;
     this.recovering = false;
     this.offset = 0; this.offsetTarget = 0; this.avoidHold = 0;
@@ -896,15 +901,15 @@ export class AIDriver {
            and the two velocity projections are exactly what a lead-aim
            solution needs, and three of the four are computed here anyway for
            the blocker logic. `latGate` is a RECORD band, not an aim test —
-           ai-items.js aimOk() is the only place a miss distance exists. */
+           ai-weapons.js aimOk() is the only place a miss distance exists. */
         const al = ll < 0 ? -ll : ll;
-        if (al < AI_ITEM.latGate) {
+        if (al < AI_WEAPON.latGate) {
           const theirLat = o.vel ? o.vel.x * fz - o.vel.z * fx : 0;
-          if (fl > AI_ITEM.aheadMin && fl < AI_ITEM.aheadMax && fl < this._shotAhead) {
+          if (fl > AI_WEAPON.aheadMin && fl < AI_WEAPON.aheadMax && fl < this._shotAhead) {
             this._shotAhead = fl; this._shotIdx = i;
             this._shotLat = ll; this._shotClosing = closing; this._shotTheirLat = theirLat;
           }
-          if (-fl > AI_ITEM.behindMin && -fl < AI_ITEM.behindMax && -fl < this._shotBehind) {
+          if (-fl > AI_WEAPON.behindMin && -fl < AI_WEAPON.behindMax && -fl < this._shotBehind) {
             this._shotBehind = -fl; this._shotIdxB = i;
             this._shotLatB = ll; this._shotClosingB = closing; this._shotTheirLatB = theirLat;
           }
@@ -944,18 +949,18 @@ export class AIDriver {
       this.avoidHold = 0;
     }
 
-    /* --- 6b. the item world: dodge what is coming, collect what is not ---
+    /* --- 6b. the arsenal: dodge what is coming, collect what is worth it ---
        Both go through the SAME lateral machinery as a blocker: there is one
        input for "be somewhere else on the road" and a second would fight it
-       (header, point 8). `ctx.items` is optional — without it the whole
+       (header, point 8). `ctx.arsenal` is optional — without it the whole
        block costs one property read. */
-    const io = ctx && ctx.items;
+    const io = ctx && ctx.arsenal;
     let threatOff = 0, seekOff = 0;
     if (io && state !== 'finished') {
-      /* Dodging. An incoming spare wheel or a slick on the line is worth
-         1.8 m — enough to miss a 2.6 m hazard from the centre of it, not so
-         much that a driver throws itself off the road to avoid a projectile
-         that was never going to arrive. */
+      /* Dodging. An incoming rocket on the line is worth 1.8 m — enough to
+         put a car's width between it and the hitbox, not so much that a
+         driver throws itself off the road to avoid a shot that was never
+         going to arrive. */
       if (typeof io.threats === 'function') {
         const T = io.threats(this._threats);
         let bestD = Infinity, bestLat = 0;
@@ -984,19 +989,27 @@ export class AIDriver {
           this.avoidHold = AVOID_BLEND;   // hold it through the pass, as a blocker does
         }
       }
-      /* Box and pad seeking, only with a clear road and nothing in hand.
-         A pad wins inside PAD_SEEK because it is worth a boost NOW and the
-         box is worth a lottery ticket in a hundred metres. */
-      const haveItem = typeof io.hasItem === 'function' && io.hasItem(myIdx);
-      if (!haveItem && !blocked && threatOff === 0 && !jumpNear) {
+      /* Pickup and pad seeking, only with a clear road. A pad wins inside
+         PAD_SEEK because it is worth a boost NOW; a can is worth the detour
+         at any ammo count, because it fires on contact and nobody has to
+         decide anything; a crate only while the rack is under half — a
+         full rack drives past it anyway (arsenal.js leaves it standing). */
+      if (!blocked && threatOff === 0 && !jumpNear) {
         let want = null;
         if (typeof io.nearestPad === 'function') {
           const p = io.nearestPad(myIdx, this._pad);
           if (p && p.found && p.dist >= 0 && p.dist < PAD_SEEK) want = p;
         }
-        if (!want && typeof io.nearestBox === 'function') {
-          const b = io.nearestBox(myIdx, this._box);
-          if (b && b.found && b.dist >= 0 && b.dist < BOX_SEEK) want = b;
+        if (!want && typeof io.nearestPickup === 'function') {
+          const can = io.nearestPickup(myIdx, this._pick, PICKUP.NITRO);
+          if (can && can.found && can.dist >= 0 && can.dist < CAN_SEEK) want = can;
+          else {
+            const ammo = typeof io.ammoOf === 'function' ? io.ammoOf(myIdx) : 0;
+            if (ammo < SEEK_AMMO) {
+              const cr = io.nearestPickup(myIdx, this._pick, PICKUP.ROCKET);
+              if (cr && cr.found && cr.dist >= 0 && cr.dist < CRATE_SEEK) want = cr;
+            }
+          }
         }
         if (want) {
           const room = Math.max(0.5, halfW - 1.2);
@@ -1166,7 +1179,7 @@ export class AIDriver {
        air pitch authority was small; at P4's 1.85 rad/s² that is ~58° of
        nose-up over a typical jump with nothing arguing against it, and
        every car on the grid loops. Hands off, and let TUNE.air.alignAssist
-       land it — unless a trick was planned at the lip (ai-items.js). */
+       land it — unless a trick was planned at the lip (ai-tricks.js). */
     let handbrake = 0, roll = 0;
     if (!airborne) {
       /* Touching down from REAL air is not the end of the manoeuvre: the car
@@ -1319,27 +1332,20 @@ export class AIDriver {
       this.wantsReset = false;
     }
 
-    /* --- 13b. power-ups ---
+    /* --- 13b. the launcher ---
        WRITE-ONLY to the latch: never ctl, steerOut, braking or offset. It
-       is inert without `ctx.item`, which is what leaves every driving gate
-       in dev/ai-check.mjs untouched. Decided four times a second, not sixty
-       — the question is "is now a good moment" — and always from `this.rng`,
-       because the QA sweep compares lap times between builds. */
+       is inert without `ctx.arsenal`, which is what leaves every driving
+       gate in dev/ai-check.mjs untouched. Decided four times a second, not
+       sixty — the question is "is now a good moment" — and always from
+       `this.rng`, because the QA sweep compares lap times between builds.
+       Nitro is not decided here or anywhere: the can fires on contact. */
     this.sinceFire += dt;
-    const rawItem = ctx && ctx.item;
-    const held = (rawItem === undefined || rawItem === null) ? -1 : rawItem;
-    /* `itemAge` is what the hold policies are written against — a leader
-       sitting on a spare wheel, a turtle sitting on an oil slick. It has to
-       reset on the PICKUP, not on the fire, or a second box of the same kind
-       inherits the first one's patience. */
-    if (held !== this._lastItem) { this._lastItem = held; this.itemAge = 0; }
-    else this.itemAge += dt;
-
-    if (held >= 0 && state === 'running') {
+    const ammo = (io && typeof io.ammoOf === 'function') ? io.ammoOf(myIdx) : 0;
+    if (ammo > 0 && state === 'running') {
       this.fireT -= dt;
       if (this.fireT <= 0 && !this.wantsFire) {
-        this.fireT = 1 / AI_ITEM.hz;
-        decideFire(this, held, spd, ctx);
+        this.fireT = 1 / AI_WEAPON.hz;
+        decideFire(this, ammo, spd, ctx);
       }
       /* Re-validated on the frame the latch is actually POLLED, not only on
          the frame it was set. race.js reads `wantsFire` immediately after
@@ -1348,7 +1354,7 @@ export class AIDriver {
          class of staleness as the latch bug this replaces. */
       validateFire(this);
     } else {
-      this.wantsFire = false; this.fireBack = false; this._fireItem = -1;
+      this.wantsFire = false; this.fireBack = false;
     }
 
     /* --- 14. rate-limit our own output and ship it --- */
@@ -1628,10 +1634,10 @@ export function makeGridProfiles(count, difficulty01, rng) {
       name: pool[i % pool.length] + (i >= pool.length ? ' ' + (i + 1) : ''),
       skill, aggression, consistency,
     };
-    /* Derived, not rolled: the item personality has to be a READING of the
-       driving personality, or a car that drives like a sniper throws like a
+    /* Derived, not rolled: the trigger finger has to be a READING of the
+       driving personality, or a car that drives like a sniper shoots like a
        spammer and the grid stops having characters on it. */
-    p.itemStyle = itemStyleFor(p);
+    p.weaponStyle = weaponStyleFor(p);
     out[i] = p;
   }
   return out;

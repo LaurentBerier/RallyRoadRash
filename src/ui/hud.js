@@ -1,8 +1,9 @@
 /* ============================================================
    RALLY ROAD RASH — in-race HUD
    ------------------------------------------------------------
-   Contract: docs/INTEGRATION-NOTES.md "HUD — src/ui/hud.js", plus the wave-6
-   payload additions in docs/ARCHITECTURE.md §6.6.
+   Contract: docs/INTEGRATION-NOTES.md "HUD — src/ui/hud.js", the wave-6
+   payload additions in docs/ARCHITECTURE.md §6.6, and the wave-8 arsenal
+   payload in §8.3 (`item` was replaced wholesale by `arsenal`).
      new HUD(audio) · showRace(info) · hideRace() · bakeMap(terrain, trackData)
      update(dt, payload) · countdown(n) · banner(text, kind, ttl) ·
      log(text, kind) · airtime(sec) · tip(id, text, ttl) · setInputMethod(m)
@@ -19,10 +20,11 @@
      • The minimap background is baked ONCE per race into an offscreen
        canvas; nothing samples the terrain after that.
 
-   EVENTS ARE SEQUENCE NUMBERS, NOT BOOLEANS. race.js bumps `item.seq`,
-   `trick.seq`, `events.hitSeq` and friends; the HUD keeps the last value it
-   acted on and fires when they differ. A boolean would need a handshake to
-   clear it and would drop two hits in the same frame; a counter cannot.
+   EVENTS ARE SEQUENCE NUMBERS, NOT BOOLEANS. race.js bumps `arsenal.pickupSeq`,
+   `arsenal.fireSeq`, `trick.seq`, `events.hitSeq` and friends; the HUD keeps
+   the last value it acted on and fires when they differ. A boolean would need
+   a handshake to clear it and would drop two hits in the same frame; a
+   counter cannot.
    ============================================================ */
 import { PLAYABLE_EXT } from '../world/terrain.js';
 import { TUNE } from '../game/config.js';
@@ -40,10 +42,6 @@ const RPM_HZ = 30;         // rev-arc redraw rate
    be told to press F — which is exactly what the game did, in the one place
    it mentioned firing at all, which was nowhere. */
 const FIRE_KEY = { kb: 'F', pad: 'X', touch: 'FIRE' };
-/* The other key an item hint can mention: hold-back-to-throw-backwards. */
-const BACK_KEY = { kb: '\u2193', pad: 'LT', touch: 'BRAKE' };
-/* "PRESS F" reads as an instruction; "TAP FIRE" is what a touch player does. */
-const PRESS_VERB = { kb: 'PRESS', pad: 'PRESS', touch: 'TAP' };
 
 /* Mini-turbo tier colours, matched to the tyre dust the drift throws so the
    ring and the world are telling you the same thing. */
@@ -78,7 +76,7 @@ export class HUD {
       pos: $('hPos'), posN: $('hPosN'), posT: $('hPosT'), rival: $('hRival'),
       lapN: $('hLapN'), lapT: $('hLapT'), track: $('hTrack'),
       time: $('hTime'), last: $('hLast'), best: $('hBest'), style: $('hStyle'),
-      kmh: $('hKmh'), gear: $('hGear'), air: $('hAir'), item: $('hItem'),
+      kmh: $('hKmh'), gear: $('hGear'), air: $('hAir'), ars: $('hArsenal'),
       trick: $('hTrick'), tip: $('hTip'),
       banner: $('hBanner'), log: $('hLog'),
       count: $('hCount'), countN: $('hCountN'),
@@ -112,30 +110,34 @@ export class HUD {
        yet", and every one is reset by _clearTransients so a restart cannot
        replay the last race's last hit. */
     this._seq = {
-      item: -1, trick: -1, hit: -1, land: -1, pad: -1,
+      pickup: -1, fire: -1, trick: -1, hit: -1, land: -1, pad: -1,
       dealt: -1, rivalFire: -1, note: -1,
     };
-    this._cardSeq = -1;                // the item card's own "this is new" edge
+    this._arsEl = null;                // the built arsenal card, for the fire-pulse class
+    this._reloadEl = null;             // its reload-arc pip, updated every visible frame
     this._fireBtn = null;              // core/input.js's touch FIRE, looked up lazily
     this._fireArmed = false;
     this._tipSeen = null;              // ids already shown, this session
 
     /* The rev arc repaints at 30 Hz but the payload arrives at 60, so the
        drift state is latched every frame and read by the draw: sampling it
-       only on the frames that happen to redraw makes the charge arc stutter. */
+       only on the frames that happen to redraw makes the charge arc stutter.
+       _nitroPeak/_reloadPeak do the same job for the two arsenal timers below
+       — see _drawArsenal and _drawRpm for why they exist at all. */
     this._drift = 0; this._driftTier = 0; this._boost = 0; this._boostTier = 0;
+    this._nitro = 0; this._nitroPeak = 0; this._reloadPeak = 0;
 
     // last-rendered cache — the whole point of update() being free
     this._c = {
       pos: -1, total: -1, lap: -1, lapT: -1, time: '', last: '', best: '',
       kmh: -1, gear: '', rival: '', wrong: null, off: null, reset: -1,
       style: -1, finalLap: null,
-      /* One string covering name + charges + rolling + icon + input method
-         (the card carries the FIRE glyph, and picking up a pad mid-race has
-         to change it). An item you are holding
-         is static for seconds at a time, so the common case must cost zero
-         DOM writes — same discipline as every other field here. */
-      item: '\u0000',
+      /* One string covering ammo + cap + reload-on-or-not + input method (the
+         card carries the FIRE glyph, and picking up a pad mid-race has to
+         change it). The arsenal sits still for seconds at a time between
+         shots, so the common case must cost zero DOM writes — same
+         discipline as every other field here. */
+      ars: '\u0000',
     };
 
     this._onResize = () => { this._sized = false; };
@@ -188,8 +190,9 @@ export class HUD {
     if (this.el.trick) this.el.trick.innerHTML = '';
     if (this.el.tip) this.el.tip.innerHTML = '';
     if (this.el.style) { this.el.style.innerHTML = ''; this.el.style.classList.add('off'); }
-    if (this.el.item) this.el.item.innerHTML = '';
-    this._c.item = '\u0000';
+    if (this.el.ars) this.el.ars.innerHTML = '';
+    this._c.ars = '\u0000';
+    this._arsEl = null; this._reloadEl = null;
     if (this.el.count) this.el.count.classList.add('hidden');
     if (this.el.wrong) this.el.wrong.classList.add('hidden');
     if (this.el.off) this.el.off.classList.add('hidden');
@@ -200,43 +203,45 @@ export class HUD {
     this._c.style = -1;
     this._c.finalLap = null;
     this._drift = 0; this._driftTier = 0; this._boost = 0; this._boostTier = 0;
+    this._nitro = 0; this._nitroPeak = 0; this._reloadPeak = 0;
     const s = this._seq;
-    s.item = -1; s.trick = -1; s.hit = -1; s.land = -1; s.pad = -1;
+    s.pickup = -1; s.fire = -1; s.trick = -1; s.hit = -1; s.land = -1; s.pad = -1;
     s.dealt = -1; s.rivalFire = -1; s.note = -1;
-    this._cardSeq = -1;
     this._armTouchFire(null);          // never leave the touch FIRE button lit
   }
 
   /**
-   * 'kb' | 'pad' | 'touch'. Called beside ui.setInputMethod (§6.6). The item
-   * card is the only thing that reads it, and the card is rebuilt lazily, so
-   * dropping the cache key IS the implementation.
+   * 'kb' | 'pad' | 'touch'. Called beside ui.setInputMethod (§6.6). The
+   * arsenal card is the only thing that reads it, and the card is rebuilt
+   * lazily, so dropping the cache key IS the implementation.
    */
   setInputMethod(m) {
     if (m !== 'kb' && m !== 'pad' && m !== 'touch') return;
     if (m === this._method) return;
     this._method = m;
     if (m !== 'touch') this._armTouchFire(null);
-    // A single space is a key no real item can produce, and it is NOT '' —
-    // which is the legitimate "no card" key and would suppress the rebuild.
-    this._c.item = ' ';
+    // A single space is a key no real cache string can produce, and it is
+    // NOT '' — which is the legitimate "no card" key and would suppress
+    // the rebuild that has to happen so the firekey glyph catches up.
+    this._c.ars = ' ';
   }
 
   /**
-   * Light the touch FIRE button while an item is ready, in the item's colour.
-   * `it` null disarms. The element is owned by core/input.js and is absent on
-   * every non-touch session, so everything here is optional.
+   * Light the touch FIRE button while a rocket is loaded. `ar` null disarms.
+   * The element is owned by core/input.js and is absent on every non-touch
+   * session, so everything here is optional. Armed on ammo alone (§8.3) —
+   * not also gated on reloadT — so it can go armed a beat before FIRE would
+   * actually launch one; that reads as "you are carrying rockets," which is
+   * the question this button answers.
    */
-  _armTouchFire(it) {
+  _armTouchFire(ar) {
     const b = this._fireBtn ||
       (this._fireBtn = document.querySelector('#touch .rbtn.fire'));
     if (!b) return;
-    const on = !!(it && it.enabled && it.name && !it.rolling);
+    const on = !!(ar && ar.enabled && (ar.ammo | 0) > 0);
     if (on === this._fireArmed) return;
     this._fireArmed = on;
     b.classList.toggle('armed', on);
-    if (on) b.style.setProperty('--ic', toCss(it.col, '#ffd23f'));
-    else b.style.removeProperty('--ic');
   }
 
   /* ============================================================
@@ -445,93 +450,98 @@ export class HUD {
   /** T5 calls this on touchdown after a long flight. Number of seconds, or a
       pre-formatted string if the caller wants its own wording. */
   /**
-   * The item slot. Cache-driven rather than timer-driven, unlike airtime():
-   * an item persists until it is used, and the roulette is a rapid sequence
-   * of different names rather than one thing fading out.
+   * The arsenal card. Cache-driven rather than timer-driven, unlike
+   * airtime(): a rocket sits in the tube until it is fired, so the common
+   * frame is "nothing changed" and has to cost nothing.
    */
-  _drawItem(it) {
-    const host = this.el.item;
+  _drawArsenal(ar) {
+    const host = this.el.ars;
     if (!host) return;
-    /* The key gained `icon` and `method` in wave 6 — the card now carries a
-       glyph and the FIRE key, and both can change without the name doing so
-       (a pad plugged in mid-race changes only the method). */
-    const key = !it || !it.enabled || (!it.name && !it.rolling)
-      ? '' : it.name + '|' + it.charges + '|' + (it.rolling ? 1 : 0) +
-        '|' + (it.icon || '') + '|' + (it.use || '') + '|' + this._method;
-    if (key === this._c.item) return;
-    this._c.item = key;
-    if (!key) { host.innerHTML = ''; return; }
+    if (!ar || !ar.enabled) {
+      if (this._c.ars !== '') { this._c.ars = ''; host.innerHTML = ''; }
+      return;
+    }
+    const capRaw = ar.ammoCap | 0;
+    const cap = clamp(capRaw > 0 ? capRaw : 6, 1, 12);
+    const ammo = clamp(ar.ammo | 0, 0, cap);
+    /* Reload arc: arsenal publishes seconds remaining, not a fraction, and
+       nothing in the payload says what a full reload costs (§8.2's LAUNCHERS
+       table is P3's, not read here). The peak this timer has itself seen
+       since it last hit zero is the only "full" the HUD has to divide by —
+       accurate from the second shot on, and simply hidden (the ring off)
+       until then. */
+    const reloadT = Math.max(0, +ar.reloadT || 0);
+    if (reloadT > this._reloadPeak) this._reloadPeak = reloadT;
+    if (reloadT <= 0) this._reloadPeak = 0;
+    const rp = this._reloadPeak > 0 ? clamp(1 - reloadT / this._reloadPeak, 0, 1) : 1;
+    const reloading = reloadT > 0;
 
-    host.innerHTML = '';
-    const d = document.createElement('div');
-    d.className = 'itemcard' + (it.rolling ? ' rolling' : '');
-    d.style.setProperty('--ic', toCss(it.col, '#ff7a1a'));
-    if (it.icon) d.appendChild(iconCanvas(it.icon, 20, toCss(it.col, '#ff7a1a')));
-    /* Name over verb, in one column: the card has to answer "what have I got"
-       and "what does firing it do" at a glance, and the name alone answers
-       only the first. */
-    const col = document.createElement('span');
-    col.className = 'namecol';
-    const n = document.createElement('b');
-    n.textContent = it.name || '—';
-    col.appendChild(n);
-    if (!it.rolling && it.use) {
-      const u = document.createElement('small');
-      u.className = 'use';
-      u.textContent = it.use;
-      col.appendChild(u);
-    }
-    d.appendChild(col);
-    if (it.charges > 1) {
+    const key = ammo + '|' + cap + '|' + (reloading ? 1 : 0) + '|' + this._method;
+    if (key !== this._c.ars) {
+      this._c.ars = key;
+      host.innerHTML = '';
+      const d = document.createElement('div');
+      d.className = 'arscard' + (ammo <= 0 ? ' empty' : '');
+      d.appendChild(iconCanvas('rocket', 20, '#ff7a1a'));
+      const col = document.createElement('span');
+      col.className = 'namecol';
+      const n = document.createElement('b');
+      n.textContent = 'ROCKETS';
+      col.appendChild(n);
+      d.appendChild(col);
+      // 6–12 pips, one per tube: filled and loaded, hollow once spent.
       const pips = document.createElement('span');
-      pips.className = 'charges';
-      for (let i = 0; i < it.charges; i++) pips.appendChild(document.createElement('i'));
+      pips.className = 'pips';
+      for (let i = 0; i < cap; i++) {
+        const pp = document.createElement('i');
+        if (i >= ammo) pp.className = 'spent';
+        pips.appendChild(pp);
+      }
       d.appendChild(pips);
-    }
-    /* The key glyph. Not decoration: before this the game had a full item
-       system and did not say, anywhere, which button fires one. Suppressed
-       while the roulette is still spinning, because it is not yours yet. */
-    if (!it.rolling) {
+      const rl = document.createElement('i');
+      rl.className = 'reload';
+      d.appendChild(rl);
+      /* The key glyph. Not decoration: before this the game had a full item
+         system and did not say, anywhere, which button fires one. */
       const k = document.createElement('i');
       k.className = 'firekey';
       k.textContent = FIRE_KEY[this._method] || 'F';
       d.appendChild(k);
+      host.appendChild(d);
+      this._arsEl = d;
+      this._reloadEl = rl;
     }
-    host.appendChild(d);
-    /* A one-shot pulse the frame the item lands, so the card announces itself
-       without the banner having to be the only signal. */
-    if (!it.rolling && (it.seq | 0) !== this._cardSeq) {
-      this._cardSeq = it.seq | 0;
-      d.classList.add('ready');
-      setTimeout(() => d.classList.remove('ready'), 600);
+    // The ring redraws every visible frame — a style-property write, not a
+    // rebuild, so it costs nothing the key above does not already gate.
+    if (this._reloadEl) {
+      this._reloadEl.classList.toggle('on', reloading);
+      if (reloading) this._reloadEl.style.setProperty('--rp', rp.toFixed(3));
+    }
+    // One-shot flash the frame a rocket actually leaves the tube.
+    if (this._arsEl && (ar.fireSeq | 0) !== this._seq.fire) {
+      const first = this._seq.fire < 0;
+      this._seq.fire = ar.fireSeq | 0;
+      if (!first) {
+        this._arsEl.classList.remove('fired'); void this._arsEl.offsetWidth;
+        this._arsEl.classList.add('fired');
+      }
     }
   }
 
   /**
-   * The pickup callout. `item.seq` is bumped by race.js when a box is
-   * collected; the card alone is easy to miss at 40 m/s in the corner of the
-   * screen, and the name plus the key is the whole tutorial for the item
-   * system.
+   * The pickup banner. `arsenal.pickupSeq` bumps the frame a crate or a can
+   * is collected; race.js hands over the exact string ("ROCKETS +3",
+   * "NITRO!") because it is the side that knows the count, so the HUD only
+   * has to notice the edge and show it.
    */
-  _itemEvent(it) {
-    if (!it || !it.enabled) return;
-    const seq = it.seq | 0;
-    if (seq === this._seq.item) return;
-    const first = this._seq.item < 0;
-    this._seq.item = seq;
-    if (first || it.rolling || !it.name) return;   // wait for the roulette to land
-    const m = this._method;
-    const k = FIRE_KEY[m] || 'F';
-    const verb = PRESS_VERB[m] || 'PRESS';
-    /* The VERB, not "TO FIRE". Every item used to produce the same sentence,
-       which told you which key to press and nothing whatever about what
-       pressing it would do. */
-    this.banner(`${it.name} — ${verb} ${k} TO ${it.use || 'FIRE'}`, 'item', 3.0);
-    if (it.hint) {
-      /* The one thing per item you cannot guess, on its own line so it does
-         not compete with the instruction. */
-      this.banner(it.hint.replace('{BACK}', BACK_KEY[m] || '\u2193'), 'item', 2.6);
-    }
+  _pickupEvent(ar) {
+    if (!ar || !ar.enabled) return;
+    const seq = ar.pickupSeq | 0;
+    if (seq === this._seq.pickup) return;
+    const first = this._seq.pickup < 0;
+    this._seq.pickup = seq;
+    if (first || !ar.pickupText) return;   // e.g. "ROCKETS +3", "NITRO!"
+    this.banner(ar.pickupText, 'item', 2.4);
   }
 
   /**
@@ -660,10 +670,10 @@ export class HUD {
     const veh = (p && p.vehicle) || 0;
     const c = this._c;
 
-    const it = p && p.item;
-    this._drawItem(it);
-    this._itemEvent(it);
-    if (this._method === 'touch') this._armTouchFire(it);
+    const ar = p && p.arsenal;
+    this._drawArsenal(ar);
+    this._pickupEvent(ar);
+    if (this._method === 'touch') this._armTouchFire(ar);
     this._raceEvents(p && p.events);
     if (veh) this._trickPop(veh.trick);
 
@@ -772,6 +782,14 @@ export class HUD {
       this._boost = +veh.boost || 0;
       this._boostTier = veh.boostTier | 0;
     }
+    /* Nitro burn, peak-normalised the same way as the reload arc in
+       _drawArsenal: arsenal.nitroT is seconds remaining with no published
+       total, so the highest reading seen since it last hit zero stands in
+       for "full". */
+    const nT = ar ? Math.max(0, +ar.nitroT || 0) : 0;
+    if (nT > this._nitroPeak) this._nitroPeak = nT;
+    if (nT <= 0) this._nitroPeak = 0;
+    this._nitro = this._nitroPeak > 0 ? clamp(nT / this._nitroPeak, 0, 1) : 0;
 
     /* ---- rival gap ---- */
     const rv = p && p.rival;
@@ -911,8 +929,14 @@ export class HUD {
       g.lineCap = 'butt';
     }
 
-    /* ---- boost burn, a straight bar across the bottom of the plate ---- */
-    const bo = clamp(this._boost, 0, 1);
+    /* ---- boost burn, a straight bar across the bottom of the plate ----
+       Shared by two writers: the mini-turbo release (this._boost) and an
+       arsenal nitro can (this._nitro, peak-normalised in update()). Both
+       tell the driver the same thing — "you are sped up and it is running
+       out" — so one bar answers for whichever is actually burning rather
+       than splitting the room with a second bar saying the same thing. */
+    const nitroLeads = this._nitro > this._boost;
+    const bo = clamp(Math.max(this._boost, this._nitro), 0, 1);
     if (bo > 0.004) {
       const bh = Math.max(2, H * 0.085);
       const y = H - bh * 0.5 - 1;
@@ -921,7 +945,7 @@ export class HUD {
       g.lineWidth = bh;
       g.strokeStyle = 'rgba(255,255,255,.12)';
       g.beginPath(); g.moveTo(x0, y); g.lineTo(x1, y); g.stroke();
-      g.strokeStyle = TIER_COL[clamp(this._boostTier - 1, 0, 2)];
+      g.strokeStyle = nitroLeads ? '#dff6ff' : TIER_COL[clamp(this._boostTier - 1, 0, 2)];
       g.beginPath(); g.moveTo(x0, y); g.lineTo(x0 + (x1 - x0) * bo, y); g.stroke();
       g.lineCap = 'butt';
     }

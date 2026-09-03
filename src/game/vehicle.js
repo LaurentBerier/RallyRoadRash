@@ -228,6 +228,22 @@ export class Vehicle {
     this._airVy = 0;           // vel.y on the last airborne substep — the touchdown speed
     this._airLast = 0;         // airTime on that same substep, for the landEdge debounce
 
+    /* ---- arsenal (wave 8, contract 8.1) ----
+       Published, not owned: game/arsenal.js keeps the truth in its own
+       per-racer state and mirrors these four every frame, so the ammo rack
+       vehicle-art.js draws and the HUD's counter read the same number. They
+       are zeroed by placeAt like every other publication — a headless car in
+       a harness, or a car between placeAt and the next Arsenal.step, must
+       read as "nothing in the tube, nothing burning", never as stale. */
+    this.ammo = 0;             // rockets in the tube
+    this.ammoCap = 0;          // from LAUNCHERS[spec.id].ammoCap
+    this.nitroT = 0;           // s of nitro burn remaining
+    this.reloadT = 0;          // s until the next shot is allowed
+    /* Where the rockets leave. vehicle-art.js publishes `_muzzle` once the
+       launcher is mounted (see muzzleWorld); null until then and for good on
+       a headless car, which is why muzzleWorld has two fallbacks. */
+    this._muzzle = null;
+
     /* ---- visuals ---- */
     this.root = null; this.chassis = null; this.wheelRoot = null;
     this.mats = null; this.tex = null; this.geos = null;
@@ -250,6 +266,43 @@ export class Vehicle {
   sphereCentre(i, out) {
     return out.set(0, this.sphY, i === 0 ? this.sphD : i === 2 ? -this.sphD : 0)
       .applyQuaternion(this.quat).add(this.pos);
+  }
+
+  /* ============================================================
+     THE MUZZLE (contract 8.2)
+     ------------------------------------------------------------
+     Where a rocket leaves this car, in world space, and which way it goes.
+     Three sources, in order of trust: `_muzzle`, which vehicle-art.js
+     publishes once the launcher mesh is mounted (an Object3D at the tube
+     mouth, or a plain body-space point); the spec's authored `launcher`
+     mount, half a tube ahead of the plate; and failing both a point on the
+     roof derived from the bounding box, so a headless car in a dev harness
+     fires from somewhere sane rather than from its centre of mass. Never
+     throws, never allocates: the forward comes back in module scratch,
+     exactly like `forward`, and is only valid until the next call.
+
+     @param out  THREE.Vector3 — receives the world-space muzzle position
+     @returns    THREE.Vector3 — the world-space direction the tube points
+     ============================================================ */
+  muzzleWorld(out) {
+    const S = this.spec, m = this._muzzle;
+    const Lc = S && S.launcher;
+    const pitch = (Lc && Number.isFinite(Lc.pitch)) ? Lc.pitch : MUZZLE_PITCH;
+    if (m && m.isObject3D && m.matrixWorld) {
+      m.getWorldPosition(out);
+      return _mf.set(0, 0, 1).transformDirection(m.matrixWorld);
+    }
+    if (m && Number.isFinite(m.x) && Number.isFinite(m.y) && Number.isFinite(m.z)) {
+      out.set(m.x, m.y, m.z);
+    } else if (Lc && Number.isFinite(Lc.x) && Number.isFinite(Lc.y) && Number.isFinite(Lc.z)) {
+      out.set(Lc.x, Lc.y + MUZZLE_AXIS, Lc.z + MUZZLE_AHEAD);
+    } else {
+      const D = (S && S.dims) || DIMS_FALLBACK;
+      const com = (S && S.comHeight) || 0.5;
+      out.set(0, D.H - com + MUZZLE_ROOF, D.L * 0.10);
+    }
+    out.applyQuaternion(this.quat).add(this.pos);
+    return _mf.set(0, Math.sin(pitch), Math.cos(pitch)).applyQuaternion(this.quat);
   }
 
   /** Drop the car onto the ground at (x,z) facing `yaw`, all motion zeroed. */
@@ -294,6 +347,10 @@ export class Vehicle {
     this.landEdge = false; this.landQ = 0; this.airPeak = 0;
     this._launchY = this.pos.y; this._airVy = 0; this._airLast = 0;
     trickReset(this._trick);
+    // Contract 8.1: the arsenal publications go too. Arsenal.notifyReset
+    // re-publishes the rack on the same frame; the burn and the reload stay
+    // gone, because they belonged to the road the car is no longer on.
+    this.ammo = 0; this.ammoCap = 0; this.nitroT = 0; this.reloadT = 0;
 
     // One tiny zero-input substep so wheel world positions, normals and surface
     // ids are valid before anything reads them (first visual frame, AI, HUD).
@@ -1390,6 +1447,17 @@ export function resolveVehiclePair(a, b) {
 const _ctl = { throttle: 0, steer: 0, brake: 0, handbrake: 0, roll: 0 };
 const _wup = new THREE.Vector3(0, 1, 0);
 const _gf = new THREE.Vector3(), _gr = new THREE.Vector3(), _gu = new THREE.Vector3();
+/* muzzleWorld() — its own forward scratch, because a caller will read
+   `forward` for the rear-fire spawn point while still holding this one. */
+const _mf = new THREE.Vector3();
+/* Level when the spec says nothing. A rocket flies flat for 0.4 s before it
+   drops (TUNE.weapons), and even 3° of tube pitch at 60 m/s is 3 m/s of
+   climb — over a car's roof by 40 m. The drop is what brings it down. */
+const MUZZLE_PITCH = 0.0;
+const MUZZLE_AHEAD = 0.36;       // m — half of kit-arsenal's tube length, past the mount
+const MUZZLE_AXIS = 0.19;        // m — the tube axis above the launcher plate (kit-arsenal)
+const MUZZLE_ROOF = 0.22;        // m above the roof, for the bounding-box fallback
+const DIMS_FALLBACK = { L: 4, W: 2, H: 1.4 };
 const _up = new THREE.Vector3(), _fw = new THREE.Vector3(), _rt = new THREE.Vector3();
 const _F = new THREE.Vector3(), _T = new THREE.Vector3();
 const _p1 = new THREE.Vector3(), _p2 = new THREE.Vector3(), _p3 = new THREE.Vector3();

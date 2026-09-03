@@ -12,7 +12,7 @@
 <!-- ?v= is a cache buster: static hosts serve assets with max-age=600, so a
      returning player keeps the old layout for ten minutes after a deploy.
      Bump this whenever styles.css changes in a way players must see. -->
-<link rel="stylesheet" href="src/ui/styles.css?v=11" />
+<link rel="stylesheet" href="src/ui/styles.css?v=12" />
 <script type="importmap">
 {
   "imports": {
@@ -227,9 +227,9 @@
   <div class="z-speed">
     <!-- Trick pop: lands with the car, one at a time, coloured by tier. -->
     <div class="trick-slot" id="hTrick"></div>
-    <!-- Item slot: a sibling of the air tag inside .z-speed, so it needs no
-         grid change and is hidden with the rest of the cluster in portrait. -->
-    <div class="item-slot" id="hItem"></div>
+    <!-- Arsenal slot: a sibling of the air tag inside .z-speed, so it needs
+         no grid change and is hidden with the rest of the cluster in portrait. -->
+    <div class="ars-slot" id="hArsenal"></div>
     <div class="air-slot" id="hAir"></div>
     <div class="speedbox">
       <canvas id="hRpm" width="240" height="72" aria-hidden="true"></canvas>

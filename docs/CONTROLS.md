@@ -14,7 +14,7 @@ debounce).
 | Handbrake (drift / charge mini-turbo) | Space |
 | Roll, airborne | Q / E |
 | Trick modifier | hold Space in the air — steer ROLLS instead of yawing |
-| Fire power-up | F (hold reverse to fire it backwards) |
+| Fire rocket | F (hold reverse to fire it backwards) |
 | Reset to track | R — HOLD for ~0.8 s (ring fills on the HUD) |
 | Camera (chase/hood) | C |
 | Pause | Esc |
@@ -30,7 +30,7 @@ debounce).
 | Handbrake | A (button 0) |
 | Roll, airborne | LB / RB (buttons 4 / 5) |
 | Trick modifier | hold A in the air — steer ROLLS instead of yawing |
-| Fire power-up | X (button 2) |
+| Fire rocket | X (button 2, hold LT to fire it backwards) |
 | Reset (hold) | B (button 1) |
 | Camera | Y (button 3) |
 | Pause | Start (button 9) |
@@ -74,53 +74,40 @@ lines) and the race-action keys (`KeyR`, `KeyC`, `Escape`, `KeyM`) are
 polled by `race.js`/`main.js` via `input.hit()/down()` (`KeyF` is an edge) — grep for the code
 you want to move; each binding appears exactly once.
 
-## Drifting, boosting and power-ups
+## Drifting, boosting and the arsenal
 
 **Mini-turbo.** Hold DRIFT through a corner. Once the car is genuinely
 sideways the tyre dust changes colour — cyan, then orange, then violet — and
 releasing DRIFT fires a boost of that tier. A throttle slide charges too, at
 a wider slip angle, so you can bank a tier without ever touching the
 handbrake. Spinning out cancels the charge. Mini-turbo is part of the
-handling model and is always available.
+handling model and is always available, whatever WEAPONS is set to.
 
-**Power-ups.** The boxes are the glowing cyan cubes with a **?** on them,
-hovering over the road in rows of three or four — they are the only object on
-any stage that looks like that, and they respawn a few seconds after being
-taken. Drive through one and a roulette spins for about two thirds of a
-second; when it lands, the game tells you in as many words what you got and
-what to do with it:
+**Arsenal.** Every machine carries a rocket tube (six to twelve rounds,
+depending which one) plus a magazine of pickups on the road — no roulette,
+no waiting for a spin to land. What you drive through is what you get:
 
-> `SPARE WHEEL — PRESS F TO THROW`
-> `hold ↓ as you fire to throw it backwards`
-
-The card in the bottom-right corner keeps the same three things on screen for
-as long as you hold the item: the icon, the name, the verb, and the key. On a
-pad the key reads **X**; on touch the **FIRE** button lights up in the item's
-own colour instead.
-
-| Item | What FIRE does |
+| Pickup | What it does |
 |---|---|
-| NITRO | BOOST |
-| TRIPLE NITRO | BOOST ×3 — the slot stays full until all three are spent |
-| SPARE WHEEL | THROW — hold the back key to send it behind you |
-| OIL SLICK | DROP BEHIND YOU |
-| TOW LINE | HOOK THE CAR AHEAD — with no car in range it fires as a NITRO, and says so |
-| ROCKET SLED | LAUNCH — hands off, it steers itself |
-| DUST STORM | BLIND EVERYONE AHEAD — a wall of dust across the road |
+| Ammo crate | Tops the tube back up on the spot |
+| Nitro can | A timed speed burn, starts the instant you cross it — no button |
 
-You can only hold one item at a time, so a box you drive through with a full
-slot is wasted — the log in the bottom-left corner says `SLOT FULL — FIRE IT`
-when that happens. That log is also where you find out what the rest of the
-field is doing to you: `VOSS FIRED · SPARE WHEEL`, `HIT BY KIRA MOSS · OIL
-SLICK`, `YOU HIT NAVA OKO · DUST STORM`. Pressing FIRE while the roulette is
-still spinning is remembered, not swallowed — the shot goes off the moment
-the item lands.
+FIRE launches a rocket straight ahead; hold the back key as you press FIRE
+and it launches behind you instead. The card in the bottom-right corner
+tracks the tube: a pip per round (hollow once fired), a small ring that
+fills in as the next shot reloads, and the FIRE keycap for whichever input
+method you are on. On touch, the **FIRE** button itself lights up the
+moment you are carrying at least one round.
 
-What you roll depends on where you are: the leader draws defensive items
-almost exclusively, and the back of the field draws the two specials that
-can rescue a race. Settings → POWER-UPS turns the whole item system off for
-a clean time attack; records set with items on are flagged with a ⚡ on the
-stage card so the two are never compared.
+Run the tube dry and FIRE does nothing until the next crate. The log in the
+bottom-left corner is where you find out what the rest of the field is
+doing to you — `VOSS FIRED · ROCKET`, `HIT BY KIRA MOSS · ROCKET`, `YOU HIT
+NAVA OKO · ROCKET`.
+
+Settings → WEAPONS turns the rocket tube and the two pickups off for a clean
+time attack — boost pads and the drift boost above are handling, not
+weapons, and stay on either way. Records set with weapons on are flagged
+with a ⚡ on the stage card so the two are never compared.
 
 **Settings that change how a race feels.**
 

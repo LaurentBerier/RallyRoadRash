@@ -26,16 +26,16 @@
      f  two cars nose to tail: the follower builds a lateral offset inside
         3 s and the pair never comes within 1.2 m over 60 s
 
-   …plus the wave-6 item gates, run against a MOCK ctx.items (contract 6.7)
-   and never the real ItemWorld — that one owns three.js and this file stays
+   …plus the arsenal gates, run against a MOCK ctx.arsenal (contract 8.11)
+   and never the real Arsenal — that one owns three.js and this file stays
    loader-free:
 
      t  TARGETING, and the latch regression: a rival 20 m ahead on the line
         draws a shot inside a second; the same rival 6 m off the line never
         draws one, for five seconds
-     u  DODGING · v  BOX SEEKING · w  CANNED TRICKS (plan, release, aborts)
-     x  DETERMINISM: the same seed twice, items on, identical to the bit
-     y  YIELD: the items-on hit rate the QA sweep is gated on
+     u  DODGING · v  PICKUP SEEKING · w  CANNED TRICKS (plan, release, aborts)
+     x  DETERMINISM: the same seed twice, weapons on, identical to the bit
+     y  YIELD: the weapons-on hit rate the QA sweep is gated on
    ============================================================ */
 import { buildTrackData } from '../src/world/track.js';
 import { VEHICLES } from '../src/game/vehicles.js';
@@ -43,9 +43,10 @@ import { SURFACES } from '../src/world/surfaces.js';
 import { AIDriver, makeGridProfiles, AI_BALANCE, AI_SHORTCUT, A_BRAKE } from '../src/game/ai.js';
 import {
   predictAirTime, planAirTrick, stepAirTrick, rollTrickIntent,
-  TRICK_PLAN, TRICKS_AVAILABLE, itemStyleFor, ITEM_STYLE,
-} from '../src/game/ai-items.js';
-import { ITEM, ITEMS, rollItem } from '../src/game/items.js';
+  TRICK_PLAN, TRICKS_AVAILABLE,
+} from '../src/game/ai-tricks.js';
+import { weaponStyleFor, WEAPON_STYLE } from '../src/game/ai-weapons.js';
+import { PICKUP, launcherFor } from '../src/game/weapons.js';
 import { G, TUNE } from '../src/game/config.js';
 
 import training from '../src/world/tracks/training.js';
@@ -759,16 +760,21 @@ for (const def of TRACKS) {
    ============================================================ */
 function fillHit(out, src) {
   out.found = 0; out.dist = -1; out.s = 0; out.lat = 0; out.x = 0; out.z = 0;
+  out.kind = -1;
   if (src) {
     out.found = 1; out.dist = src.dist; out.lat = src.lat;
     out.s = src.s || 0; out.x = src.x || 0; out.z = src.z || 0;
+    out.kind = src.kind === undefined ? -1 : src.kind;
   }
   return out;
 }
 
-function mockItems() {
-  const cfg = { threats: [], box: null, pad: null, lock: false, has: false };
-  const calls = { threats: 0, box: 0, pad: 0, lock: 0, has: 0 };
+/* The four accessors of contract 8.11, over a config the scenario edits.
+   `pick` is the one pickup on offer, with a `kind`; nearestPickup honours
+   the kind filter exactly as arsenal.js does. `ammo` is what ammoOf reports. */
+function mockArsenal() {
+  const cfg = { threats: [], pick: null, pad: null, ammo: 6 };
+  const calls = { threats: 0, pick: 0, pad: 0, ammo: 0 };
   return {
     cfg, calls,
     events: {
@@ -782,17 +788,20 @@ function mockItems() {
       for (let i = 0; i < src.length && n < out.x.length; i++) {
         out.x[n] = src[i].x; out.z[n] = src[i].z;
         out.vx[n] = src[i].vx || 0; out.vz[n] = src[i].vz || 0;
-        out.r[n] = src[i].r === undefined ? 1.6 : src[i].r;
+        out.r[n] = src[i].r === undefined ? 1.8 : src[i].r;
         out.kind[n] = src[i].kind || 0;
         n++;
       }
       out.n = n;
       return out;
     },
-    nearestBox(ri, out) { calls.box++; return fillHit(out, cfg.box); },
+    nearestPickup(ri, out, kind = -1) {
+      calls.pick++;
+      const p = cfg.pick;
+      return fillHit(out, (p && (kind < 0 || p.kind === kind)) ? p : null);
+    },
     nearestPad(ri, out) { calls.pad++; return fillHit(out, cfg.pad); },
-    canLock() { calls.lock++; return !!cfg.lock; },
-    hasItem() { calls.has++; return !!cfg.has; },
+    ammoOf() { calls.ammo++; return cfg.ammo | 0; },
   };
 }
 
@@ -848,11 +857,9 @@ function holdGhost(ghost, car, fwd, lat) {
     const car = new MockCar(SPEC);
     placeOnLine(td, car, straight.s);
     const d = new AIDriver(0, car, td, GUN, rngFrom(9091));
-    const items = mockItems();
+    const arsenal = mockArsenal();
     const ghost = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } };
-    const ctx = {
-      state: 'running', vehicles: [car, ghost], items, myId: 0, item: ITEM.WHEEL,
-    };
+    const ctx = { state: 'running', vehicles: [car, ghost], arsenal, myId: 0 };
     let firstAt = -1, fires = 0, backFires = 0, us = 0, n = 0;
     for (let k = 0; k < secs * 60; k++) {
       holdGhost(ghost, car, 20, lat);
@@ -869,7 +876,7 @@ function holdGhost(ghost, car, fwd, lat) {
       car.surfaceId = rp && rp.surface !== undefined ? rp.surface : 1;
       car.step(DT, ctl);
     }
-    return { firstAt, fires, backFires, us: n ? us / n : 0, style: d.itemStyle };
+    return { firstAt, fires, backFires, us: n ? us / n : 0, style: d.weaponStyle };
   }
 
   console.log(`\n=== t  targeting (training straight at s=${f1(straight.s)}, ${f1(straight.len)} m)`);
@@ -878,8 +885,8 @@ function holdGhost(ghost, car, fwd, lat) {
   console.log(`  rival 20 m ahead at lat 0.5 m: first shot at ` +
     `${on.firstAt < 0 ? 'never' : f2(on.firstAt) + ' s'}, ${on.fires} shots in 1 s ` +
     `(style ${on.style})`);
-  console.log(`  rival 20 m ahead at lat 6.0 m: ${off.fires} shots in 5 s (must be 0)`);
-  console.log(`  ${f2(Math.max(on.us, off.us))} µs/update with a live ctx.items`);
+  console.log(`  rival 20 m ahead at lat 6.0 m: ${off.fires} shots in 5 s (must be 0 — outside the cone)`);
+  console.log(`  ${f2(Math.max(on.us, off.us))} µs/update with a live ctx.arsenal`);
   if (on.firstAt < 0 || on.firstAt > 1.0) {
     fail('targeting', 'a rival 20 m ahead on the line drew no shot inside a second');
   }
@@ -895,9 +902,9 @@ function holdGhost(ghost, car, fwd, lat) {
     const car = new MockCar(SPEC);
     placeOnLine(td, car, straight.s);
     const d = new AIDriver(0, car, td, GUN, rngFrom(313));
-    const items = mockItems();
+    const arsenal = mockArsenal();
     const ghost = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } };
-    const ctx = { state: 'running', vehicles: [car, ghost], items, myId: 0, item: ITEM.WHEEL };
+    const ctx = { state: 'running', vehicles: [car, ghost], arsenal, myId: 0 };
     let back = 0, fwd = 0;
     for (let k = 0; k < 120; k++) {
       holdGhost(ghost, car, -12, 0.4);
@@ -912,19 +919,32 @@ function holdGhost(ghost, car, fwd, lat) {
     if (fwd !== 0) fail('targeting', 'fired forward at nobody');
   }
 
-  /* The item brain must be completely inert with no ctx.items at all — that
-     is a race with power-ups off, and it is the default everywhere above. */
+  /* The trigger finger must be completely inert with no ctx.arsenal at all —
+     that is a race with weapons off, and it is the default everywhere above.
+     And with an arsenal that reports an EMPTY rack, likewise. */
   {
     const car = new MockCar(SPEC);
     placeOnLine(td, car, straight.s);
     const d = new AIDriver(0, car, td, GUN, rngFrom(77));
-    const ctx = { state: 'running', vehicles: [car] };     // no items, no item
+    const ghost = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } };
+    const ctx = { state: 'running', vehicles: [car, ghost] };     // no arsenal
     for (let k = 0; k < 300; k++) {
+      holdGhost(ghost, car, 20, 0.5);
       const ctl = d.update(DT, ctx);
-      if (d.wantsFire) fail('targeting', 'raised wantsFire with no item in hand');
+      if (d.wantsFire) fail('targeting', 'raised wantsFire with no arsenal');
       car.step(DT, ctl);
     }
-    console.log('  no ctx.items, no ctx.item: 5 s of driving, no fire request');
+    console.log('  no ctx.arsenal: 5 s of driving behind a rival, no fire request');
+    const arsenal = mockArsenal();
+    arsenal.cfg.ammo = 0;
+    const ctx2 = { state: 'running', vehicles: [car, ghost], arsenal, myId: 0 };
+    for (let k = 0; k < 300; k++) {
+      holdGhost(ghost, car, 20, 0.5);
+      const ctl = d.update(DT, ctx2);
+      if (d.wantsFire) fail('targeting', 'raised wantsFire with an empty rack');
+      car.step(DT, ctl);
+    }
+    console.log('  empty rack: 5 s of driving behind a rival, no fire request');
   }
 }
 
@@ -938,15 +958,15 @@ function holdGhost(ghost, car, fwd, lat) {
   placeOnLine(td, car, straight.s);
   const d = new AIDriver(0, car, td,
     { name: 'D', skill: 0.8, aggression: 0.5, consistency: 0.8 }, rngFrom(2222));
-  const items = mockItems();
-  items.cfg.threats = [{ x: 0, z: 0, r: 2.6, kind: 1 }];
-  const ctx = { state: 'running', vehicles: [car], items, myId: 0, item: -1 };
+  const arsenal = mockArsenal();
+  arsenal.cfg.threats = [{ x: 0, z: 0, r: 1.8, kind: 0 }];
+  const ctx = { state: 'running', vehicles: [car], arsenal, myId: 0 };
   let at = -1, peak = 0;
   for (let k = 0; k < 120; k++) {
-    // an oil slick sitting 25 m up the road, dead on the line
+    // a rocket held 25 m up the road, dead on the line
     const f = car.forward;
-    items.cfg.threats[0].x = car.pos.x + f.x * 25;
-    items.cfg.threats[0].z = car.pos.z + f.z * 25;
+    arsenal.cfg.threats[0].x = car.pos.x + f.x * 25;
+    arsenal.cfg.threats[0].z = car.pos.z + f.z * 25;
     const ctl = d.update(DT, ctx);
     const a = Math.abs(d.offset);
     if (a > peak) peak = a;
@@ -955,58 +975,61 @@ function holdGhost(ghost, car, fwd, lat) {
     car.surfaceId = rp && rp.surface !== undefined ? rp.surface : 1;
     car.step(DT, ctl);
   }
-  console.log('\n=== u  dodging (a slick held 25 m ahead, on the line)');
+  console.log('\n=== u  dodging (a rocket held 25 m ahead, on the line)');
   console.log(`  |offset| reached 1.5 m at ${at < 0 ? 'never' : f2(at) + ' s'}` +
-    `   peak ${f2(peak)} m   threats() polled ${items.calls.threats}×`);
+    `   peak ${f2(peak)} m   threats() polled ${arsenal.calls.threats}×`);
   if (at < 0 || at > 2.0) fail('dodge', `no 1.5 m avoidance offset within 2 s (peak ${f2(peak)} m)`);
-  if (items.calls.threats !== 120) fail('dodge', 'threats() is not polled every frame');
+  if (arsenal.calls.threats !== 120) fail('dodge', 'threats() is not polled every frame');
 }
 
 /* ============================================================
-   v — BOX SEEKING
+   v — PICKUP SEEKING
+   ------------------------------------------------------------
+   Three cases, one machine: a crate is worth a detour on an empty rack and
+   not on a full one (arsenal.js leaves the crate standing), and a nitro
+   can is worth one whatever the rack says, because it fires on contact.
    ============================================================ */
 {
   const td = buildTrackData(training);
   const straight = straightStart(td);
-  const car = new MockCar(SPEC);
-  placeOnLine(td, car, straight.s);
-  const d = new AIDriver(0, car, td,
-    { name: 'B', skill: 0.8, aggression: 0.5, consistency: 0.8 }, rngFrom(3333));
-  const items = mockItems();
-  items.cfg.box = { dist: 60, lat: 3, s: 0, x: 0, z: 0 };
-  const ctx = { state: 'running', vehicles: [car], items, myId: 0, item: -1 };
-  let at = -1, peak = -9;
-  for (let k = 0; k < 180; k++) {
-    const ctl = d.update(DT, ctx);
-    if (d.offset > peak) peak = d.offset;
-    if (at < 0 && d.offset > 1.0) at = k * DT;
-    const rp = d.route.pts[d.ri];
-    car.surfaceId = rp && rp.surface !== undefined ? rp.surface : 1;
-    car.step(DT, ctl);
-  }
-  console.log('\n=== v  box seeking (an untaken row 60 m ahead at lat +3)');
-  console.log(`  offset crossed +1 m at ${at < 0 ? 'never' : f2(at) + ' s'}   peak ${f2(peak)} m` +
-    `   nearestBox() polled ${items.calls.box}×`);
-  if (at < 0 || at > 3.0) fail('seek', `never steered toward the box (peak offset ${f2(peak)} m)`);
+  const seek = (pick, ammo, seed) => {
+    const car = new MockCar(SPEC);
+    placeOnLine(td, car, straight.s);
+    const d = new AIDriver(0, car, td,
+      { name: 'B', skill: 0.8, aggression: 0.5, consistency: 0.8 }, rngFrom(seed));
+    const arsenal = mockArsenal();
+    arsenal.cfg.pick = pick;
+    arsenal.cfg.ammo = ammo;
+    const ctx = { state: 'running', vehicles: [car], arsenal, myId: 0 };
+    let at = -1, peak = -9, seekPeak = 0;
+    for (let k = 0; k < 180; k++) {
+      const ctl = d.update(DT, ctx);
+      if (d.offset > peak) peak = d.offset;
+      seekPeak = Math.max(seekPeak, Math.abs(d.seekOff));
+      if (at < 0 && d.offset > 1.0) at = k * DT;
+      const rp = d.route.pts[d.ri];
+      car.surfaceId = rp && rp.surface !== undefined ? rp.surface : 1;
+      car.step(DT, ctl);
+    }
+    return { at, peak, seekPeak, polled: arsenal.calls.pick };
+  };
+  const crate = { dist: 60, lat: 3, s: 0, x: 0, z: 0, kind: PICKUP.ROCKET };
+  const can = { dist: 60, lat: 3, s: 0, x: 0, z: 0, kind: PICKUP.NITRO };
 
-  /* …and it must NOT, holding an item. A car with a full slot drives past a
-     box (items.js canTake), so a detour for one is a detour for nothing. */
-  const car2 = new MockCar(SPEC);
-  placeOnLine(td, car2, straight.s);
-  const d2 = new AIDriver(0, car2, td,
-    { name: 'B2', skill: 0.8, aggression: 0.5, consistency: 0.8 }, rngFrom(3333));
-  const items2 = mockItems();
-  items2.cfg.box = { dist: 60, lat: 3, s: 0, x: 0, z: 0 };
-  items2.cfg.has = true;
-  const ctx2 = { state: 'running', vehicles: [car2], items: items2, myId: 0, item: ITEM.SLICK };
-  let peak2 = 0;
-  for (let k = 0; k < 180; k++) {
-    const ctl = d2.update(DT, ctx2);
-    peak2 = Math.max(peak2, Math.abs(d2.seekOff));
-    car2.step(DT, ctl);
-  }
-  console.log(`  holding an item: peak seek offset ${f2(peak2)} m (must be 0)`);
-  if (peak2 !== 0) fail('seek', 'detoured to a box it could not have collected');
+  console.log('\n=== v  pickup seeking (an untaken row 60 m ahead at lat +3)');
+  const empty = seek(crate, 0, 3333);
+  console.log(`  empty rack, crate: offset crossed +1 m at ${empty.at < 0 ? 'never' : f2(empty.at) + ' s'}` +
+    `   peak ${f2(empty.peak)} m   nearestPickup() polled ${empty.polled}×`);
+  if (empty.at < 0 || empty.at > 3.0) fail('seek', `never steered toward the crate (peak offset ${f2(empty.peak)} m)`);
+
+  const full = seek(crate, TUNE.weapons.ammoCap, 3333);
+  console.log(`  full rack, crate: peak seek offset ${f2(full.seekPeak)} m (must be 0)`);
+  if (full.seekPeak !== 0) fail('seek', 'detoured to a crate it could not have collected');
+
+  const nitro = seek(can, TUNE.weapons.ammoCap, 3333);
+  console.log(`  full rack, nitro can: offset crossed +1 m at ${nitro.at < 0 ? 'never' : f2(nitro.at) + ' s'}` +
+    `   peak ${f2(nitro.peak)} m`);
+  if (nitro.at < 0 || nitro.at > 3.0) fail('seek', 'ignored a nitro can — it is always worth the detour');
 }
 
 /* ============================================================
@@ -1199,10 +1222,10 @@ function holdGhost(ghost, car, fwd, lat) {
 function ctx2b(car) { return { state: 'running', vehicles: [car] }; }
 
 /* ============================================================
-   x — DETERMINISM, items on
+   x — DETERMINISM, weapons on
    ------------------------------------------------------------
    The QA sweep compares lap times between builds. One Math.random() in the
-   item brain and every comparison it makes is noise.
+   trigger finger and every comparison it makes is noise.
    ============================================================ */
 {
   const td = buildTrackData(canyon);
@@ -1213,14 +1236,13 @@ function ctx2b(car) { return { state: 'running', vehicles: [car] }; }
     placeOnLine(td, car, straight.s);
     const d = new AIDriver(0, car, td,
       { name: 'X', skill: 0.75, aggression: 0.65, consistency: 0.6 }, rngFrom(seed));
-    const items = mockItems();
-    items.cfg.lock = true;
-    items.cfg.box = { dist: 40, lat: -2, s: 0, x: 0, z: 0 };
+    const arsenal = mockArsenal();
+    arsenal.cfg.pick = { dist: 40, lat: -2, s: 0, x: 0, z: 0, kind: PICKUP.ROCKET };
     const ghost = { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } };
-    const ctx = { state: 'running', vehicles: [car, ghost], items, myId: 0, item: 0 };
+    const ctx = { state: 'running', vehicles: [car, ghost], arsenal, myId: 0 };
     let h = 2166136261, fires = 0;
     for (let k = 0; k < 3600; k++) {
-      ctx.item = k % 7;                          // walk the whole roster
+      arsenal.cfg.ammo = 1 + (k % 7);            // walk the whole rack
       holdGhost(ghost, car, 14 - (k % 40) * 0.5, ((k % 11) - 5) * 0.6);
       const ctl = d.update(DT, ctx);
       if (d.wantsFire) { fires++; d.notifyFired(); }
@@ -1235,7 +1257,7 @@ function ctx2b(car) { return { state: 'running', vehicles: [car] }; }
   }
 
   const a = sample(50505), b = sample(50505), c = sample(50506);
-  console.log('\n=== x  determinism (60 s, the whole roster, items on)');
+  console.log('\n=== x  determinism (60 s, the whole rack, weapons on)');
   console.log(`  seed 50505: hash ${a.h.toString(16)}  ${a.fires} shots` +
     `   ·   repeat: hash ${b.h.toString(16)}  ${b.fires} shots`);
   if (a.h !== b.h || a.fires !== b.fires) fail('determinism', 'the same seed produced a different race');
@@ -1243,41 +1265,46 @@ function ctx2b(car) { return { state: 'running', vehicles: [car] }; }
 }
 
 /* ============================================================
-   y — THE ITEMS-ON HIT RATE
+   y — THE WEAPONS-ON HIT RATE
    ------------------------------------------------------------
-   `ItemWorld.stats` reports hits ÷ fired and the QA sweep is gated on it,
-   so this is the number the targeting rework exists to move. It cannot come
-   from the drop table alone: `fired` holds the mix the AI CHOOSES to throw,
-   not the mix it picks up — a leader sits on a spare wheel and a tow line
-   with nothing to hook is never thrown at all.
+   `Arsenal.stats` reports hits ÷ fired and the QA sweep is gated on it, so
+   this is the number the lead-aim exists to move. It cannot come from the
+   aim gate alone: section t proves one shot on one straight, this proves
+   the field's mix — a six-car pack over two canyon laps against a
+   miniature arsenal reproducing the parts of arsenal.js that decide the
+   number: crate rows at the real row spacing and cap, the rocket's exact
+   ballistics (flat for `straightT`, then dropG·G, dead at `life`), the
+   hit radius against the car's real collision reach, the splash, and
+   `_spin`'s "already spinning harder" early return.
 
-   So: a six-car pack over two canyon laps against a miniature item world
-   reproducing the parts of itemworld.js that decide the number — its box
-   row spacing, items.js's real `rollItem` off real standings, the spare
-   wheel's exact ballistics, the slick's radius / grace / immunity, the
-   tow's cone, and `_spin`'s "already spinning harder" early return.
-
-   The wheel figure is a LOWER bound: the real projectile also ricochets off
-   the road corridor, and every ricochet is another chance to connect.
+   The ground is flat here, so the figure says nothing about a crest
+   between shooter and target — on a real stage the rocket's drop and a
+   rise in the road can meet. It is a lower bound on a straight.
    ============================================================ */
 {
-  const WD = ITEMS[ITEM.WHEEL], SD = ITEMS[ITEM.SLICK], TD_ = ITEMS[ITEM.TOW];
-  const CAR_R = 1.2;
+  const WT = TUNE.weapons;
+  /* The hopper's real collision reach (vehicle.js: sphD + sphR), so the
+     hitbox here is the one the live sim uses and not the 1.2 m fallback. */
+  const cs = TUNE.collide.sphereSet[SPEC.bodyStyle];
+  const sphR = cs.radius * SPEC.dims.W * 0.5;
+  const CAR_R = cs.spread * Math.max(0.05, SPEC.dims.L * 0.5 - sphR) + sphR;
+  const LN = launcherFor(SPEC.id);
   const td = buildTrackData(canyon);
   const L = td.lapLength;
   const ideal = idealLapTime(td);
   const LAPS_Y = 2;
 
-  function itemRace(seed) {
+  function rocketRace(seed) {
     const profiles = makeGridProfiles(6, 0.7, rngFrom(seed));
     const n = profiles.length;
-    const cars = [], drv = [], inv = [], prog = [];
+    const cars = [], drv = [], prog = [];
+    const ammo = new Int32Array(n), reload = new Float64Array(n);
     for (let i = 0; i < n; i++) {
       const car = new MockCar(SPEC);
       placeOnLine(td, car, td.spline.wrapS(-9 * i));
       cars.push(car);
       drv.push(new AIDriver(i, car, td, profiles[i], rngFrom(seed + 1 + i * 7919)));
-      inv.push({ id: -1, charges: 0, roll: 0 });
+      ammo[i] = WT.ammoStart;
       prog.push({ raceS: 0, lastS: 0, lat: 0, pos: i + 1 });
     }
     for (let i = 0; i < n; i++) {
@@ -1285,47 +1312,26 @@ function ctx2b(car) { return { state: 'running', vehicles: [car] }; }
       prog[i].lastS = drv[i].s;
     }
 
-    /* Box rows, laid out the way itemworld._buildBoxes does: `packs` rows a
+    /* Crate rows, laid out the way arsenal-sites.js does: `packs` rows a
        lap, four lanes across. A row is consumed per racer, not globally —
-       BOX_RESPAWN is 3.5 s and a six-car pack is never that tight. */
+       crateRespawn is 3.5 s and a six-car pack is never that tight. */
     const packs = clamp(Math.round(L / 420), 3, 6);
     const rows = [];
     for (let p = 0; p < packs; p++) rows.push(td.spline.wrapS((p + 0.5) * L / packs));
     const LANES = [-3, -1, 1, 3];
-    const taken = [];                       // per racer, per row: s at last take
+    const taken = [];                       // per racer, per row: raceS at last take
     for (let i = 0; i < n; i++) taken.push(new Float64Array(rows.length).fill(-1));
 
-    const rollRng = rngFrom(seed ^ 0x5eed);
-    const dropCtx = { toFinishM: -1, hasTarget: true, behindSec: 0 };
-    const P = [], H = [];
-    let fired = 0, hits = 0, taken2 = 0;
-    const byItem = new Array(ITEMS.length).fill(0);
-    const hitBy = new Array(ITEMS.length).fill(0);
+    const P = [];                           // live rockets
+    let fired = 0, hits = 0, crates = 0, direct = 0, splashed = 0, back = 0;
 
     const near = { s: 0, d: 0, side: 1, lat: 0, x: 0, z: 0 };
-    const items = mockItems();
-    const ctx = { state: 'running', vehicles: cars, items, myId: 0, item: -1 };
+    const arsenal = mockArsenal();
+    const ctx = { state: 'running', vehicles: cars, arsenal, myId: 0 };
     /* Spin-out, crudely: Vehicle.step forces handbrake 1 / throttle 0 while
-       `spinT` runs. Without it the pack never disperses, a single slick
-       catches three cars in a row that would in reality have scattered, and
-       the measured hit rate flatters itself. */
+       `spinT` runs. Without it the pack never disperses and the measured
+       rate flatters itself. */
     const spinT = new Float64Array(n);
-
-    /** itemworld._findTarget, to the letter — the tow's cone and window. */
-    function lockOf(i) {
-      const v = cars[i], f = v.forward;
-      const rx = f.z, rz = -f.x;             // vehicle right = (fz, −fx) flipped
-      for (let k = 0; k < n; k++) {
-        if (k === i) continue;
-        const dx = cars[k].pos.x - v.pos.x, dz = cars[k].pos.z - v.pos.z;
-        const fwd = dx * f.x + dz * f.z;
-        if (fwd < TD_.minDist || fwd > TD_.maxDist) continue;
-        const lat = dx * rx + dz * rz;
-        if (Math.abs(Math.atan2(lat, fwd)) > TD_.cone) continue;
-        return true;
-      }
-      return false;
-    }
 
     const maxT = ideal * LAPS_Y * 2.5 + 60;
     let done = 0;
@@ -1338,56 +1344,42 @@ function ctx2b(car) { return { state: 'running', vehicles: [car] }; }
 
       for (let i = 0; i < n; i++) {
         if (prog[i].raceS >= LAPS_Y * L) continue;
-        // --- pickups ---
+        // --- crates ---
         td.spline.nearest(cars[i].pos.x, cars[i].pos.z, near);
         prog[i].lat = near.lat;
-        if (inv[i].charges <= 0 && inv[i].roll <= 0) {
+        if (reload[i] > 0) reload[i] -= DT;
+        if (ammo[i] < WT.ammoCap) {
           for (let r = 0; r < rows.length; r++) {
             let d = near.s - rows[r];
             if (d < -L * 0.5) d += L; else if (d > L * 0.5) d -= L;
             if (d < -4 || d > 4) continue;
             if (taken[i][r] > 0 && prog[i].raceS - taken[i][r] < L * 0.5) continue;
             taken[i][r] = prog[i].raceS;
-            const leader = Math.max(...prog.map(p => p.raceS));
-            dropCtx.toFinishM = LAPS_Y * L - prog[i].raceS;
-            dropCtx.behindSec = (leader - prog[i].raceS) / 26;
-            dropCtx.hasTarget = lockOf(i);
-            const id = rollItem(prog[i].pos, n, dropCtx, rollRng);
-            inv[i].id = id;
-            inv[i].charges = ITEMS[id].charges;
-            inv[i].roll = 0.7;                       // ROLL_TIME
-            taken2++;
+            ammo[i] = Math.min(WT.ammoCap, ammo[i] + WT.crateAmmo);
+            crates++;
             break;
           }
         }
-        if (inv[i].roll > 0) inv[i].roll -= DT;
 
         // --- drive ---
         ctx.myId = i;
         ctx.position = prog[i].pos;
-        ctx.item = (inv[i].charges > 0 && inv[i].roll <= 0) ? inv[i].id : -1;
-        items.cfg.lock = lockOf(i);
-        items.cfg.has = inv[i].charges > 0;
-        items.cfg.threats = threatList(P, H);
-        items.cfg.box = boxAhead(near, rows, taken[i], prog[i], L, LANES);
+        arsenal.cfg.ammo = ammo[i];
+        arsenal.cfg.threats = threatList(P);
+        arsenal.cfg.pick = crateAhead(near, rows, taken[i], prog[i], L, LANES);
         const ctl = drv[i].update(DT, ctx);
 
-        if (drv[i].wantsFire && ctx.item >= 0) {
-          const id = inv[i].id;
-          fired++; byItem[id]++;
-          if (--inv[i].charges <= 0) { inv[i].id = -1; inv[i].charges = 0; }
-          const c = cars[i], f = c.forward, dir = drv[i].fireBack ? -1 : 1;
-          if (id === ITEM.WHEEL) {
+        if (drv[i].wantsFire) {
+          /* Arsenal.fire: a loaded, cooled tube or nothing; the latch is
+             consumed either way. */
+          if (ammo[i] > 0 && reload[i] <= 0) {
+            ammo[i]--; reload[i] = LN.reload; fired++;
+            const c = cars[i], f = c.forward, dir = drv[i].fireBack ? -1 : 1;
+            if (dir < 0) back++;
             P.push({
-              x: c.pos.x + f.x * dir * 2.2, y: 0.5, z: c.pos.z + f.z * dir * 2.2,
-              vx: c.vel.x + f.x * WD.speed * dir, vy: WD.lift,
-              vz: c.vel.z + f.z * WD.speed * dir,
-              life: WD.life, arm: WD.arm, bounce: 0, own: i,
-            });
-          } else if (id === ITEM.SLICK) {
-            H.push({
-              x: c.pos.x - f.x * SD.drop, z: c.pos.z - f.z * SD.drop,
-              life: SD.life, own: i, grace: 1.0, imm: new Float64Array(n),
+              x: c.pos.x + f.x * dir * 2.0, y: 1.4, z: c.pos.z + f.z * dir * 2.0,
+              vx: c.vel.x + f.x * LN.speed * dir, vy: 0, vz: c.vel.z + f.z * LN.speed * dir,
+              life: WT.life, age: 0, arm: WT.arm, own: i,
             });
           }
           drv[i].notifyFired();
@@ -1396,9 +1388,7 @@ function ctx2b(car) { return { state: 'running', vehicles: [car] }; }
         const rp = drv[i].route.pts[drv[i].ri];
         cars[i].surfaceId = rp && rp.surface !== undefined ? rp.surface : 1;
         /* A spin is a ROTATION, not a stop: Vehicle.step cuts throttle and
-           steering and pins the handbrake, and the car slides on. Modelling
-           it as a stop would park cars on top of their own oil slick and
-           re-catch them every `immune` for nine seconds. */
+           steering and pins the handbrake, and the car slides on. */
         cars[i].step(DT, spinT[i] > 0 ? (spinT[i] -= DT, _spun) : ctl);
 
         let ds = drv[i].s - prog[i].lastS;
@@ -1410,51 +1400,40 @@ function ctx2b(car) { return { state: 'running', vehicles: [car] }; }
 
       for (let k = P.length - 1; k >= 0; k--) {
         const p = P[k];
-        p.life -= DT; if (p.arm > 0) p.arm -= DT;
-        if (p.life <= 0) { P.splice(k, 1); continue; }
-        p.vy -= G * DT; p.x += p.vx * DT; p.y += p.vy * DT; p.z += p.vz * DT;
-        if (p.y <= 0.30) {
-          p.y = 0.30;
-          if (p.vy < 0) {
-            p.vy = -p.vy * WD.bounce; p.vx *= 0.94; p.vz *= 0.94;
-            if (++p.bounce > WD.maxBounce) { P.splice(k, 1); continue; }
-          }
-        }
+        p.life -= DT; p.age += DT; if (p.arm > 0) p.arm -= DT;
+        if (p.life <= 0) { P.splice(k, 1); continue; }     // a rocket that found nothing simply ends
+        if (p.age > WT.straightT) p.vy -= WT.dropG * G * DT;
+        p.x += p.vx * DT; p.y += p.vy * DT; p.z += p.vz * DT;
         let hitI = -1;
-        for (let i = 0; i < n && hitI < 0; i++) {
+        const boom = p.y <= 0.25;
+        for (let i = 0; i < n && hitI < 0 && !boom; i++) {
           if (i === p.own && p.arm > 0) continue;
-          const dx = cars[i].pos.x - p.x, dy = -p.y, dz = cars[i].pos.z - p.z;
-          const R = CAR_R + WD.radius;
+          const dx = cars[i].pos.x - p.x, dy = 0.5 - p.y, dz = cars[i].pos.z - p.z;
+          const R = CAR_R + WT.radius;
           if (dx * dx + dy * dy + dz * dz <= R * R) hitI = i;
         }
-        if (hitI >= 0) {
-          /* itemworld._spin: `if (v.spinT >= dur) return;` — a car already
-             spinning harder than this does not count a second hit, and the
-             projectile is consumed either way. */
-          if (spinT[hitI] < WD.spin) { spinT[hitI] = WD.spin; hits++; hitBy[ITEM.WHEEL]++; }
-          P.splice(k, 1);
-        }
-      }
-
-      for (let k = H.length - 1; k >= 0; k--) {
-        const h = H[k];
-        h.life -= DT; h.grace -= DT;
-        if (h.life <= 0) { H.splice(k, 1); continue; }
+        if (hitI < 0 && !boom) continue;
+        /* arsenal._explode: the car it struck takes the full spin, anyone
+           else inside the splash takes half, and `_spin` declines a car
+           already spinning harder — the rocket is consumed either way. */
         for (let i = 0; i < n; i++) {
-          if (i === h.own && h.grace > 0) continue;
-          if (h.imm[i] > 0) { h.imm[i] -= DT; continue; }
-          const dx = cars[i].pos.x - h.x, dz = cars[i].pos.z - h.z;
-          if (dx * dx + dz * dz > SD.radius * SD.radius) continue;
-          h.imm[i] = SD.immune;
-          if (spinT[i] >= SD.spin) continue;             // already spinning harder
-          spinT[i] = SD.spin;
-          hits++; hitBy[ITEM.SLICK]++;
+          if (i === p.own && p.arm > 0) continue;
+          const dir = i === hitI;
+          if (!dir) {
+            const dx = cars[i].pos.x - p.x, dy = 0.5 - p.y, dz = cars[i].pos.z - p.z;
+            if (dx * dx + dy * dy + dz * dz > LN.splash * LN.splash) continue;
+          }
+          const dur = dir ? WT.spin : WT.spin * WT.splashMul;
+          if (spinT[i] >= dur) continue;
+          spinT[i] = dur; hits++;
+          if (dir) direct++; else splashed++;
         }
+        P.splice(k, 1);
       }
 
       /* resolveVehiclePair, crudely. Without SOME separation the six point
-         masses travel as one blob, every oil slick catches the whole field
-         and the measured rate is a fiction. */
+         masses travel as one blob, every splash catches the whole field and
+         the measured rate is a fiction. */
       for (let a = 0; a < n - 1; a++) {
         for (let b = a + 1; b < n; b++) {
           const dx = cars[b].pos.x - cars[a].pos.x, dz = cars[b].pos.z - cars[a].pos.z;
@@ -1466,19 +1445,18 @@ function ctx2b(car) { return { state: 'running', vehicles: [car] }; }
         }
       }
     }
-    return { fired, hits, taken: taken2, byItem, hitBy, rate: fired ? hits / fired : 0 };
+    return { fired, hits, crates, direct, splashed, back, rate: fired ? hits / fired : 0 };
   }
 
-  /** The live projectile/hazard list, in the shape mockItems.threats wants. */
-  function threatList(P, H) {
+  /** The live rocket list, in the shape mockArsenal.threats wants. */
+  function threatList(P) {
     const out = [];
-    for (const p of P) out.push({ x: p.x, z: p.z, vx: p.vx, vz: p.vz, r: 1.6, kind: 0 });
-    for (const h of H) out.push({ x: h.x, z: h.z, vx: 0, vz: 0, r: SD.radius, kind: 1 });
+    for (const p of P) out.push({ x: p.x, z: p.z, vx: p.vx, vz: p.vz, r: 1.8, kind: 0 });
     return out;
   }
 
   /** Nearest untaken row ahead, lane picked nearest the car's own lateral. */
-  function boxAhead(near, rows, mine, p, lap, LANES) {
+  function crateAhead(near, rows, mine, p, lap, LANES) {
     let bd = Infinity, bi = -1;
     for (let r = 0; r < rows.length; r++) {
       if (mine[r] > 0 && p.raceS - mine[r] < lap * 0.5) continue;
@@ -1493,48 +1471,37 @@ function ctx2b(car) { return { state: 'running', vehicles: [car] }; }
       const dl = Math.abs(l - near.lat);
       if (dl < best) { best = dl; lane = l; }
     }
-    return { dist: bd, lat: lane, s: rows[bi], x: 0, z: 0 };
+    return { dist: bd, lat: lane, s: rows[bi], x: 0, z: 0, kind: PICKUP.ROCKET };
   }
 
-  /* Four seeds, because one two-lap race is fifty-odd throws and fifty
-     throws is not a rate. The spread is printed so a reader can see how
-     much of the headline number is noise. */
+  /* Four seeds, because one two-lap race is fifty-odd shots and fifty shots
+     is not a rate. The spread is printed so a reader can see how much of
+     the headline number is noise. */
   const SEEDS_Y = [20260813, 4242, 777, 131313];
-  const runs = SEEDS_Y.map(itemRace);
+  const runs = SEEDS_Y.map(rocketRace);
   const sum = (f) => runs.reduce((a, r) => a + f(r), 0);
-  const fired = sum(r => r.fired), hits = sum(r => r.hits), boxes = sum(r => r.taken);
-  const byItem = ITEMS.map((it, i) => sum(r => r.byItem[i]));
-  const hitBy = ITEMS.map((it, i) => sum(r => r.hitBy[i]));
+  const fired = sum(r => r.fired), hits = sum(r => r.hits), crates = sum(r => r.crates);
+  const direct = sum(r => r.direct), splashed = sum(r => r.splashed), back = sum(r => r.back);
   const rate = fired ? hits / fired : 0;
-  const wRate = byItem[ITEM.WHEEL] ? hitBy[ITEM.WHEEL] / byItem[ITEM.WHEEL] : 0;
-  const sRate = byItem[ITEM.SLICK] ? hitBy[ITEM.SLICK] / byItem[ITEM.SLICK] : 0;
   const lo = Math.min(...runs.map(r => r.rate)), hi = Math.max(...runs.map(r => r.rate));
 
-  console.log(`\n=== y  items-on hit rate ` +
-    `(6-car canyon pack, ${LAPS_Y} laps × ${SEEDS_Y.length} seeds, real drop table)`);
-  console.log(`  ${boxes} boxes taken · ${fired} items fired · ${hits} hits`);
-  console.log('  fired by item: ' +
-    ITEMS.map((it, i) => byItem[i] ? `${it.name} ${byItem[i]}` : null)
-      .filter(Boolean).join(' · '));
-  console.log(`  SPARE WHEEL connects ${(wRate * 100).toFixed(1)} % of throws · ` +
-    `OIL SLICK catches ${(sRate * 100).toFixed(2)} cars per drop`);
+  console.log(`\n=== y  weapons-on hit rate ` +
+    `(6-car canyon pack, ${LAPS_Y} laps × ${SEEDS_Y.length} seeds)`);
+  console.log(`  ${crates} crates taken · ${fired} rockets fired (${back} rearward) · ` +
+    `${hits} cars hit (${direct} direct, ${splashed} splash)`);
   console.log(`  ⇒ HIT RATE  ${(rate * 100).toFixed(1)} %  ` +
-    `(per-seed ${(lo * 100).toFixed(0)}–${(hi * 100).toFixed(0)} %; ` +
-    `QA gate 35 %, pre-wave baseline 20 %)`);
-  if (fired < 120) fail('yield', `only ${fired} items fired across four races — the AI is hoarding`);
-  if (wRate < 0.35) {
-    fail('yield', `only ${(wRate * 100).toFixed(1)} % of spare-wheel shots connect`);
-  }
+    `(per-seed ${(lo * 100).toFixed(0)}–${(hi * 100).toFixed(0)} %; QA gate 35 %)`);
+  if (fired < 120) fail('yield', `only ${fired} rockets fired across four races — the AI is hoarding`);
   if (rate < 0.35) {
     fail('yield', `hit rate ${(rate * 100).toFixed(1)} % — below the QA gate`);
   }
 
-  /* Determinism again, through the full item loop this time: the drop
-     roulette, the AI's decisions and the standings all feed each other. */
-  const again = itemRace(SEEDS_Y[0]);
+  /* Determinism again, through the full loop this time: the crates, the
+     AI's decisions and the standings all feed each other. */
+  const again = rocketRace(SEEDS_Y[0]);
   if (again.fired !== runs[0].fired || again.hits !== runs[0].hits ||
-    again.taken !== runs[0].taken) {
-    fail('yield', 'two identical seeds produced two different item races');
+    again.crates !== runs[0].crates) {
+    fail('yield', 'two identical seeds produced two different races');
   }
 }
 

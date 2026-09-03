@@ -9,8 +9,14 @@
 
    The rule for anything living here: it may READ vehicle and racer state and
    it may drive audio / feel / dust / hud / vfx. It may not write to a
-   vehicle, a racer row, the tracker or the item world. If a method here
+   vehicle, a racer row, the tracker or the arsenal. If a method here
    returned a value that changed the race, it would belong in race.js.
+
+   The arsenal (game/arsenal.js) presents its own events — the muzzle
+   flash, the bang, the nitro flame — at the point it decides them, because
+   every one of them needs the world position of a rocket this file never
+   sees. What it hands race.js instead is sequence numbers, and race.js
+   turns those into the HUD's race log.
 
    Distance gating is the recurring idea. A rival's crash, boost or landing
    seventy metres up the road is information — somebody just got a run on you
@@ -179,9 +185,9 @@ export class RaceFX {
      no-op rather than absent: a missing method would make every call site
      grow a guard.
      ------------------------------------------------------------------ */
-  /** A box was collected. (ri, itemId) */
+  /** A crate or a can was taken. (ri, pickupKind) */
   pickup() { }
-  /** A projectile or hazard connected. (ri, itemId, byRi) */
+  /** A rocket connected. (ri, byRi, direct) */
   hit() { }
   /** A trick was scored on landing. (r, trickId, pts, tier) */
   trick() { }

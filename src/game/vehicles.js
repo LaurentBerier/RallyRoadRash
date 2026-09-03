@@ -48,6 +48,17 @@
      number  the works car's race number. Only livery 0 wears it — every AI
              variant draws from the pool in vehicle-art — so it is the one
              number a player ever sees on their own car.
+
+   And one carries geometry the weapons layer reads (ARCHITECTURE §8.2):
+
+     launcher  { x, y, z, pitch, tubes } — where the rocket launcher is
+             bolted on, body space (origin at the centre of mass, +Z
+             forward, right −X), metres and radians. vehicle-carcass.js
+             mounts P3's launcherGeo there and publishes the muzzle from it;
+             `tubes` is the LOOK of the mount, not its rate of fire — that
+             is LAUNCHERS[id] in weapons.js. `base` and `brace` are optional
+             cosmetics the mount module owns: a pedestal under a deck mount,
+             and the bracket plus pannier for an off-centre one.
    ============================================================ */
 
 export const VEHICLES = [
@@ -61,11 +72,14 @@ export const VEHICLES = [
   {
     id: 'hopper',
     name: 'DUNE HOPPER',
-    desc: 'Sport side-by-side. Forgiving, floaty, quick everywhere.',
+    desc: 'Welded tube buggy. Forgiving, floaty, quick everywhere.',
     team: 'SUNSTRIKE WORKS',
     number: 7,
     color: 0x2857e0,
     bodyStyle: 'buggy',
+    /* Roof rack: on the cage's roof panel, behind the light pod. The tube
+       axis clears the pod by a centimetre before the pitch lifts it. */
+    launcher: { x: 0, y: 0.91, z: -0.30, pitch: 0.06, tubes: 2 },
 
     mass: 1120,                       // kg
     dims: { L: 3.95, W: 1.98, H: 1.34 },  // m — bounding box, drives inertia and aero
@@ -108,11 +122,13 @@ export const VEHICLES = [
   {
     id: 'ridgeback',
     name: 'RIDGEBACK',
-    desc: 'Two tonnes of bullbar. Planted, torquey, allergic to straights.',
+    desc: 'Armoured pickup. Two tonnes of bullbar: planted, torquey, allergic to straights.',
     team: 'IRONHIDE HAUL',
     number: 12,
     color: 0x3f9d54,
     bodyStyle: 'truck',
+    /* Cab top, behind the light bar: three tubes, because it is the truck. */
+    launcher: { x: 0, y: 1.06, z: 0.10, pitch: 0.05, tubes: 3 },
 
     mass: 1680,
     dims: { L: 4.60, W: 2.20, H: 1.88 },
@@ -156,11 +172,14 @@ export const VEHICLES = [
   {
     id: 'redline',
     name: 'REDLINE',
-    desc: 'Cab-forward wedge. Fastest thing here, and it knows it.',
+    desc: 'Plated cab-forward wedge. Fastest thing in the wastes, and it knows it.',
     team: 'REDLINE MOTORSPORT',
     number: 23,
     color: 0xe1252b,
     bodyStyle: 'wedge',
+    /* Rear deck, on a 12 cm pedestal over the haunches and pitched 11° so a
+       round leaves over the canopy rather than through it. */
+    launcher: { x: 0, y: 0.34, z: -1.25, pitch: 0.20, tubes: 2, base: 0.12 },
 
     mass: 1010,
     dims: { L: 4.25, W: 1.90, H: 1.14 },
@@ -232,11 +251,15 @@ export const VEHICLES = [
   {
     id: 'moto',
     name: 'HORNET',
-    desc: 'Motocross 450. Half the weight, twice the air, no margin at all.',
+    desc: 'Scrap-armoured 450. Half the weight, twice the air, no margin at all.',
     team: 'HORNET RACING',
     number: 41,
     color: 0xe8c21a,
     bodyStyle: 'bike',
+    /* Rear rack, on the RIGHT (−X) beside the subframe: a single tube can
+       fire past the rider's leg, where a centreline mount would fire
+       through his back. The pannier of rounds hangs off the other side. */
+    launcher: { x: -0.30, y: 0.46, z: -0.30, pitch: 0.04, tubes: 1, brace: true },
 
     mass: 245,                        // kg — 110 kg bike + rider + arcade fudge
     dims: { L: 2.18, W: 0.86, H: 1.55 },  // W is BAR width, not body width; H is

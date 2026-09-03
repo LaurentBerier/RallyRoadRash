@@ -30,6 +30,7 @@ import { VFX } from './world/vfx.js';
 import { setGroundTexture } from './world/terrain-shader.js';
 import { TRACKS, getTrack } from './world/tracks/index.js';
 import { VEHICLES, VEHICLE_BY_ID, statBars } from './game/vehicles.js';
+import { setCarcassSource } from './game/vehicle-art.js';
 import { CameraRig } from './game/camera.js';
 import { Feel } from './game/feel.js';
 import { Race } from './game/race.js';
@@ -155,6 +156,13 @@ async function boot() {
     App.assets = new Assets(map);
     App.ui.setAssets(App.assets);
     App.menuScene.assets = App.assets;
+    /* Where a vehicle's carcass GLB lives (contract 8.6). The manifest is the
+       only source — no conventional path fallback, so deleting an entry really
+       does disable that machine's model rather than half-disabling it. Set
+       here rather than at boot because `models/<id>` is a manifest lookup and
+       there is no manifest until this resolves; a race is built long after,
+       and one built earlier simply keeps the procedural body it already has. */
+    setCarcassSource((id) => App.assets.url('models/' + id + '-carcass'));
     // Repaint whatever is on screen so art that arrived late is used.
     if (App.state === AS.MENU || App.state === AS.TRACKS || App.state === AS.GARAGE) {
       showScreen(App.state === AS.TRACKS ? 'tracks' : App.state === AS.GARAGE ? 'garage' : 'main');

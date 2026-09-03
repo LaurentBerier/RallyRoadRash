@@ -740,6 +740,68 @@ head('(k) LANDING NOT ON THE TYRES — no energy may be created');
   }
 }
 
+/* ============================================================
+   (l) THE ARSENAL ON THE CAR — contracts 8.1 and 8.2
+   ------------------------------------------------------------
+   Four published numbers that placeAt must wipe, and one method that must
+   answer from three different sources without ever throwing or allocating:
+   the art's `_muzzle` (an Object3D or a body-space point), the spec's
+   `launcher` mount, and the bounding-box fallback a headless car gets.
+   ============================================================ */
+head('(l) ARSENAL — placeAt wipes the publications; muzzleWorld never fails');
+{
+  const out = new THREE.Vector3();
+  for (const S of VEHICLES) {
+    const v = make(S.id, flat());
+    v.ammo = 5; v.ammoCap = 12; v.nitroT = 1.1; v.reloadT = 0.4;
+    v.placeAt(3, 3, 0.4);
+    ok(`${S.id}: placeAt wipes ammo / ammoCap / nitroT / reloadT`,
+      v.ammo === 0 && v.ammoCap === 0 && v.nitroT === 0 && v.reloadT === 0,
+      `${v.ammo}/${v.ammoCap} nitro ${v.nitroT} reload ${v.reloadT}`);
+
+    // 1. no art, no launcher on the spec (or whatever P2 has authored): the fallback
+    v.placeAt(0, 0, 0);
+    // `dir`, not `f` — the module's number formatter is called `f`, and shadowing
+    // it here made every message in this section throw instead of print.
+    const dir = v.muzzleWorld(out);
+    const fwd = v.forward;
+    const finiteAll = [out.x, out.y, out.z, dir.x, dir.y, dir.z].every(Number.isFinite);
+    ok(`${S.id}: muzzleWorld is finite and above the centre of mass`,
+      finiteAll && out.y > v.pos.y, `y ${f(out.y)} vs com ${f(v.pos.y)}`);
+    ok(`${S.id}: …and points the way the car does`,
+      dir.x * fwd.x + dir.z * fwd.z > 0.95 && dir.y >= 0,
+      `dot ${f(dir.x * fwd.x + dir.z * fwd.z)}`);
+
+    // 2. a body-space point, the way the art may publish it
+    v._muzzle = { x: 0.1, y: 1.0, z: 0.5 };
+    v.muzzleWorld(out);
+    ok(`${S.id}: a body-space _muzzle lands 1 m over the com`,
+      Math.abs(out.y - (v.pos.y + 1.0)) < 0.02, `${f(out.y - v.pos.y)} m`);
+
+    // 3. an Object3D at the tube mouth, pitched up 0.2 rad
+    const m = new THREE.Object3D();
+    m.position.set(0, 1.2, 0.8); m.rotation.x = -0.2;
+    v.root ? v.root.add(m) : m.updateMatrixWorld(true);
+    m.updateMatrixWorld(true);
+    v._muzzle = m;
+    const f3 = v.muzzleWorld(out);
+    ok(`${S.id}: an Object3D _muzzle reports its own pitch`, f3.y > 0.15 && f3.y < 0.25,
+      `forward.y ${f(f3.y)}`);
+    v._muzzle = null;
+    v.dispose();
+  }
+  // never throws on garbage
+  const v = make('hopper', flat());
+  let threw = false;
+  try {
+    v._muzzle = { x: NaN };
+    v.muzzleWorld(out);
+    v._muzzle = 'nonsense';
+    v.muzzleWorld(out);
+  } catch (e) { threw = true; void e; }
+  ok('muzzleWorld never throws on a bad _muzzle', !threw && Number.isFinite(out.x));
+}
+
 /* ---------------- verdict ---------------- */
 console.log(`\n${failures ? '\x1b[31m' : '\x1b[32m'}${checks - failures}/${checks} checks passed\x1b[0m`);
 if (failures) { console.log(`\x1b[31m${failures} FAILURE(S)\x1b[0m`); process.exit(1); }

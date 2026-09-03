@@ -25,3 +25,7 @@ CLAUDE.md
 # Left on disk so a later push does not delete them server-side.
 /mood_*.png
 /assets/key_art_*.png
+
+# Agent scratch: the sanctioned place for one-off bulk-edit scripts.
+# Working files, not deliverables.
+dev/tmp/

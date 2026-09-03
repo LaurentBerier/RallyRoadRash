@@ -314,6 +314,32 @@ function make(id) {
   }
 }
 
+/* B2b. The nitro can (wave 8) goes through the SAME two multipliers, with the
+   same fireTop semantics — `top` is a fade-denominator multiplier, so the
+   burn moves the ceiling only while it lasts and the honest topSpeed comes
+   straight back. This is the gate that keeps TUNE.nitro inside the envelope
+   the boost tiers already proved safe. */
+{
+  const NT = TUNE.nitro;
+  ok('nitro.top is a fade-denominator multiplier inside the tier envelope',
+    NT.top >= 1 && NT.top <= B.fireTop[2] + 0.05, `${NT.top} vs tier-3 ${B.fireTop[2]}`);
+  ok('nitro.force is a shove, not a crawl', NT.force > 1 && NT.force <= 2.2, `${NT.force}`);
+  ok('nitro burns for a readable beat', NT.time >= 1 && NT.time <= 3, `${NT.time} s`);
+  const v = make('hopper');
+  for (let t = 0; t < 26; t += DT) v.step(DT, ctl(1));
+  const base = v.speed;
+  v.extDriveMul = NT.force; v.extTopMul = NT.top;
+  for (let t = 0; t < NT.time; t += DT) v.step(DT, ctl(1));
+  const burst = v.speed;
+  const gain = (burst / base - 1) * 100;
+  info(`hopper ${f(base)} → ${f(burst)} m/s under a nitro burn (+${f(gain, 1)}%)`);
+  ok('a nitro burn reaches the drive path', gain > 4 && gain < 18, `+${f(gain, 1)}%`);
+  v.extDriveMul = 1; v.extTopMul = 1;
+  for (let t = 0; t < 14; t += DT) v.step(DT, ctl(1));
+  ok('…and the honest top speed comes back', Math.abs(v.speed - base) / base < 0.03,
+    `${f(v.speed)} vs ${f(base)}`);
+}
+
 /* B3. Spin-out. */
 {
   const S = VEHICLE_BY_ID.hopper;
@@ -365,11 +391,16 @@ function make(id) {
 {
   const v = make('redline');
   v.extDriveMul = 1.9; v.extTopMul = 1.13; v.spinT = 0.8;
+  v.nitroT = 1.2; v.reloadT = 0.5; v.ammo = 4; v.ammoCap = 12;
   slideFor(v._drift, 2.0, B.slipFull, B.fullSpeed, true);
   v.placeAt(10, 10, 1);
   ok('placeAt zeroes every boost field',
     v.driveMul === 1 && v.driveTopMul === 1 && v.extDriveMul === 1 &&
     v.extTopMul === 1 && v.spinT === 0 && v._drift.charge === 0 && v._drift.tier === 0);
+  // …and the arsenal publications with them (contract 8.1)
+  ok('placeAt zeroes the arsenal publications',
+    v.nitroT === 0 && v.reloadT === 0 && v.ammo === 0 && v.ammoCap === 0,
+    `nitroT ${v.nitroT} reloadT ${v.reloadT} ammo ${v.ammo}/${v.ammoCap}`);
 }
 
 /* B6. bodySlip is published, and is the number the machine reads. */

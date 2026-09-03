@@ -23,6 +23,7 @@
   --line:rgba(255,255,255,.10);
   --line-2:rgba(255,255,255,.20);
   --fg:#f3f0ea;
+  --fg-1:#d6d2c9;
   --fg-2:#b9b5ad;
   --fg-3:#7d7a74;
 
@@ -248,9 +249,20 @@ canvas.logo.big{max-width:640px}
                   50%{transform:translateY(12%) scaleY(1);opacity:.7}}
 @keyframes scr-in{from{opacity:0}to{opacity:1}}
 
-/* Per-screen plate widths. */
-#scr-tracks,#scr-garage{--plate-w:min(62%,880px)}
-#scr-playbook,#scr-settings{--plate-w:min(76%,1120px)}
+/* Per-screen plate widths.
+   NO min() ANYWHERE IN THIS FILE for a --plate-w that a masked element reads
+   its width from. Chromium fails to paint .screen::before's background when
+   the custom property driving its width is a min(%, px) expression AND the
+   element also carries mask-image (see the note at .screen::before above) —
+   confirmed live: the settings screen was rendering as an empty dark panel at
+   min(76%,1120px), and painted again at a flat 46% or a flat 900px. Every
+   min(A%, Bpx) below is split instead into "A% up to the crossover, a flat
+   Bpx above it" (crossover = B / (A/100)) — the same computed width at every
+   viewport, just reached without the function Chromium chokes on. */
+#scr-tracks,#scr-garage{--plate-w:62%}
+@media (min-width:1420px){ #scr-tracks,#scr-garage{--plate-w:880px} }
+#scr-playbook,#scr-settings{--plate-w:76%}
+@media (min-width:1474px){ #scr-playbook,#scr-settings{--plate-w:1120px} }
 /* Over a live race: dim everything, no plate edge, no feathered mask —
    a fade across the right sixth of a full-width sheet just looks like a bug. */
 #scr-pause,#scr-results{--plate-w:100%}
@@ -497,7 +509,7 @@ canvas.logo.big{max-width:640px}
   min-height:56px;
 }
 .set-row.focus{border-color:var(--acc);background:rgba(255,122,26,.10)}
-.set-row label{font-size:12px;font-weight:700;letter-spacing:.10em;color:var(--fg-2);text-transform:uppercase}
+.set-row label{font-size:12px;font-weight:700;letter-spacing:.10em;color:var(--fg-1);text-transform:uppercase}
 .set-row small{display:block;margin-top:3px;font-size:10.5px;letter-spacing:0;color:var(--fg-3);
   font-weight:400;text-transform:none}
 .set-ctl{flex:0 0 auto;display:flex;align-items:center;gap:10px}
@@ -582,18 +594,7 @@ input[type=range]::-moz-range-thumb{width:16px;height:16px;border:2px solid #1a0
   font-size:13px;font-weight:900;font-style:italic;letter-spacing:.10em;
   color:var(--ic,var(--acc));margin-bottom:6px;
 }
-.pb-charges{
-  margin-left:8px;font-style:normal;font-size:10px;letter-spacing:.08em;
-  color:var(--fg-3);font-family:var(--mono);
-}
 .pb-item p{font-size:11.5px;line-height:1.58;color:var(--fg-2)}
-.pb-tip,.pb-who{margin-top:7px;color:var(--fg-3) !important;font-size:11px !important}
-.pb-tip b,.pb-who b{
-  display:inline-block;margin-right:8px;font-size:9px;letter-spacing:.2em;
-  color:var(--cyan);font-weight:800;
-}
-.pb-who b{color:var(--warn)}
-.pb-who{font-family:var(--mono)}
 
 .pb-ctl{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));margin-bottom:16px}
 .pb-table{border:1px solid var(--line);padding:12px 15px;background:rgba(255,255,255,.02)}
@@ -823,67 +824,75 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   font-weight:900;font-style:italic;color:var(--acc);
   border-left:1px solid var(--line);padding-left:calc(8 * var(--s));margin-left:calc(2 * var(--s));
 }
-/* ---------------- the item slot ----------------
+/* ---------------- the arsenal slot ----------------
    Sits above the air tag in the .z-speed flex column, so it inherits the
    right alignment and disappears with the rest of the cluster on a portrait
    phone. Sized in var(--s) like every other instrument, so HUD SIZE moves it
-   with everything else. The card is tinted by the item via --ic, set inline
-   from the item table — one class, seven colours, no per-item CSS. */
-.item-slot{min-height:0}
-.itemcard{
+   with everything else. One fixed identity now (rockets), not a rotating
+   item table, so the card is a flat accent rather than a --ic custom colour. */
+.ars-slot{min-height:0}
+.arscard{
   display:flex;align-items:center;gap:calc(6 * var(--s));
   padding:calc(4 * var(--s)) calc(10 * var(--s));
-  border:1px solid var(--ic,var(--acc));border-radius:calc(2 * var(--s));
+  border:1px solid var(--acc);border-radius:calc(2 * var(--s));
   background:linear-gradient(180deg,rgba(10,11,14,.82),rgba(10,11,14,.62));
-  box-shadow:0 0 calc(14 * var(--s)) color-mix(in srgb,var(--ic,#ff7a1a) 34%,transparent);
+  box-shadow:0 0 calc(14 * var(--s)) color-mix(in srgb,var(--acc) 34%,transparent);
   animation:air-pop .28s cubic-bezier(.2,1.3,.3,1);
 }
-/* Name over verb. The card has to answer both "what have I got" and "what
-   does firing it do", and the name alone answers only the first. */
-.itemcard .namecol{display:flex;flex-direction:column;gap:calc(1 * var(--s));line-height:1.1}
-.itemcard b{
+/* Empty tube: dimmed rather than hidden, so FIRE staying dark reads as "out",
+   not as a broken instrument. */
+.arscard.empty{opacity:.5}
+.arscard .namecol{display:flex;flex-direction:column;gap:calc(1 * var(--s));line-height:1.1}
+.arscard b{
   font-size:max(9px,calc(11 * var(--s)));font-weight:900;font-style:italic;
-  letter-spacing:.14em;color:var(--ic,var(--acc));white-space:nowrap;
+  letter-spacing:.14em;color:var(--acc);white-space:nowrap;
 }
-.itemcard .use{
-  font-size:max(7px,calc(8.5 * var(--s)));font-weight:700;letter-spacing:.10em;
-  color:var(--fg-2);white-space:nowrap;text-transform:uppercase;opacity:.92;
-}
-/* One pulse the frame the roulette lands, so the card announces itself
-   instead of quietly changing in the corner of the eye. */
-.itemcard.ready{animation:it-ready .6s cubic-bezier(.2,1.3,.3,1)}
-@keyframes it-ready{
+/* One pulse the frame a rocket actually leaves the tube, so the card
+   announces the shot instead of the pip count quietly changing. */
+.arscard.fired{animation:ars-fire .5s cubic-bezier(.2,1.3,.3,1)}
+@keyframes ars-fire{
   0%{transform:scale(1)}
-  30%{transform:scale(1.12);box-shadow:0 0 calc(26 * var(--s)) var(--ic,#ff7a1a)}
+  30%{transform:scale(1.10);box-shadow:0 0 calc(24 * var(--s)) var(--acc)}
   100%{transform:scale(1)}
 }
-.itemcard .charges{display:flex;gap:calc(3 * var(--s))}
-.itemcard .charges i{
-  width:calc(5 * var(--s));height:calc(5 * var(--s));border-radius:50%;
-  background:var(--ic,var(--acc));
+/* 6–12 pips, one per tube: filled while loaded, hollow once spent. */
+.arscard .pips{display:flex;flex-wrap:wrap;gap:calc(3 * var(--s));max-width:calc(64 * var(--s))}
+.arscard .pips i{
+  width:calc(6 * var(--s));height:calc(6 * var(--s));border-radius:50%;
+  background:var(--acc);
 }
+.arscard .pips i.spent{background:none;border:1px solid var(--line-2);opacity:.6}
+/* Reload arc: a small pie that fills clockwise as the next shot comes ready.
+   Off (opacity 0) between shots — a static full pip next to a full pip row
+   is noise, not information. */
+.arscard .reload{
+  width:calc(11 * var(--s));height:calc(11 * var(--s));border-radius:50%;flex:0 0 auto;
+  background:conic-gradient(var(--acc) calc(var(--rp,1) * 360deg), rgba(255,255,255,.16) 0);
+  opacity:0;transition:opacity .15s ease;
+}
+.arscard .reload.on{opacity:1}
 /* The glyph. Painted by ui/icons.js at 20 CSS px and then scaled by --s with
    everything else, so HUD SIZE moves it too. */
-.itemcard canvas.ico{
+.arscard canvas.ico{
   display:block;flex:0 0 auto;
   width:calc(19 * var(--s)) !important;height:calc(19 * var(--s)) !important;
 }
 /* WHICH BUTTON FIRES IT. The game had a whole item system and did not say,
    anywhere, that F throws one. */
-.itemcard .firekey{
+.arscard .firekey{
   font-style:normal;font-family:var(--mono);font-weight:800;
   /* Doubled. At 9.5 it read as a footnote on the thing it is instructing. */
   font-size:max(12px,calc(15 * var(--s)));letter-spacing:.06em;
-  color:var(--ic,var(--acc));
+  color:var(--acc);
   padding:calc(3 * var(--s)) calc(8 * var(--s));
-  border:1px solid var(--ic,var(--line-2));border-bottom-width:calc(3 * var(--s));
+  border:1px solid var(--line-2);border-bottom-width:calc(3 * var(--s));
   border-radius:calc(2 * var(--s));background:rgba(255,255,255,.08);
   margin-left:calc(4 * var(--s));
 }
 
 /* ---------------- trick pop ----------------
-   Lands with the car, coloured by tier, one at a time. Sits above the item
-   card in the same right-hand column. */
+   Lands with the car, coloured by tier, one at a time. Sits above the
+   arsenal card in the same right-hand column. */
 .trick-slot{min-height:0}
 .trickpop{
   font-size:max(12px,calc(16 * var(--s)));font-weight:900;font-style:italic;letter-spacing:.10em;
@@ -919,15 +928,8 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
 }
 @keyframes tip-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
 .tipcard.out{opacity:0;transform:translateY(-8px);transition:opacity .38s ease,transform .38s ease}
-/* The roulette: still spinning, not yours yet, and not usable yet either. */
-.itemcard.rolling{animation:none;opacity:.86}
-.itemcard.rolling b{color:var(--fg-2)}
-@media (prefers-reduced-motion:no-preference){
-  .itemcard.rolling{animation:it-roll .18s steps(2,end) infinite}
-}
-@keyframes it-roll{from{transform:translateY(-2px)}to{transform:translateY(2px)}}
 
-/* Record set with power-ups on. Small, dim, and it never pushes the time. */
+/* Record set with weapons on. Small, dim, and it never pushes the time. */
 .itflag{margin-left:.35em;font-size:.85em;color:var(--warn);opacity:.85}
 
 .air-slot{min-height:0}
@@ -1089,19 +1091,19 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
 #touch .rbtn.drift.on{background:var(--cyan);color:#03181b;box-shadow:0 0 18px rgba(79,216,232,.35)}
 #touch .rbtn.fire{border-color:rgba(255,210,63,.55);color:var(--warn)}
 #touch .rbtn.fire.on{background:var(--warn);color:#1a1200;box-shadow:0 0 18px rgba(255,210,63,.4)}
-/* ARMED: an item is ready. The keycap tells a keyboard player which key to
+/* ARMED: a rocket is loaded. The keycap tells a keyboard player which key to
    press and told a touch player nothing at all, because the button IS the
    key — so the button itself has to be the signal. */
 #touch .rbtn.fire.armed{
-  border-color:var(--ic,var(--warn));color:var(--ic,var(--warn));
+  border-color:var(--warn);color:var(--warn);
   animation:fire-armed 1.1s ease-in-out infinite;
 }
 @keyframes fire-armed{
-  0%,100%{box-shadow:0 0 6px color-mix(in srgb,var(--ic,#ffd23f) 30%,transparent)}
-  50%{box-shadow:0 0 22px color-mix(in srgb,var(--ic,#ffd23f) 75%,transparent)}
+  0%,100%{box-shadow:0 0 6px color-mix(in srgb,var(--warn) 30%,transparent)}
+  50%{box-shadow:0 0 22px color-mix(in srgb,var(--warn) 75%,transparent)}
 }
 @media (prefers-reduced-motion:reduce){
-  #touch .rbtn.fire.armed{animation:none;box-shadow:0 0 16px color-mix(in srgb,var(--ic,#ffd23f) 60%,transparent)}
+  #touch .rbtn.fire.armed{animation:none;box-shadow:0 0 16px color-mix(in srgb,var(--warn) 60%,transparent)}
 }
 
 /* ============================================================
@@ -1236,9 +1238,9 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   .lap{text-align:left;min-width:0}
   .lap-row{justify-content:flex-start}
   .z-log{display:none}                   /* no room, and it is bottom-corner furniture */
-  /* The speed cluster goes too, EXCEPT the item slot. A portrait player has
-     a FIRE button and would otherwise have no idea what it fires — the one
-     piece of that cluster they cannot play without. Strip the cluster to
+  /* The speed cluster goes too, EXCEPT the arsenal slot. A portrait player
+     has a FIRE button and would otherwise have no idea what it fires — the
+     one piece of that cluster they cannot play without. Strip the cluster to
      just that card and float it centred above the touch furniture (or above
      the pedals when the touch layer is off). */
   .z-speed{display:flex;position:fixed;left:50%;right:auto;transform:translateX(-50%);
@@ -1247,7 +1249,7 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   /* …and the trick pop, which joined it in wave 6 for the same reason: it is
      a moment, not an instrument, and there is no cost to a portrait player
      seeing it. */
-  .z-speed > :not(.item-slot):not(.trick-slot){display:none}
+  .z-speed > :not(.ars-slot):not(.trick-slot){display:none}
   body.touch-controls .z-speed{margin-right:0;
     bottom:calc(max(12px,env(safe-area-inset-bottom)) + 300px)}
   .map canvas{width:calc(104 * var(--s));height:calc(104 * var(--s))}
@@ -1298,9 +1300,16 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
 @media (min-width:1700px){
   .hud{--u:1.08px}
   /* The plate is a fraction of the viewport, so on a 2560 px monitor 46 % is
-     1180 px of text column. Cap it and let the hero take the rest. */
-  .screen{--plate-w:min(42%,760px)}
-  #scr-tracks,#scr-garage{--plate-w:min(56%,1000px)}
-  #scr-playbook,#scr-settings{--plate-w:min(66%,1280px)}
+     1180 px of text column. Cap it and let the hero take the rest — as flat
+     breakpoints below, not min(), for the same masked-pseudo-element reason
+     as the per-screen block above. This one matters most: MAIN is bare
+     `.screen`, so without it the main menu itself is the empty panel at
+     1920×1080, not just settings/playbook. */
+  .screen{--plate-w:42%}
+  #scr-tracks,#scr-garage{--plate-w:56%}
+  #scr-playbook,#scr-settings{--plate-w:66%}
   .main-wrap{max-width:min(var(--plate-w),760px)}
 }
+@media (min-width:1786px){ #scr-tracks,#scr-garage{--plate-w:1000px} }
+@media (min-width:1810px){ .screen{--plate-w:760px} }
+@media (min-width:1940px){ #scr-playbook,#scr-settings{--plate-w:1280px} }

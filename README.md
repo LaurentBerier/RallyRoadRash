@@ -93,7 +93,7 @@ There is nothing to install: `npm start` runs the zero-dependency
 | Throttle / brake-reverse | W / S (or ↑ / ↓) | RT / LT | GAS / BRAKE pedals |
 | Steer | A / D (or ← / →) | Left stick | Steering pad |
 | Handbrake (drift / charge boost) | Space | A | DRIFT (hold) |
-| Fire power-up | F | X | FIRE |
+| Fire rocket | F (hold S to fire behind) | X (hold LT to fire behind) | FIRE (hold BRAKE to fire behind) |
 | Reset to track (hold) | R | B | RESET (hold) |
 | Camera | C | Y | CAM |
 | Pause | Esc | Start | ⏸ |

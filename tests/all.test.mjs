@@ -4,7 +4,7 @@
    Two layers:
    1. Direct unit tests over the pure modules (racecore, progression,
       track data, surfaces) — fast, no three.js.
-   2. The eight deep check suites under dev/ run as child processes
+   2. The nine deep check suites under dev/ run as child processes
       (they carry their own hundreds of assertions; the loader shim
       supplies 'three' for the ones that exercise physics/camera).
    ============================================================ */
@@ -123,8 +123,8 @@ test('deep: camera-check (rig/feel gates)', () => {
   run(['--experimental-loader', './dev/loader.mjs', 'dev/camera-check.mjs']);
 });
 
-test('deep: items-check (drop table, rubber band, inventory)', () => {
-  run(['dev/items-check.mjs']);
+test('deep: weapons-check (launchers, ammo, siting, ballistics, AI aim)', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/weapons-check.mjs']);
 });
 
 test('deep: boost-check (mini-turbo + drive multipliers)', () => {

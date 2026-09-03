@@ -1,7 +1,7 @@
 /* ============================================================
-   RALLY ROAD RASH — ITEM AND EVENT GLYPHS
+   RALLY ROAD RASH — ARSENAL AND EVENT GLYPHS
    ------------------------------------------------------------
-   Seven power-up icons plus four event glyphs, drawn on a 2D canvas. There
+   Three arsenal icons plus four event glyphs, drawn on a 2D canvas. There
    are no image files in this project and no icon font is guaranteed on any
    platform we ship to, so a glyph is code — which also means it inherits the
    accent colour and the device pixel ratio for free.
@@ -17,8 +17,8 @@
    row without a second set of numbers.
    ============================================================ */
 
-/** The seven `items.js` icon ids, in ITEM order. */
-export const ITEM_ICONS = ['nitro', 'triple', 'wheel', 'slick', 'tow', 'sled', 'storm'];
+/** The three arsenal icon ids: the two pickups plus the launcher itself. */
+export const ITEM_ICONS = ['nitro', 'rocket', 'crate'];
 /** Event glyphs the HUD and the playbook use. */
 export const EVENT_ICONS = ['trick', 'boost', 'pad', 'flag'];
 
@@ -48,13 +48,9 @@ export function drawIcon(g, name, x, y, s, accent) {
   // thickens with the icon rather than vanishing at HUD size.
   g.lineWidth = 0.11;
   switch (name) {
-    case 'nitro': nitro(g, A, 1); break;
-    case 'triple': nitro(g, A, 3); break;
-    case 'wheel': wheel(g, A); break;
-    case 'slick': slick(g, A); break;
-    case 'tow': tow(g, A); break;
-    case 'sled': sled(g, A); break;
-    case 'storm': storm(g, A); break;
+    case 'nitro': nitro(g, A); break;
+    case 'rocket': rocket(g, A); break;
+    case 'crate': crate(g, A); break;
     case 'trick': trick(g, A); break;
     case 'boost': boost(g, A); break;
     case 'pad': pad(g, A); break;
@@ -113,13 +109,12 @@ export function paintIcons(root, accent) {
    second: squint at it and the wrong icon must still be obvious.
    ============================================================ */
 
-/** A pressurised bottle with a nozzle, and one streak per charge. */
-function nitro(g, A, n) {
-  // streaks behind, cyan, so a triple reads as "three of them" at a glance
+/** A pressurised bottle with a nozzle and two burn streaks behind it. */
+function nitro(g, A) {
   g.strokeStyle = CYAN;
   g.lineWidth = 0.09;
-  for (let i = 0; i < n; i++) {
-    const y = 0.5 + (i - (n - 1) / 2) * 0.22;
+  for (let i = 0; i < 2; i++) {
+    const y = 0.5 + (i - 0.5) * 0.22;
     g.beginPath(); g.moveTo(0.06, y); g.lineTo(0.30 - i * 0.03, y); g.stroke();
   }
   g.fillStyle = A;
@@ -137,71 +132,8 @@ function nitro(g, A, n) {
   g.fillRect(0.78, 0.43, 0.14, 0.14);
 }
 
-/** A tyre: black casing, bright rim, cleats around the outside. */
-function wheel(g, A) {
-  g.fillStyle = '#1b1c20';
-  g.beginPath(); g.arc(0.5, 0.5, 0.42, 0, 6.2832); g.fill();
-  g.strokeStyle = A;
-  g.lineWidth = 0.10;
-  g.beginPath(); g.arc(0.5, 0.5, 0.42, 0, 6.2832); g.stroke();
-  // cleats: the silhouette of a wheel cartwheeling at you
-  g.strokeStyle = A;
-  g.lineWidth = 0.07;
-  for (let i = 0; i < 8; i++) {
-    const a = i / 8 * 6.2832;
-    g.beginPath();
-    g.moveTo(0.5 + Math.cos(a) * 0.30, 0.5 + Math.sin(a) * 0.30);
-    g.lineTo(0.5 + Math.cos(a) * 0.42, 0.5 + Math.sin(a) * 0.42);
-    g.stroke();
-  }
-  g.fillStyle = PAPER;
-  g.beginPath(); g.arc(0.5, 0.5, 0.13, 0, 6.2832); g.fill();
-}
-
-/** A spreading slick with one highlight — the only icon that is a puddle. */
-function slick(g, A) {
-  g.fillStyle = '#17181c';
-  g.beginPath();
-  g.moveTo(0.10, 0.62);
-  g.bezierCurveTo(0.16, 0.40, 0.42, 0.34, 0.56, 0.44);
-  g.bezierCurveTo(0.74, 0.32, 0.94, 0.48, 0.88, 0.66);
-  g.bezierCurveTo(0.74, 0.82, 0.26, 0.84, 0.10, 0.62);
-  g.closePath(); g.fill();
-  g.strokeStyle = A;
-  g.lineWidth = 0.055;
-  g.stroke();
-  g.fillStyle = CYAN;
-  g.globalAlpha = 0.85;
-  g.beginPath(); g.ellipse(0.38, 0.55, 0.12, 0.05, -0.3, 0, 6.2832); g.fill();
-  g.globalAlpha = 1;
-  // drips above, so a still image still says "something was dropped here"
-  g.fillStyle = A;
-  g.beginPath(); g.arc(0.66, 0.24, 0.06, 0, 6.2832); g.fill();
-}
-
-/** A hook on a slack line: you throw it forward and it drags you along. */
-function tow(g, A) {
-  g.strokeStyle = CYAN;
-  g.lineWidth = 0.075;
-  g.beginPath();
-  g.moveTo(0.08, 0.24);
-  g.quadraticCurveTo(0.34, 0.60, 0.56, 0.34);
-  g.stroke();
-  g.strokeStyle = A;
-  g.lineWidth = 0.11;
-  g.beginPath();
-  g.moveTo(0.56, 0.30); g.lineTo(0.56, 0.58);
-  g.arc(0.70, 0.58, 0.14, Math.PI, 0.35, false);
-  g.stroke();
-  // barb
-  g.fillStyle = A;
-  g.beginPath();
-  g.moveTo(0.84, 0.50); g.lineTo(0.95, 0.62); g.lineTo(0.80, 0.66);
-  g.closePath(); g.fill();
-}
-
-/** A rocket with a flame — the comeback item, and it looks like one. */
-function sled(g, A) {
+/** A rocket with a flame — one of six-to-twelve in the tube, and it looks like one. */
+function rocket(g, A) {
   g.fillStyle = CYAN;
   g.beginPath();
   g.moveTo(0.16, 0.50);
@@ -223,27 +155,25 @@ function sled(g, A) {
   g.moveTo(0.46, 0.64); g.lineTo(0.40, 0.82); g.lineTo(0.58, 0.64); g.closePath(); g.fill();
 }
 
-/** A rolling wall of dust: three arcs and the grit inside them. */
-function storm(g, A) {
+/** An ammo crate: a slatted box with the cross stencilled on the lid — what
+    it restocks, not decoration. */
+function crate(g, A) {
+  g.fillStyle = '#241a10';
+  g.strokeStyle = DARK;
+  g.lineWidth = 0.05;
+  g.beginPath(); g.rect(0.10, 0.28, 0.80, 0.56); g.fill(); g.stroke();
+  // batten lines: one lid seam, one centre post
   g.strokeStyle = A;
-  g.lineWidth = 0.095;
-  for (let i = 0; i < 3; i++) {
-    const y = 0.28 + i * 0.22;
-    g.beginPath();
-    g.moveTo(0.08, y);
-    g.lineTo(0.62 + (i === 1 ? 0.16 : 0), y);
-    g.stroke();
-  }
+  g.lineWidth = 0.055;
+  g.beginPath(); g.moveTo(0.10, 0.44); g.lineTo(0.90, 0.44); g.stroke();
+  g.beginPath(); g.moveTo(0.50, 0.28); g.lineTo(0.50, 0.84); g.stroke();
+  // the stencilled cross: contents, not cargo
   g.strokeStyle = CYAN;
-  g.lineWidth = 0.085;
+  g.lineWidth = 0.075;
   g.beginPath();
-  g.arc(0.62, 0.28, 0.13, -1.4, 1.9);
+  g.moveTo(0.33, 0.68); g.lineTo(0.67, 0.68);
+  g.moveTo(0.50, 0.56); g.lineTo(0.50, 0.80);
   g.stroke();
-  g.beginPath();
-  g.arc(0.68, 0.72, 0.13, -1.4, 1.9);
-  g.stroke();
-  g.fillStyle = PAPER;
-  g.beginPath(); g.arc(0.90, 0.50, 0.055, 0, 6.2832); g.fill();
 }
 
 /** Rotation: a broken ring with an arrowhead, the universal "you spun". */

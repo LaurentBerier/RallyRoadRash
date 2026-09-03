@@ -21,7 +21,7 @@
    ============================================================ */
 
 import { SURFACES, SURF } from '../world/surfaces.js';
-import * as ITEM_SFX from './audio-items.js';
+import * as ARCADE_SFX from './audio-arcade.js';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const hz = (midi) => 440 * Math.pow(2, (midi - 69) / 12);
@@ -911,17 +911,17 @@ export class Audio {
   }
 
   /* ---- arcade layer ----
-     Bodies live in core/audio-items.js so this file stays under the house line;
-     they take the Audio instance and use the same private synthesis kit. */
-  boostTier(tier) { ITEM_SFX.boostTier(this, tier); }
-  boostFire(tier, gain) { ITEM_SFX.boostFire(this, tier, gain); }
-  itemRoll() { ITEM_SFX.itemRoll(this); }
-  itemThrow(gain) { ITEM_SFX.itemThrow(this, gain); }
-  itemDrop(gain) { ITEM_SFX.itemDrop(this, gain); }
-  spinOut(gain) { ITEM_SFX.spinOut(this, gain); }
-  towSnap(gain) { ITEM_SFX.towSnap(this, gain); }
-  sledLaunch() { ITEM_SFX.sledLaunch(this); }
-  stormHit(gain) { ITEM_SFX.stormHit(this, gain); }
+     Bodies live in core/audio-arcade.js so this file stays under the house line;
+     they take the Audio instance and use the same private synthesis kit.
+
+     Six cues left with the roulette in wave 8 — itemRoll, itemThrow, itemDrop,
+     towSnap, sledLaunch and stormHit spoke for a seven-item inventory that no
+     longer exists. The rocket/nitro cues that replace them (contract 8.7) are
+     P5's, and every caller in arsenal.js already guards them, so the arsenal
+     is silent rather than broken until P5 lands. */
+  boostTier(tier) { ARCADE_SFX.boostTier(this, tier); }
+  boostFire(tier, gain) { ARCADE_SFX.boostFire(this, tier, gain); }
+  spinOut(gain) { ARCADE_SFX.spinOut(this, gain); }
 
   /** 3, 2, 1 — deliberately low and dry so GO reads as a release. */
   countdownBeep(n = 3) {

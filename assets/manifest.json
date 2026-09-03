@@ -17,6 +17,11 @@
     ]
   },
 
+  "models/hopper-carcass": { "url": "models/hopper-carcass.glb", "kind": "model" },
+  "models/ridgeback-carcass": { "url": "models/ridgeback-carcass.glb", "kind": "model" },
+  "models/redline-carcass": { "url": "models/redline-carcass.glb", "kind": "model" },
+  "models/moto-carcass": { "url": "models/moto-carcass.glb", "kind": "model" },
+
   "art/training": { "url": "art/training.jpg", "kind": "color" },
   "art/canyon": { "url": "art/canyon.jpg", "kind": "color" },
   "art/forest": { "url": "art/forest.jpg", "kind": "color" },

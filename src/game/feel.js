@@ -72,6 +72,11 @@ const F = {
 
   /* ---- fov boost (Feel.kick) ---- */
   kickFovMax: 3.0, kickFovDecay: 6.0,
+
+  /* ---- nitro (uNitro, contract 8.4) ----
+     Attack is fast because the shove is instant; release is slow because
+     the screen letting go before the car does reads as the boost failing. */
+  nitroUp: 16, nitroDown: 5,  // 1/s
 };
 
 export class Feel {
@@ -95,6 +100,8 @@ export class Feel {
     this._expT = 0;       // s remaining on the exposure dip
     this._flash = 0;      // one-frame white pop
     this._fovKick = 0;    // deg, decaying FOV boost
+    this._nitro = 0;      // 0..1, the uNitro envelope as written
+    this._nitroWant = 0;  // …and where arsenal.js last asked it to go
   }
 
   /* ------------------------------------------------------------
@@ -161,6 +168,14 @@ export class Feel {
     if (Math.abs(this._fovKick) < 0.01) this._fovKick = 0;
     fov += this._fovKick;
 
+    /* ---- the nitro envelope ----
+       Ticked here whether or not the uniform exists, so the value is right
+       the frame a quality change hands out a composer that has it. */
+    const nw = this._nitroWant;
+    this._nitro += (nw - this._nitro) *
+      (1 - Math.exp(-dt * (nw > this._nitro ? F.nitroUp : F.nitroDown)));
+    if (this._nitro < 0.002) this._nitro = 0;
+
     /* ---- hand it all to the rig ---- */
     rig.setRumble(this._rumble, this._sway);
     rig.kickPitch = this._pitch + F.jumpPitch * jump * I;
@@ -182,6 +197,9 @@ export class Feel {
       // uFlash is a single-frame pop: written once, cleared on the next update.
       if (u.uFlash) { u.uFlash.value = this._flash; }
       this._flash = 0;
+      /* Contract 8.4: this class is uNitro's ONLY writer. P1's final pass
+         reads it; until that lands the guard makes the write a no-op. */
+      if (u.uNitro) u.uNitro.value = this._nitro;
     } else {
       if (this._expT > 0) this._expT -= dt;
       this._flash = 0;
@@ -244,6 +262,18 @@ export class Feel {
   /** Straight passthrough so race.js never has to reach past Feel to the rig. */
   addShake(v) { this.rig.addShake((v || 0) * this.intensity); }
 
+  /**
+   * The nitro post-fx (contract 8.4): radial blur, the blue-white push, the
+   * vignette pinch and the zoom warp all read one uniform, and this is the
+   * one place it is set. arsenal.js hands in 0..1 every frame the player
+   * is burning (and a zero when they stop); the envelope above turns that
+   * square wave into something the eye accepts.
+   */
+  nitro(k01) {
+    const k = clamp(k01 || 0, 0, 1) * this.intensity;
+    this._nitroWant = k;
+  }
+
   /** Respawn, race start, screen change: everything transient goes to zero and
       the post-process is handed back exactly as engine.js left it. */
   reset() {
@@ -251,6 +281,7 @@ export class Feel {
     this._pitch = 0; this._yaw = 0;
     this._jumpT = -1; this._pinchT = 0; this._missT = 0; this._expT = 0;
     this._flash = 0; this._fovKick = 0;
+    this._nitro = 0; this._nitroWant = 0;
     const rig = this.rig;
     rig.setRumble(0, 0);
     rig.kickPitch = 0; rig.kickYaw = 0; rig.fovOffset = 0;
@@ -260,6 +291,7 @@ export class Feel {
       if (u.uVignette) u.uVignette.value = F.vigBase;
       if (u.uExposure) u.uExposure.value = 1;
       if (u.uFlash) u.uFlash.value = 0;
+      if (u.uNitro) u.uNitro.value = 0;
     }
   }
 

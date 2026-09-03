@@ -23,6 +23,11 @@
        lamp/brake/flame glows are `THREE.Sprite` and not quads: three's
        shadow map only walks Mesh/Line/Points.
 
+   Wave 8 split the file at the line ceiling. vehicle-livery.js is the 2D
+   half; vehicle-carcass.js is the optional generated GLB body, the mud
+   shader patch, and the launcher + ammo rack. This file still builds the
+   procedural body first, every time — the carcass only ever HIDES it.
+
    Conventions match vehicle.js: metres, radians, Y up, local forward +Z.
    ============================================================ */
 import * as THREE from 'three';
@@ -30,6 +35,9 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clamp, makeRNG } from '../core/rng.js';
 import { G } from './config.js';
 import { liveryTexture, LAYOUTS } from './vehicle-livery.js';
+import { attachCarcass, detachCarcass, buildArsenalRig, updateArsenalRig, mudify }
+  from './vehicle-carcass.js';
+export { setCarcassSource } from './vehicle-carcass.js';
 
 const RACE_NUMBERS = [7, 12, 23, 41, 68, 95, 3, 55];
 /* Peak visual bank on a two-wheeler, radians. 0.62 = 35.5°, which is what a
@@ -66,7 +74,7 @@ const MUD_MATS = ['paint', 'paint2', 'livery', 'dark'];
    the painted panels leaves a set of solid wheels floating inside a
    translucent body, which reads as a bug rather than as a respawn. */
 const GHOST_MATS = ['paint', 'paint2', 'livery', 'dark', 'metal', 'rim',
-  'tyre', 'spring', 'glass', 'visor', 'helmet'];
+  'tyre', 'spring', 'glass', 'visor', 'helmet', 'arsenal'];
 
 /* ============================================================
    PUBLIC API — build / update / dispose / ghost / mud
@@ -144,7 +152,11 @@ export function buildVehicleVisuals(v, scene, spec) {
   else if (spec.bodyStyle === 'bike') buildBike(kit, spec);
   else buildBuggy(kit, spec);
   v.geos = kit.flush(v.chassis, M);
+  /* The merged panels, by reference: a carcass hides these and nothing
+     else on the chassis (the flare, the lamps and the launcher stay). */
+  v._bodyMeshes = v.chassis.children.slice();
   buildGlowRig(v, kit, M);
+  buildArsenalRig(v, spec, M);
 
   buildRunningGear(v, spec, M);
   // Traverse the WHOLE root, not just the chassis — the wheels, arms and
@@ -154,6 +166,8 @@ export function buildVehicleVisuals(v, scene, spec) {
   // additive transients must never enter the shadow pass
   if (v.exhaust) { v.exhaust.castShadow = false; v.exhaust.receiveShadow = false; }
   v.sync();
+  // last, and asynchronous: the optional GLB. Nothing above waits for it.
+  attachCarcass(v, spec, M);
 }
 
 /* ---------------- materials ----------------
@@ -218,6 +232,13 @@ function buildMaterials(v, paint, paint2, helmet) {
     headGlow: spriteMat(0xffe9c0),
     brakeGlow: spriteMat(0xff2a10),
     flameGlow: spriteMat(0xff9a44),
+    /* The launcher and its rounds come out of kit-arsenal.js already
+       coloured per vertex, no uv, so they take the one vertex-colour
+       material on the car. Deliberately no mud: it is the last thing bolted
+       on and the first thing the eye has to read at 40 m. */
+    arsenal: new THREE.MeshStandardMaterial({
+      vertexColors: true, metalness: 0.55, roughness: 0.50, envMapIntensity: 1.20,
+    }),
   };
   for (const k in M) M[k].name = k;
   for (const k of MUD_MATS) mudify(M[k], uMud);
@@ -231,38 +252,8 @@ function buildMaterials(v, paint, paint2, helmet) {
   return M;
 }
 
-/**
- * Mud on the paint, as a shader patch rather than a second texture set: one
- * varying, one uniform, and the same 1024² livery canvas either way. It
- * darkens the panel, roughens it and — the part that actually sells it —
- * kills the clearcoat, because the difference between a clean car and a
- * filthy one is almost entirely the specular.
- */
-function mudify(mat, uMud) {
-  mat.onBeforeCompile = (sh) => {
-    sh.uniforms.uMud = uMud;
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vMudP;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvMudP = position;');
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>',
-        '#include <common>\nuniform float uMud;\nvarying vec3 vMudP;\n' +
-        'float mudMask(){\n' +
-        // body space: y is height above the centre of mass, so low = dirty
-        '  float h = smoothstep(0.45, -0.35, vMudP.y);\n' +
-        '  float n = sin(vMudP.x * 13.0) * sin(vMudP.z * 9.0 + 1.7) * 0.5 + 0.5;\n' +
-        '  return clamp(uMud * h * (0.40 + 0.80 * n), 0.0, 1.0);\n}')
-      .replace('#include <color_fragment>',
-        '#include <color_fragment>\n\tfloat _mud = mudMask();\n' +
-        '\tdiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.105, 0.078, 0.050), _mud);')
-      .replace('#include <roughnessmap_fragment>',
-        '#include <roughnessmap_fragment>\n\troughnessFactor = mix(roughnessFactor, 0.94, _mud);')
-      .replace('#include <lights_physical_fragment>',
-        '#include <lights_physical_fragment>\n\t#ifdef USE_CLEARCOAT\n' +
-        '\tmaterial.clearcoat = mix(material.clearcoat, 0.02, _mud);\n' +
-        '\tmaterial.clearcoatRoughness = mix(material.clearcoatRoughness, 0.85, _mud);\n\t#endif');
-  };
-}
+/* The mud shader patch itself (`mudify`) lives in vehicle-carcass.js now,
+   because a carcass needs it too and with a different height mapping. */
 
 /**
  * How filthy this car is, 0 = washed, 1 = a lap of TIMBERLINE. Cheap enough
@@ -278,9 +269,11 @@ export function setMudLook(v, k01) {
    brake bloom, the flame's own halo — hangs under it as `THREE.Sprite`,
    which the shadow map skips outright.
 
-   The one wrinkle: the flare SCALES with boost, and a parent's scale would
-   drag its children's positions with it. `_glowRig` sits between them
-   carrying the exact inverse, so the sprites keep their metres. */
+   The sprites are SIBLINGS of the flare, not children, in two groups both
+   parked at the flare's home: the flare scales with boost and a parent's
+   scale would drag its children's positions with it, and a carcass may
+   move the flare to its own pipes (MODEL_FIT.flame) — the halo has to
+   follow that and the lamp blooms must not. */
 function buildGlowRig(v, kit, M) {
   const F = kit.flameSpec;
   const flame = new THREE.Mesh(
@@ -291,22 +284,25 @@ function buildGlowRig(v, kit, M) {
   v.exhaust = flame;
   v.geos.push(flame.geometry);
 
-  const rig = v._glowRig = new THREE.Group();
-  flame.add(rig);
-  const spr = (mat, x, y, z, size) => {
+  const rig = v._glowRig = new THREE.Group();        // the lamp blooms
+  const flameRig = v._flameRig = new THREE.Group();  // the flare halo
+  rig.position.set(F.x, F.y, F.z);
+  flameRig.position.set(F.x, F.y, F.z);
+  v.chassis.add(rig, flameRig);
+  const spr = (parent, mat, x, y, z, size) => {
     const s = new THREE.Sprite(mat);
     s.position.set(x - F.x, y - F.y, z - F.z);
     s.scale.set(size, size, 1);
     s.renderOrder = 7;
-    rig.add(s);
+    parent.add(s);
     return s;
   };
   /* Only the flare halo is kept by reference — it is the one sprite whose
      SIZE moves. Every lamp bloom is driven through its shared material, so
      twelve headlights on a truck cost one opacity write, not twelve. */
-  v._sprFlame = spr(M.flameGlow, F.x, F.y, F.z - F.len * 0.45, 0.3);
+  v._sprFlame = spr(flameRig, M.flameGlow, F.x, F.y, F.z - F.len * 0.45, 0.3);
   for (const g of kit.glows) {
-    spr(g.kind === 'brake' ? M.brakeGlow : M.headGlow, g.x, g.y, g.z, g.size);
+    spr(rig, g.kind === 'brake' ? M.brakeGlow : M.headGlow, g.x, g.y, g.z, g.size);
   }
 }
 
@@ -525,7 +521,6 @@ export function updateVehicleVisuals(v, dt) {
     const jit = 0.55 + Math.random() * 0.45;
     const wide = 0.72 + k * 0.60, long = 0.55 + k * (1.6 + jit * 0.7);
     v.exhaust.scale.set(wide, wide, long);
-    v._glowRig.scale.set(1 / wide, 1 / wide, 1 / long);
     v.exhaust.material.opacity = k * jit * flick;
     // orange at idle, blue-white at full boost — the same read as a rocket
     v.exhaust.material.color.setRGB(1 - 0.22 * boost, 0.54 + 0.30 * boost, 0.23 + 0.70 * boost);
@@ -535,10 +530,16 @@ export function updateVehicleVisuals(v, dt) {
     v._sprFlame.scale.set(fs, fs, 1);
     v._sprFlame.position.z = -(0.10 + k * 0.34);
   }
+
+  // the muzzle for the weapons layer, and the rack for the eye
+  updateArsenalRig(v);
 }
 
 export function disposeVehicleVisuals(v) {
   if (!v.root) return;
+  /* The carcass first, and off the graph: its geometry is shared with every
+     other instance of that file, and the traverse below would dispose it. */
+  detachCarcass(v);
   const seenG = new Set(), seenM = new Set();
   v.root.traverse(o => {
     if (!o.isMesh) return;
@@ -558,8 +559,9 @@ export function disposeVehicleVisuals(v) {
   for (const k in v.tex) v.tex[k]?.dispose();
   v.root.parent?.remove(v.root);
   v.root = null; v.chassis = null; v.wheelRoot = null;
-  v.exhaust = null; v._glowRig = null; v._sprFlame = null;
-  v._ghost = null; v._uMud = null;
+  v.exhaust = null; v._glowRig = null; v._flameRig = null; v._sprFlame = null;
+  v._ghost = null; v._uMud = null; v._bodyMeshes = null;
+  v._muzzle = null; v._rack = null; v._arsenalRig = null;
   for (const w of v.wheels) { w.obj = w.hub = w.arm = w.coil = w.caliper = null; }
 }
 

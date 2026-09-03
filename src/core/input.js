@@ -58,6 +58,7 @@ export class Input {
     this._navCode = '';
     this._touchPref = 'auto';          // settings key showTouch
     this._wantTouch = false;           // "we are driving" — set by showTouch()
+    this._fireArmed = false;           // the touch FIRE button's lit state
     this._ctls = [];                   // touch controls, for global release
 
     // Reused so poll() allocates nothing (hard rule 4).
@@ -267,6 +268,20 @@ export class Input {
 
   /** "We are driving" — the race flow calls this at GRID and on results. */
   showTouch(on) { this._wantTouch = !!on; this._applyTouchVis(); }
+
+  /**
+   * Arm the touch FIRE button: lit while there is a rocket in the tube and
+   * the launcher is not reloading. The keycap on the HUD names a key, which
+   * is meaningless on touch — the button IS the key, so the button carries
+   * the signal. race.js calls this every frame; it only touches the DOM on
+   * a change. The look of an armed button is the stylesheet's (`.armed`).
+   */
+  armFire(on) {
+    const want = !!on;
+    if (want === this._fireArmed) return;
+    this._fireArmed = want;
+    if (this.fireBtn) this.fireBtn.classList.toggle('armed', want);
+  }
 
   /** ADDITION for T5: the `showTouch` setting ('auto'|'on'|'off'). */
   setShowTouch(mode) {

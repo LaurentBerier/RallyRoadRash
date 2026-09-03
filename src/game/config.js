@@ -517,6 +517,61 @@ export const TUNE = {
   },
 
   /* ---------------------------------------------------------------
+     WEAPONS — the rocket, and what it does to whoever it finds
+     ------------------------------------------------------------------
+     The launcher table itself (reload, muzzle speed, splash, per machine)
+     is src/game/weapons.js; these are the numbers every launcher shares.
+     Ballistics are deliberately NOT a real trajectory: a rocket that flew
+     a parabola from the moment it left the tube would have to be lobbed,
+     and a lob is unreadable at 40 m/s. Flat for `straightT`, then a quarter
+     of gravity, means "aim at the car" is the right instruction out to the
+     AI's whole 8–70 m window and the shot still ends on the road instead of
+     in the next county.
+     --------------------------------------------------------------- */
+  weapons: {
+    ammoStart: 6,           // rockets every machine leaves the grid with
+    ammoCap: 12,            // …and the most a rack holds. A hoard is not a plan.
+    crateAmmo: 3,           // rockets per crate
+    crateRespawn: 3.5,      // s before a taken crate is back
+    crateRows: [3, 5],      // crates per row across the road, by road width
+    straightT: 0.40,        // s of flat flight before the drop begins
+    dropG: 0.25,            // × G once it does. 0.25 puts the ground ~1 s later.
+    life: 3.5,              // s — a rocket that found nothing simply ends
+    arm: 0.30,              // s before it can hit its own launcher
+    radius: 0.45,           // m, added to the target's collision radius
+    spin: 1.15,             // s of spin-out on a DIRECT hit (Vehicle.spinT)
+    slowT: 1.00,            // s of drive cut on a direct hit…
+    slowDrive: 0.60,        // …to this × motorForce
+    splashMul: 0.5,         // splash = this × every direct-hit duration
+    /* How far away a rival's shot is still worth hearing and logging. On a
+       spread-out grid 60–70 m was "never"; the field fires forty rockets a
+       race and the cockpit should register most of them. */
+    fireHearD: 110,         // m — audio
+    fireLogD: 80,           // m — the race log line
+    hitHearD: 140,          // m — an explosion carries
+  },
+
+  /* ---------------------------------------------------------------
+     NITRO — the can on the road
+     ------------------------------------------------------------------
+     Verbatim the wave-5 NITRO item: the numbers were tuned, what changed is
+     that there is no key. It fires the instant a car drives through it,
+     through `extDriveMul` / `extTopMul` exactly where the item did, so the
+     mini-turbo's own path is untouched and the two still compose.
+     `top` is a DRIVE-FADE denominator, the same semantics as boost.fireTop:
+     it moves the ceiling only while the burn lasts.
+     --------------------------------------------------------------- */
+  nitro: {
+    force: 1.90,            // × motorForce while burning
+    top: 1.16,              // × topSpeed (fade denominator) while burning
+    time: 1.6,              // s
+    respawn: 6.0,           // s before a taken can is back — twice a crate,
+                            //   because a can is worth more than three rockets
+    fov: 3.0,               // deg into feel.kick() on contact
+    shake: 0.22,            // feel.addShake() on contact
+  },
+
+  /* ---------------------------------------------------------------
      RESET / RECOVERY — race.js owns the behaviour, these are its thresholds.
      --------------------------------------------------------------- */
   reset: {

@@ -47,9 +47,11 @@ const HERO_SCREENS = { main: 1, tracks: 1, garage: 1, playbook: 1, settings: 1 }
 const SETTINGS_SPEC = [
   /* First in the list, because it is the only row here that changes what the
      race IS rather than how it looks. OFF is the clean time-attack game; the
-     drift boost is handling, not a power-up, and stays on either way. */
-  { key: 'items', label: 'POWER-UPS',
-    hint: 'Item boxes, weapons and catch-up. OFF for clean time attack — the drift boost stays.',
+     drift boost is handling, not a pickup, and stays on either way. Wave 8
+     §8.10: the key was `items`; main.js boot() migrates old profiles
+     (`weapons ??= items`) so this rename never drops a saved preference. */
+  { key: 'weapons', label: 'WEAPONS',
+    hint: 'Rockets, ammo crates and nitro cans. OFF for clean time attack — pads and the drift boost stay.',
     type: 'seg', opts: [[false, 'OFF'], [true, 'ON']], def: true },
   { key: 'rivals', label: 'RIVALS', hint: 'How hard the AI races you. Applies from the next race.',
     type: 'seg', opts: [['easy', 'EASY'], ['normal', 'NORMAL'], ['hard', 'HARD']], def: 'normal' },
@@ -96,13 +98,13 @@ const SETTINGS_SPEC = [
 const BINDINGS = {
   kb: [
     ['Throttle / reverse', 'W S  or  ↑ ↓'], ['Steer', 'A D  or  ← →'],
-    ['Handbrake (drift)', 'SPACE'], ['Fire power-up', 'F'],
+    ['Handbrake (drift)', 'SPACE'], ['Fire rocket', 'F  (hold S to fire behind)'],
     ['Barrel roll (in air)', 'Q / E'], ['Reset to track', 'hold R'],
     ['Camera', 'C'], ['Pause', 'ESC'], ['Mute', 'M'], ['Look around', 'right-drag'],
   ],
   pad: [
     ['Throttle / brake', 'RT / LT'], ['Steer', 'left stick'],
-    ['Handbrake (drift)', 'A'], ['Fire power-up', 'X'],
+    ['Handbrake (drift)', 'A'], ['Fire rocket', 'X  (hold LT to fire behind)'],
     ['Barrel roll (in air)', 'LB / RB'], ['Reset to track', 'hold B'],
     ['Camera', 'Y'], ['Pause', 'START'], ['Look around', 'right stick'],
     ['Menus', 'd-pad + A, B = back'],
@@ -110,16 +112,19 @@ const BINDINGS = {
   touch: [
     ['Steer', 'left slider pad'], ['Throttle', 'GAS pedal'],
     ['Brake / reverse', 'BRAKE pedal'], ['Handbrake (drift)', 'DRIFT'],
-    ['Fire power-up', 'FIRE'], ['Barrel roll (in air)', 'DRIFT + steer'],
+    ['Fire rocket', 'FIRE  (hold BRAKE to fire behind)'], ['Barrel roll (in air)', 'DRIFT + steer'],
     ['Reset to track', 'hold RESET'], ['Camera', 'CAM'], ['Pause', 'II'],
   ],
 };
 
 const clamp01 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
 
-/* A record set with power-ups on is still a record — it just says so. One
-   flag beats a dual leaderboard for a feature that is on by default. */
-const ITEM_FLAG = '<span class="itflag" title="set with power-ups on">⚡</span>';
+/* A record set with weapons on is still a record — it just says so. One flag
+   beats a dual leaderboard for a feature that is on by default. §8.10: the
+   progression.js record flags stay `itemsTotal`/`itemsLap` — a locked
+   whitelist, renaming them would invalidate every saved profile — only the
+   label here changes. */
+const ITEM_FLAG = '<span class="itflag" title="set with weapons on">⚡</span>';
 
 /** mm:ss.cc, or dashes when a time has not been set. */
 function fmtTime(t) {
