@@ -211,15 +211,32 @@ canvas.logo.big{max-width:640px}
 .screen{
   --plate-w:46%;
   position:absolute;inset:0;display:flex;flex-direction:column;
+  /* Keeps the plate's z-index:-1 inside this screen — see .screen::before. */
+  isolation:isolate;
   animation:scr-in .18s ease-out;
   padding:env(safe-area-inset-top) env(safe-area-inset-right)
           env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 /* The plate itself: one element so the blur is paid for once and the right
-   edge can feather out rather than ending in a ruled line. */
+   edge can feather out rather than ending in a ruled line.
+
+   z-index -1, and `isolation:isolate` on .screen above, because a plate is
+   BEHIND a screen and CSS paint order does not agree by default: an absolutely
+   positioned pseudo-element with z-index auto paints in the positioned layer,
+   which is above the block-level in-flow content of .scr-body. At .93 alpha
+   that put a near-black gradient over every settings row — the rows were laid
+   out correctly the whole time and simply buried, which is exactly why probing
+   their rects said everything was fine.
+
+   `isolation` and not `z-index:0` on .screen: both make the stacking context
+   that keeps this -1 inside the screen instead of letting it fall behind an
+   ancestor's background, but z-index would also reorder .screen against its
+   siblings (the other screens, the HUD) and that ordering is load-bearing.
+   .screen is already position:absolute, so neither changes the containing
+   block for anything inside it. */
 .screen::before{
   content:"";position:absolute;left:0;top:0;bottom:0;width:var(--plate-w);
-  pointer-events:none;
+  pointer-events:none;z-index:-1;
   background:
     radial-gradient(120% 90% at 12% 0%, rgba(255,122,26,.10), transparent 58%),
     linear-gradient(180deg,rgba(8,8,11,.93),rgba(6,6,9,.97));

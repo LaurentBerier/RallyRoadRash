@@ -59,7 +59,16 @@ export async function loadAssets(manifestUrl = 'assets/manifest.json') {
   const out = new Map();
   let manifest = null;
   try {
-    const res = await fetch(manifestUrl, { cache: 'force-cache' });
+    /* 'no-cache' REVALIDATES; it does not skip the cache. The manifest is a
+       few hundred bytes and it is the index that names every other file, so
+       serving it stale is how a shipped asset becomes invisible: this was
+       'force-cache', which uses the cached copy however old it is, and the
+       wave-8 carcasses did not appear for anyone who had loaded the game
+       before — the GLBs were pushed, the entries were live, and every
+       returning player looked them up in last week's manifest and got null.
+       A conditional request that comes back 304 costs nothing. The files the
+       manifest POINTS at still cache normally; they are content, not index. */
+    const res = await fetch(manifestUrl, { cache: 'no-cache' });
     if (res.ok) manifest = await res.json();
   } catch { /* no manifest is the normal case, not an error */ }
   if (!manifest || typeof manifest !== 'object') return out;
