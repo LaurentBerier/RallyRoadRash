@@ -75,6 +75,13 @@ head('a  drop table shape');
     ok(typeof it.name === 'string' && it.name.length > 0, `item ${i} has a name`);
     ok(Number.isFinite(it.col), `${it.name} has a colour`);
     ok(it.charges >= 1, `${it.name} grants at least one charge`);
+    /* The VERB. hud.js builds the on-screen prompt as "<NAME> - PRESS <KEY>
+       TO <USE>"; an item with no `use` silently reads "TO FIRE" again, which
+       is the wording that told a player nothing in the first place. */
+    ok(typeof it.use === 'string' && it.use.length > 0,
+      `${it.name} has a use verb for the HUD prompt`);
+    ok(it.hint === undefined || (typeof it.hint === 'string' && it.hint.length > 0),
+      `${it.name} hint is absent or non-empty`);
     for (const k in it) {
       const v = it[k];
       if (typeof v === 'number') ok(Number.isFinite(v), `${it.name}.${k} is finite`);

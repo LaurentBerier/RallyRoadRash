@@ -63,11 +63,18 @@ export const ITEM = {
                They exist because until wave 6 an item had a name in a HUD
                corner and nothing else anywhere in the game — no icon, no
                description, no hint that the table is rigged by position. */
+/* `use` and `hint` are UI-owned and exist for one reason: the on-screen prompt
+   used to read "<NAME> — F TO FIRE" for all seven items, which tells a player
+   nothing about what pressing F is going to do. `use` is the verb that goes on
+   the prompt and the card; `hint` is an optional second line for the one thing
+   about an item you cannot guess. Every item must carry a non-empty `use` —
+   dev/items-check.mjs gate a enforces it. */
 export const ITEMS = [
   {
     id: ITEM.NITRO, name: 'NITRO', kind: 'boost', charges: 1, aimable: false,
     col: 0xff8a1a,
     icon: 'nitro',
+    use: 'BOOST',
     desc: 'A short, hard shove. Roughly twice the engine for a second and a half, ' +
       'and it lifts your terminal speed while it burns.',
     tip: 'Fire it on the exit, never the entry — a boost into a corner is a boost ' +
@@ -80,6 +87,7 @@ export const ITEMS = [
     id: ITEM.TRIPLE, name: 'TRIPLE NITRO', kind: 'boost', charges: 3, aimable: false,
     col: 0xffd23f,
     icon: 'triple',
+    use: 'BOOST x3',
     desc: 'Three nitros on one pickup. Each one is the same shove; the slot stays ' +
       'full until you have spent all three.',
     tip: 'Holding a full slot means you drive past every box you pass, so spend ' +
@@ -90,6 +98,7 @@ export const ITEMS = [
     id: ITEM.WHEEL, name: 'SPARE WHEEL', kind: 'projectile', charges: 1, aimable: true,
     col: 0x9aa1a8,
     icon: 'wheel',
+    use: 'THROW', hint: 'hold {BACK} as you fire to throw it backwards',
     desc: 'A truck tyre, thrown forward or dropped behind. It arcs, bounces off ' +
       'the ground up to five times, and spins out whoever it catches.',
     tip: 'It bounces, so aim it at the ROAD in front of a car rather than at the ' +
@@ -107,6 +116,7 @@ export const ITEMS = [
     id: ITEM.SLICK, name: 'OIL SLICK', kind: 'hazard', charges: 1, aimable: false,
     col: 0x2a2420,
     icon: 'slick',
+    use: 'DROP BEHIND YOU',
     desc: 'A patch of oil dropped three metres behind you. It sits there for nine ' +
       'seconds and spins out anyone who drives across it.',
     tip: 'Defence, and the leader\'s best item. Drop it on the racing line at a ' +
@@ -123,6 +133,7 @@ export const ITEMS = [
     id: ITEM.TOW, name: 'TOW LINE', kind: 'tow', charges: 1, aimable: false,
     col: 0x4fd07a,
     icon: 'tow',
+    use: 'HOOK THE CAR AHEAD', hint: 'no car in range and it fires as a NITRO',
     desc: 'Hooks the car ahead inside a 35° cone. For a second and a half it drags ' +
       'you forward and holds them back — the line snaps if you get too close or ' +
       'they get too far.',
@@ -139,6 +150,7 @@ export const ITEMS = [
     id: ITEM.SLED, name: 'ROCKET SLED', kind: 'sled', charges: 1, aimable: false,
     col: 0xc46bff,
     icon: 'sled',
+    use: 'LAUNCH', hint: 'hands off - it steers itself',
     desc: 'Three and a half seconds of autopilot at more than twice the engine. ' +
       'The car drives itself down the racing line and lets go the moment you reach ' +
       'third place.',
@@ -154,6 +166,7 @@ export const ITEMS = [
     id: ITEM.STORM, name: 'DUST STORM', kind: 'storm', charges: 1, aimable: false,
     col: 0xb99a6a,
     icon: 'storm',
+    use: 'BLIND EVERYONE AHEAD',
     desc: 'Blows a wall of grit over everyone ahead of you. They lose a third of ' +
       'their drive for two and a half seconds, and if the leader is the player, ' +
       'they cannot see either.',

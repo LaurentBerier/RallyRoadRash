@@ -24,6 +24,13 @@
        road 200 m behind it — for ever. Watch for a jump of more than 20 m
        between frames and tell it.
 
+     • THE WHOLE FIELD, not just the player slot. Every driving metric here
+       is collected for all six cars, because the rivals are AI on the same
+       stage and until this harness measured them the ONLY gate on AIDriver
+       was dev/ai-check.mjs's kinematic mock, which has no terrain, no
+       collisions and no recovery net. `out.rivals[]` is one row per rival;
+       the flat player fields are kept as aliases so old readers still work.
+
      • Completion, not position, is the health signal. The QA driver has no
        AI_BALANCE handicap and typically finishes fifth or sixth. That is
        expected and is not a failure; a DNF, a stuck car, a NaN or a
@@ -171,7 +178,19 @@ export async function one(trackId, vehId, opts = {}) {
        offFrac — distance from the centreline is the only honest measure of
        "not on the road" that does not need the racing line). */
     meanSpeed: 0, crawlFrac: 0, airFrac: 0, offFrac: 0, maxSpeed: 0,
+    /* One row per car on the grid, player included (`rivals` excludes it).
+       `why` is race.js's reset-cause tally: 'off' and 'noprog' mean the nets
+       are firing on racing, 'flip' and 'wedged' mean the terrain is. */
+    cars: [], rivals: [], fieldResets: 0, fieldDnf: 0,
   };
+  /* Per-car accumulators, indexed by grid slot. The player's are aliased into
+     the flat fields at the end so nothing that read this file before moves. */
+  const acc = race.racers.map((r) => ({
+    slot: r.slot, name: r.name, isPlayer: !!r.isPlayer, veh: r.spec.id,
+    skill: r.ai ? +(r.ai.skill || 0).toFixed(3) : null,
+    resets: 0, resetAt: {}, why: {}, maxAir: 0,
+    spdSum: 0, spdN: 0, crawlN: 0, airN: 0, offN: 0, maxSpeed: 0,
+  }));
   let spdSum = 0, spdN = 0, crawlN = 0, airN = 0, offN = 0;
   const near = { s: 0, d: 0, side: 1, lat: 0, x: 0, z: 0 };
 
@@ -189,6 +208,20 @@ export async function one(trackId, vehId, opts = {}) {
       if (v.airTime > out.maxAir) out.maxAir = v.airTime;
       if (Math.abs(v.pos.y) > out.worstY) out.worstY = Math.abs(v.pos.y);
       if (race.state === 2) {                                  // RS.RUNNING
+        /* Every car, sequentially through the one `near` scratch. The player's
+           columns are still accumulated separately so the flat fields keep
+           their exact old meaning even if the loop below ever changes. */
+        for (let i = 0; i < race.racers.length; i++) {
+          const rv = race.racers[i].vehicle, a = acc[i];
+          const sp2 = rv.speed;
+          a.spdSum += sp2; a.spdN++;
+          if (sp2 > a.maxSpeed) a.maxSpeed = sp2;
+          if (sp2 < 8) a.crawlN++;
+          if (rv.airborne) a.airN++;
+          if (rv.airTime > a.maxAir) a.maxAir = rv.airTime;
+          race.trackData.spline.nearest(rv.pos.x, rv.pos.z, near);
+          if (near.d > race.trackData.spline.widthAt(near.s) * 1.4) a.offN++;
+        }
         const sp = v.speed;
         spdSum += sp; spdN++;
         if (sp > out.maxSpeed) out.maxSpeed = sp;
@@ -201,15 +234,21 @@ export async function one(trackId, vehId, opts = {}) {
         const r = race.racers[i];
         if (r.ghostT > 0 && resetSeen[i] === 0) {
           resetSeen[i] = 1;
+          /* WHERE, not just how many, and for EVERY car. A reset count on its
+             own says a stage is hard; a histogram says which 25 m of it is,
+             and a rival histogram says whether the AI is the hard part.
+             Bucketed because the same feature catches a car at slightly
+             different s every lap, and a list of raw arc lengths hides that
+             they are one place. */
+          race.trackData.spline.nearest(r.vehicle.pos.x, r.vehicle.pos.z, near);
+          const b = Math.round(near.s / 25) * 25;
+          const a = acc[i];
+          a.resets++;
+          a.resetAt[b] = (a.resetAt[b] || 0) + 1;
+          const w = r.resetWhy || '?';
+          a.why[w] = (a.why[w] || 0) + 1;
           if (r.isPlayer) {
             out.resets++;
-            /* WHERE, not just how many. A reset count on its own says a stage
-               is hard; a histogram says which 25 m of it is. Bucketed because
-               the same feature catches a car at slightly different s every
-               lap, and a list of raw arc lengths hides that they are one
-               place. */
-            race.trackData.spline.nearest(r.vehicle.pos.x, r.vehicle.pos.z, near);
-            const b = Math.round(near.s / 25) * 25;
             out.resetAt[b] = (out.resetAt[b] || 0) + 1;
           }
         } else if (r.ghostT <= 0) resetSeen[i] = 0;
@@ -250,6 +289,27 @@ export async function one(trackId, vehId, opts = {}) {
     }
     out.position = race.tracker.position(me.id) || out.position;
     out.fieldStuck = race.racers.filter(r => !r.finished).length;
+
+    const results = race.tracker.results() || [];
+    out.cars = acc.map((a, i) => {
+      const r = race.racers[i];
+      const st = results.find(q => q.id === r.id) || null;
+      const N = Math.max(1, a.spdN);
+      return {
+        slot: a.slot, name: a.name, veh: a.veh, isPlayer: a.isPlayer, skill: a.skill,
+        resets: a.resets, resetAt: a.resetAt, why: a.why,
+        meanSpeed: +(a.spdSum / N).toFixed(2), maxSpeed: +a.maxSpeed.toFixed(2),
+        crawlFrac: +(a.crawlN / N).toFixed(3), airFrac: +(a.airN / N).toFixed(3),
+        offFrac: +(a.offN / N).toFixed(3), maxAir: +a.maxAir.toFixed(2),
+        finished: !!(r.finished || (st && st.finished)),
+        bestLap: st ? st.bestLap : null, total: st ? st.total : null,
+        laps: st ? st.lap : 0,
+        position: race.tracker.position(r.id) || null,
+      };
+    });
+    out.rivals = out.cars.filter(c => !c.isPlayer);
+    out.fieldResets = out.rivals.reduce((n, c) => n + c.resets, 0);
+    out.fieldDnf = out.rivals.filter(c => !c.finished).length;
     if (race.items) {
       out.itemsOn = race.items.enabled;
       out.itemsTaken = race.items.stats.taken;
@@ -274,6 +334,19 @@ export async function one(trackId, vehId, opts = {}) {
   return out;
 }
 
+/** One rival's line in a sweep table. Skill first: every other column on the
+    row is only interesting relative to how good this driver is meant to be. */
+export function printRival(c) {
+  const why = Object.entries(c.why).map(([k, n]) => `${k}x${n}`).join(',') || '-';
+  console.log(`      ${String(c.name).padEnd(8)} ${String(c.veh).padEnd(9)}` +
+    ` sk ${c.skill == null ? ' n/a' : c.skill.toFixed(2)}` +
+    ` P${c.position || '-'} ${c.finished ? 'fin' : 'DNF'}` +
+    ` best ${c.bestLap ? c.bestLap.toFixed(2) : '  -   '}` +
+    ` mean ${c.meanSpeed.toFixed(1)} crawl ${c.crawlFrac.toFixed(3)}` +
+    ` off ${c.offFrac.toFixed(3)} air ${c.maxAir.toFixed(2)}s` +
+    ` resets ${c.resets} [${why}]`);
+}
+
 /** Every stage against every machine. Returns the table and prints it. */
 export async function sweep(tracks, vehicles, opts = {}) {
   const T = tracks || ['training', 'canyon', 'forest', 'volcano'];
@@ -285,14 +358,19 @@ export async function sweep(tracks, vehicles, opts = {}) {
       const r = await one(t, v, opts);
       rows.push(r);
       console.log(`[qa] ${t}/${v}`, r.finished ? `P${r.position} in ${r.simSeconds}s sim` : 'DNF',
-        `resets ${r.resets} maxAir ${r.maxAir.toFixed(2)}s`, r.error || '');
+        `resets ${r.resets} maxAir ${r.maxAir.toFixed(2)}s`,
+        `| field resets ${r.fieldResets} dnf ${r.fieldDnf}`, r.error || '');
+      for (const c of r.rivals) printRival(c);
       // eslint-disable-next-line no-await-in-loop
       await new Promise(res => setTimeout(res, 120));
     }
   }
   const bad = rows.filter(r => !r.finished || r.nan || r.error);
-  console.log(`[qa] ${rows.length - bad.length}/${rows.length} completed`);
-  return { rows, bad };
+  const fieldResets = rows.reduce((n, r) => n + (r.fieldResets || 0), 0);
+  const fieldDnf = rows.reduce((n, r) => n + (r.fieldDnf || 0), 0);
+  console.log(`[qa] ${rows.length - bad.length}/${rows.length} completed` +
+    `  | rivals: ${fieldResets} resets, ${fieldDnf} DNF over ${rows.length * 5} starts`);
+  return { rows, bad, fieldResets, fieldDnf };
 }
 
-export default { one, sweep };
+export default { one, sweep, printRival };

@@ -26,8 +26,8 @@ import * as THREE from 'three';
 import { clamp, sstep, lerp } from '../core/rng.js';
 import { SURFACES, SURF } from '../world/surfaces.js';
 import { G, TUNE } from './config.js';
-import { makeDrift, driftStep, driftReset, driftFire } from './miniturbo.js';
-import { makeTrick, trickReset, trickStep } from './tricks.js';
+import { makeDrift, driftStep, driftReset, driftFire, driftProgress } from './miniturbo.js';
+import { makeTrick, trickReset, trickStep, trickLabel } from './tricks.js';
 import {
   buildVehicleVisuals, updateVehicleVisuals, disposeVehicleVisuals,
 } from './vehicle-art.js';
@@ -185,8 +185,9 @@ export class Vehicle {
     this.landQ = 0;            // 0..1 quality of that landing — flat AND soft
     this.airPeak = 0;          // m of peak height over the launch point, this flight
     /* Which TUNE.air.assistScale entry the landing assist uses — the
-       `trickAssist` setting (0 PRO / 1 default / 2 ARCADE). race.js writes it
-       on the player; the AI and every harness leave it at the default. */
+       `trickAssist` setting (0 PRO / 1 default / 2 ARCADE). race.js writes the
+       setting on the PLAYER and pins the rivals at ARCADE (they cannot read a
+       landing the way a human can); every harness leaves it at the default. */
     this.trickAssist = 1;
     this._launchY = 0;         // world y at the moment the wheels left
     this._airVy = 0;           // vel.y on the last airborne substep — the touchdown speed
@@ -1029,6 +1030,39 @@ export class Vehicle {
      module builds, drives and frees them. These stay methods because race.js
      and the dev harnesses call them on the instance.
      ============================================================ */
+  /* ============================================================
+     HUD READOUTS (contract 6.6)
+     ------------------------------------------------------------
+     `_drift` and `_trick` are miniturbo.js's and tricks.js's private state
+     and stay that way — these copy the five numbers hud.js draws into a
+     caller-owned object, so race.js can fill its payload without reaching
+     inside either module and without allocating a thing per frame. The
+     mini-turbo charge arc, the boost bar and the trick pop are all fully
+     implemented in hud.js and drew nothing at all until these existed.
+     ============================================================ */
+
+  /** Mini-turbo charge and boost burn, 0..1 each with their tiers. */
+  hudDrift(out) {
+    const d = this._drift;
+    out.drift = driftProgress(d);
+    out.driftTier = d.tier | 0;
+    const want = TUNE.boost.fireT[(d.fireTier | 0) - 1] || 0;
+    out.boost = want > 0 ? clamp(d.fireT / want, 0, 1) : 0;
+    out.boostTier = d.fireTier | 0;
+    return out;
+  }
+
+  /** The last scored trick. `seq` is the HUD's "this one is new" flag. */
+  hudTrick(out) {
+    const t = this._trick;
+    out.id = t.id | 0;
+    out.name = t.id ? trickLabel(t.id) : '';
+    out.pts = t.pts | 0;
+    out.tier = t.tier | 0;
+    out.seq = t.seq | 0;
+    return out;
+  }
+
   updateVisuals(dt) { updateVehicleVisuals(this, dt); }
 
   dispose() { disposeVehicleVisuals(this); }

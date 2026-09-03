@@ -1,5 +1,213 @@
 # RALLY ROAD RASH — QA report
 
+## Pass 5 — canyon difficulty, rival AI, power-up legibility (2026-09-02, branch `glow-up`)
+
+Three user-reported complaints, measured rather than guessed. **Two are fixed and
+one is only half fixed** — the honest summary is at the bottom.
+
+### 1. SUNSTRIKE CANYON was a causeway — FIXED
+
+The terrain bake never floats a road: `terrain-bake.js`'s resolve pass raises the
+terrain to MEET an authored `y` above the theme's base noise. Canyon's front half
+was authored **10–19 m above the wash floor for the whole of s 50–900**, so the
+bake had built it a causeway with 49° drop-offs starting ~13 m off the centreline
+and no walls. MESA LAUNCHER was a 5.0 m kicker at 22.6° fired down the opening
+straight at 40+ m/s: 141 m of flight, 3.8 s of air, landing on a *climbing* road
+inside the next sweeper.
+
+Measured raise above the base terrain, s ∈ [40, 900]:
+
+| | before | after |
+|---|---|---|
+| max raise | **18.97 m** (s=175) | **5.4 m** (s=540, the gap slab) |
+| raise over s 50–450 and 625–925 | 4–19 m | **0.1–1.1 m** |
+| MESA LAUNCHER | 5.0 m kicker, lip 22.6° | 2.6 m **table**, lip 12° |
+| …at 30 m/s | 141 m long, 3.8 s air | 29 m long, 1.6 m high |
+| max grade | — | 11 % |
+
+`path[].y` moved on control points 0–18 only; **xz is untouched**, so no corner
+radius, checkpoint spacing or route-separation gate can have moved (track-check
+confirms). Both alternate routes were re-graded to match and now join the main
+line within **0.05 m** (SLOT was left 6.3 m in the air by the re-grade and needed
+its own pass). The one place the road still stands proud is s 490–610, ~5.4 m over
+a natural hollow — that embankment IS the slab THE GAP is cut into, and the gap's
+landing runway has to stay level (measured −0.1 %).
+
+**New gate:** `dev/track-check.mjs` grew a **raisedRoad audit** — per track it
+prints the max raise over the theme base and the longest unwalled run above 4 m,
+and FAILS canyon over 6 m on s ∈ [40, 900]. It would have caught the original
+18.97 m by a factor of three.
+
+qa-drive, canyon, 3 laps, items off, per machine:
+
+| machine | resets before | resets after | max air before | after | result |
+|---|---|---|---|---|---|
+| hopper | — | 2 | — | 4.9 s | P4 |
+| ridgeback | **114, DNF** | **1** | — | 3.8 s | **P1** |
+| redline | — | 4 | — | 3.7 s | P3 |
+| moto | — | 3 | — | 3.1 s | P6 |
+
+The QA-logged canyon/ridgeback 114-reset DNF is now one reset and a win. **Zero
+resets anywhere in s 50–200** — the launcher and the old causeway. Remaining max
+air is THE GAP (s=630), which is the intended set piece.
+
+### 2. …and the same fault, worse, on FOREST and VOLCANO — NOT FIXED
+
+The new audit found it immediately, and it is the **dominant rival-reset cause on
+both stages**:
+
+| stage | max raise | longest unwalled run over 4 m |
+|---|---|---|
+| forest | **63.1 m** (s=740) | **290 m** (s 710–990) |
+| volcano | **56.8 m** (s=250) | **410 m** (s 1370–1770) |
+
+Every high-frequency rival reset site on those two stages is a **jump landing
+inside those spans**, with 25 m off the centreline putting you over a cliff:
+
+| stage | s | what is there | drop 25 m left / right | walled? |
+|---|---|---|---|---|
+| forest | 815 | the 20 m GAP's lip | 55.4 / 51.8 m | no |
+| forest | 835–850 | its landing (58 resets) | 49.7 / 42.8 m | no |
+| forest | 940–960 | the table (53 resets) | 36.7 / 41.4 m | no |
+| volcano | 575–600 | CALDERA LEAP + landing (53) | 48.4 / 50.5 m | wall **stops at 560** |
+| volcano | 745–775 | the second gap (54) | 35.3 / 38.3 m | no |
+| volcano | 250–255 | the table (52) | 44.6 / 45.1 m | no |
+
+Forest's rival resets are **146 `off` out of 174**; volcano's **113 `off` and 56
+`noprog` out of 189**. The rivals are not driving badly there — they are landing
+jumps onto unwalled causeways and falling 30–55 m. Out of scope for this pass
+(the brief was canyon); the audit now prints it on every run.
+
+### 3. Rival AI — partly fixed, and now MEASURABLE
+
+**`dev/qa-drive.js` now measures all six cars, not just the player slot.** Until
+this pass the only gate on AIDriver was `ai-check`'s kinematic mock — no terrain,
+no collisions, no recovery net — so nobody had ever measured a rival in real
+physics. `out.rivals[]` carries per-rival skill, resets, a 25 m reset histogram, a
+reset-CAUSE tally (`race.js _respawn` takes a `why`), mean speed, crawl/off/air
+fractions, best lap and finishing position.
+
+Six real defects found and fixed:
+
+1. **The speed model was calibrated at ~0.55× the real car.** `vehicle-check`
+   measures 16.7–17.6 m/s² braking and 12.0–14.3 m/s² lateral on DIRT; the driver
+   believed 8.5 and 7.5. Now `A_BRAKE` 13.0 and `LAT_ACCEL` 10.5 (exported from
+   track.js, imported by ai.js instead of a duplicated literal), `SKILL_LO/HI`
+   0.66/1.06, `MISTAKE_LATE` 0.25.
+2. **A rock hop was treated as a jump.** The air policy is a total input blackout
+   and it began after 0.12 s airborne — which a stone or a whoop crest satisfies,
+   so on rough ground the driver's hands came off the wheel several times a
+   second. That is the "sawing, erratic" rival. Real air is now declared by the
+   lip or the launch and confirmed by hang time or peak height; a hop keeps ground
+   steer and merely caps throttle.
+3. **Two reset asymmetries with the player, same root.** ai.js used private
+   22 m / 0.6 s off-line limits against race.js's 30 m / 2.5 s, *and* measured the
+   MAIN CENTRELINE while race.js (also fixed this pass) takes the min over the
+   main line and every in-span route. A rival on a legal detour was fine by the
+   race flow and "lost" by its own driver. Both sides now use `TUNE.reset.*` and
+   both take the route min.
+4. **Alternate routes were taken blind.** Every alt now carries `dtSec`/`dtFrac`.
+   Measured: canyon `slot` **+2.0 s/lap**, `mesatop` **+2.1 s/lap** (both now
+   refused), forest `highroute` **−0.3 s/lap** (still taken).
+5. **The ±1.5 % balance ladder never touched the player** — it only knows a
+   rival's place among six cars, so the whole field could drive off up the road
+   perfectly balanced against itself. `AI_BALANCE.player` adds a band against the
+   player's ratcheted `raceS` gap, and a new **RIVALS** setting (EASY/NORMAL/HARD)
+   replaces it wholesale and shifts `difficultyFor()`.
+6. **TRICK ASSIST reached no car at all** — the menu wrote it to the profile and
+   nothing ever read it back onto a Vehicle. Now applied to the player; rivals are
+   pinned at ARCADE.
+
+`dev/ai-check.mjs` was corrected to match: its mock braked at a flat 9 m/s² against
+a driver that plans for `A_BRAKE×grip`, so its corner-entry gate had silently
+become a test of the mismatch. It also gained a hop assertion and runs the
+shortcut-plumbing gate with `costAware` off.
+
+Clean-lap effect (ai-check, kinematic, no terrain): canyon PRO **1.06× ideal**,
+PRO-vs-ROOKIE spread **6 % → 17.1 %**, update budget **10.4 µs** of 50.
+
+Real-physics effect (qa-drive, 4 stages × 4 machines, items off), against a
+baseline taken **after** the canyon re-grade and the reset-parity fix:
+
+| stage | rival resets | rival mean m/s | rival crawlFrac | rival offFrac |
+|---|---|---|---|---|
+| training | 3 → **7** | 20.39 → **21.45** | 0.091 → **0.065** | 0.049 → 0.071 |
+| canyon | 110 → **98** | 16.87 → **17.27** | 0.248 → **0.241** | 0.133 → **0.119** |
+| forest | 161 → 174 | 19.65 → **20.06** | 0.266 → **0.207** | 0.266 → **0.290** |
+| volcano | 189 → 189 | 20.07 → 19.64 | 0.233 → 0.256 | 0.279 → 0.307 |
+
+16/16 races completed, **0 player DNF**. Items-on spot check (canyon + volcano,
+hopper + moto): 0 DNF, 34–50 boxes taken and **44–69 items fired per race**.
+
+**This is short of the target and it is worth saying why.** The intended gates
+were ‒50 % rival resets on canyon/volcano and +10 % rival mean speed. Canyon
+resets fell 11 % and mean speed rose 2 %. The pace work is real — the clean-lap
+numbers above show it — but on forest and volcano it is swamped by finding 2:
+cars that spend a third of the race off a cliff do not benefit from braking later.
+**Fixing forest's and volcano's unwalled shelf roads is the prerequisite for the
+rest of the AI pace work showing up in a race.**
+
+One issue remains open and is precisely localised: on canyon, **one rival (DUSTY
+REN, skill 0.71) fails at s≈250 (the hip) 14–17 times per 3-lap race** on three of
+four machines, driving back from the gate and failing identically each time. It is
+deterministic, it predates this pass, and it is roughly half of canyon's remaining
+rival resets. A post-respawn cooldown on the driver's own `wantsReset` was tried
+and reverted — the car takes longer than the cooldown to drive back, so it fixed
+nothing and only delayed legitimate self-recovery.
+
+### 4. Power-ups were invisible, not broken — FIXED
+
+Nothing was wrong with the item system or with the AI's use of it: `ai-check` gate
+y measures a **66.3 % hit rate** against a 35 % gate, and the field throws 40–80
+items a race. Three separate layers were simply never connected:
+
+- **`vfx` was never threaded into Race.** `race.js` constructed both `ItemWorld`
+  and `RaceFX` with `vfx: null` and nothing ever called `vfx.update()` — so every
+  item spark, hit shock ring, wheel ribbon, sled flame and pad flash in the game
+  was allocated, wired and then never drawn, along with props.js's own impact
+  sparks. It was also the one member of `App.world` that leaked on every quit.
+- **hud.js's §6.6 contract was fully implemented and race.js filled in none of
+  it.** The pickup banner, the item icon, the race log, the mini-turbo charge arc,
+  the boost bar, the trick pop and the FINAL LAP banner had **never drawn once**.
+  `item.seq` also has to bump when the ROULETTE LANDS, not at pickup — the HUD
+  deliberately swallows a seq change while `rolling` is true.
+- **`hud.setInputMethod` was never called**, so the keycap read "F" on a pad.
+
+On top of that, the prompt now says what the item DOES. It used to read
+`<NAME> — F TO FIRE` for all seven; items carry a `use` verb and an optional
+`hint`, gated by `items-check`:
+
+> `SPARE WHEEL — PRESS F TO THROW` / `hold ↓ as you fire to throw it backwards`
+
+Verified in-browser: banner and card for NITRO / SPARE WHEEL / TOW LINE; keycap
+**F / X / FIRE** per input method; race log carrying all four kinds of line
+(`HIT BY BRICK LOMAX · SPARE WHEEL`, `YOU HIT MAREK HALL · OIL SLICK`,
+`NAVA OKO FIRED · SPARE WHEEL`, `SLOT FULL — FIRE IT`); the drift first-run tip.
+
+Also fixed, all previously silent:
+- F pressed during the 0.7 s roulette was swallowed — now queued and fired when
+  the item lands.
+- A full slot driving through a box said nothing — now `SLOT FULL — FIRE IT`.
+- TOW with no lock silently became a NITRO — now `NO LOCK — NITRO INSTEAD`.
+- A rival's shot was inaudible past 60–70 m (raised to 110 m) and never logged.
+- **DUST STORM had no world visual at all** — it now throws a real curtain of
+  ochre dust across the road, sited off the SPLINE so it spans the corridor.
+
+**The box itself** was `P.hazard` amber over a near-black emissive — the same
+colour as every barrier and cone in every theme. It is now a fixed cyan-white
+with a **?** on all four upright faces, emissive pulsed past the bloom threshold,
+1.25× scale, higher hover, 2× spin, and an additive halo disc on the ground so a
+row reads from 150 m. Collecting shrinks it over 0.2 s instead of teleporting it
+to 0.0001. Oil slick gained a pale rim and an iridescent centre; the tow line
+doubled in radius and lights up.
+
+`AI_ITEM.shoot` was **not** touched — at a 66 % hit rate it needs no help.
+
+### Suites
+
+`npm test` — 14/14 green, including the new raisedRoad gate (track-check), the
+`use` gate (items-check, 155 checks) and the hop assertion (ai-check).
+
 ## Pass 4 — the kart layer: mini-turbo, power-ups, rubber-banding (2026-09-02)
 
 Three systems added on top of the handling model: a drift→boost mini-turbo, a
@@ -412,12 +620,14 @@ profile (unlocks/medals/records/champion) survives reload.
    gears (open).
 6. **No player DNF/stage-timeout** -- a player who never finishes can sit in
    a race forever (quit/restart always available). Deliberate v1 scope.
-7. **QA-harness driver skill is flat, not competitive**: the arcade/recovery
-   re-verification pass (see above) drives the player car with a flat-skill-0.95
-   AIDriver and no rubber-banding, so it legitimately finishes P5-P6 -- that is the
-   harness, not a regression. The real rival AI (AI_BALANCE on) completes every
-   track cleanly. Human difficulty on the new jump set pieces has not been
-   hand-tested. Severity: test-methodology note, not a defect.
+7. **QA-harness driver skill is flat, not competitive**: `dev/qa-drive.js`
+   drives the player car with a flat-**skill-0.78** AIDriver (the figure was
+   reported as 0.95 through pass 4; the code has always said 0.78) and no
+   rubber-banding, so it legitimately finishes mid-field -- that is the
+   harness, not a regression. Since pass 5 the harness also measures all five
+   RIVALS in real physics, so "the AI completes every track cleanly" is now a
+   claim with numbers behind it rather than an impression.
+   Severity: test-methodology note, not a defect.
 
 ## Environment coverage
 

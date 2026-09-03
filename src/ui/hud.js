@@ -40,6 +40,10 @@ const RPM_HZ = 30;         // rev-arc redraw rate
    be told to press F — which is exactly what the game did, in the one place
    it mentioned firing at all, which was nowhere. */
 const FIRE_KEY = { kb: 'F', pad: 'X', touch: 'FIRE' };
+/* The other key an item hint can mention: hold-back-to-throw-backwards. */
+const BACK_KEY = { kb: '\u2193', pad: 'LT', touch: 'BRAKE' };
+/* "PRESS F" reads as an instruction; "TAP FIRE" is what a touch player does. */
+const PRESS_VERB = { kb: 'PRESS', pad: 'PRESS', touch: 'TAP' };
 
 /* Mini-turbo tier colours, matched to the tyre dust the drift throws so the
    ring and the world are telling you the same thing. */
@@ -107,7 +111,13 @@ export class HUD {
     /* Event sequence numbers we have already acted on. -1 means "nothing
        yet", and every one is reset by _clearTransients so a restart cannot
        replay the last race's last hit. */
-    this._seq = { item: -1, trick: -1, hit: -1, land: -1, pad: -1 };
+    this._seq = {
+      item: -1, trick: -1, hit: -1, land: -1, pad: -1,
+      dealt: -1, rivalFire: -1, note: -1,
+    };
+    this._cardSeq = -1;                // the item card's own "this is new" edge
+    this._fireBtn = null;              // core/input.js's touch FIRE, looked up lazily
+    this._fireArmed = false;
     this._tipSeen = null;              // ids already shown, this session
 
     /* The rev arc repaints at 30 Hz but the payload arrives at 60, so the
@@ -192,6 +202,9 @@ export class HUD {
     this._drift = 0; this._driftTier = 0; this._boost = 0; this._boostTier = 0;
     const s = this._seq;
     s.item = -1; s.trick = -1; s.hit = -1; s.land = -1; s.pad = -1;
+    s.dealt = -1; s.rivalFire = -1; s.note = -1;
+    this._cardSeq = -1;
+    this._armTouchFire(null);          // never leave the touch FIRE button lit
   }
 
   /**
@@ -203,9 +216,27 @@ export class HUD {
     if (m !== 'kb' && m !== 'pad' && m !== 'touch') return;
     if (m === this._method) return;
     this._method = m;
+    if (m !== 'touch') this._armTouchFire(null);
     // A single space is a key no real item can produce, and it is NOT '' —
     // which is the legitimate "no card" key and would suppress the rebuild.
     this._c.item = ' ';
+  }
+
+  /**
+   * Light the touch FIRE button while an item is ready, in the item's colour.
+   * `it` null disarms. The element is owned by core/input.js and is absent on
+   * every non-touch session, so everything here is optional.
+   */
+  _armTouchFire(it) {
+    const b = this._fireBtn ||
+      (this._fireBtn = document.querySelector('#touch .rbtn.fire'));
+    if (!b) return;
+    const on = !!(it && it.enabled && it.name && !it.rolling);
+    if (on === this._fireArmed) return;
+    this._fireArmed = on;
+    b.classList.toggle('armed', on);
+    if (on) b.style.setProperty('--ic', toCss(it.col, '#ffd23f'));
+    else b.style.removeProperty('--ic');
   }
 
   /* ============================================================
@@ -426,7 +457,7 @@ export class HUD {
        (a pad plugged in mid-race changes only the method). */
     const key = !it || !it.enabled || (!it.name && !it.rolling)
       ? '' : it.name + '|' + it.charges + '|' + (it.rolling ? 1 : 0) +
-        '|' + (it.icon || '') + '|' + this._method;
+        '|' + (it.icon || '') + '|' + (it.use || '') + '|' + this._method;
     if (key === this._c.item) return;
     this._c.item = key;
     if (!key) { host.innerHTML = ''; return; }
@@ -436,9 +467,21 @@ export class HUD {
     d.className = 'itemcard' + (it.rolling ? ' rolling' : '');
     d.style.setProperty('--ic', toCss(it.col, '#ff7a1a'));
     if (it.icon) d.appendChild(iconCanvas(it.icon, 20, toCss(it.col, '#ff7a1a')));
+    /* Name over verb, in one column: the card has to answer "what have I got"
+       and "what does firing it do" at a glance, and the name alone answers
+       only the first. */
+    const col = document.createElement('span');
+    col.className = 'namecol';
     const n = document.createElement('b');
     n.textContent = it.name || '—';
-    d.appendChild(n);
+    col.appendChild(n);
+    if (!it.rolling && it.use) {
+      const u = document.createElement('small');
+      u.className = 'use';
+      u.textContent = it.use;
+      col.appendChild(u);
+    }
+    d.appendChild(col);
     if (it.charges > 1) {
       const pips = document.createElement('span');
       pips.className = 'charges';
@@ -455,6 +498,13 @@ export class HUD {
       d.appendChild(k);
     }
     host.appendChild(d);
+    /* A one-shot pulse the frame the item lands, so the card announces itself
+       without the banner having to be the only signal. */
+    if (!it.rolling && (it.seq | 0) !== this._cardSeq) {
+      this._cardSeq = it.seq | 0;
+      d.classList.add('ready');
+      setTimeout(() => d.classList.remove('ready'), 600);
+    }
   }
 
   /**
@@ -470,7 +520,18 @@ export class HUD {
     const first = this._seq.item < 0;
     this._seq.item = seq;
     if (first || it.rolling || !it.name) return;   // wait for the roulette to land
-    this.banner(`${it.name} — ${FIRE_KEY[this._method] || 'F'} TO FIRE`, 'item', 2.0);
+    const m = this._method;
+    const k = FIRE_KEY[m] || 'F';
+    const verb = PRESS_VERB[m] || 'PRESS';
+    /* The VERB, not "TO FIRE". Every item used to produce the same sentence,
+       which told you which key to press and nothing whatever about what
+       pressing it would do. */
+    this.banner(`${it.name} — ${verb} ${k} TO ${it.use || 'FIRE'}`, 'item', 3.0);
+    if (it.hint) {
+      /* The one thing per item you cannot guess, on its own line so it does
+         not compete with the instruction. */
+      this.banner(it.hint.replace('{BACK}', BACK_KEY[m] || '\u2193'), 'item', 2.6);
+    }
   }
 
   /**
@@ -533,6 +594,35 @@ export class HUD {
         this.log(by ? `HIT BY ${by}${wi ? ' · ' + wi : ''}` : (wi ? `HIT · ${wi}` : 'HIT'), 'bad');
       }
     }
+    /* The other half of a hit. Landing one on somebody was completely silent,
+       which is half the reason the item system reads as inert. */
+    const ds = ev.dealtSeq | 0;
+    if (ds !== s.dealt) {
+      const first = s.dealt < 0;
+      s.dealt = ds;
+      if (!first) {
+        const to = ev.dealtTo, wi = ev.dealtWith;
+        this.log(to ? `YOU HIT ${to}${wi ? ' · ' + wi : ''}` : 'HIT LANDED', 'good');
+      }
+    }
+    /* A rival firing something near you. The field throws 40-80 items a race
+       and, with no particles and a 70 m audio gate, essentially none of it
+       was ever perceptible from the cockpit. */
+    const fs = ev.rivalFireSeq | 0;
+    if (fs !== s.rivalFire) {
+      const first = s.rivalFire < 0;
+      s.rivalFire = fs;
+      if (!first && ev.rivalFireBy) {
+        this.log(`${ev.rivalFireBy} FIRED${ev.rivalFireWith ? ' · ' + ev.rivalFireWith : ''}`, 'warn');
+      }
+    }
+    /* Things the game simply never said: a full slot, a tow with no lock. */
+    const ns = ev.noteSeq | 0;
+    if (ns !== s.note) {
+      const first = s.note < 0;
+      s.note = ns;
+      if (!first && ev.noteText) this.log(ev.noteText, 'warn');
+    }
     const ps = ev.padSeq | 0;
     if (ps !== s.pad) {
       const first = s.pad < 0;
@@ -573,6 +663,7 @@ export class HUD {
     const it = p && p.item;
     this._drawItem(it);
     this._itemEvent(it);
+    if (this._method === 'touch') this._armTouchFire(it);
     this._raceEvents(p && p.events);
     if (veh) this._trickPop(veh.trick);
 

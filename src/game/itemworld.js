@@ -61,7 +61,23 @@ const PICK_R = 1.9;              // m — box trigger radius
 const PICK_Y = 1.9;              // m — and how far below it you may be
 const BOX_RESPAWN = 3.5;         // s
 const ROLL_TIME = 0.7;           // s of roulette before an item is usable
-const BOX_HOVER = 1.15;          // m above the road
+/* How far away a rival's shot is still worth hearing and logging. Both used
+   to be 60-70 m, which on a spread-out grid is "never": the field fires 40 to
+   80 items a race and the cockpit registered almost none of them, which is
+   why the AI reads as though it does not use items at all. */
+const FIRE_HEAR_D = 110;         // m — audio
+const FIRE_LOG_D = 80;           // m — the race log line
+/* A box has to be readable from 150 m at 40 m/s, which the old 1.15 m hover,
+   1.1 rad/s spin and 0.55-roughness amber were not. Higher, bigger, faster,
+   and above the bloom threshold at the top of the pulse. */
+const BOX_HOVER = 1.35;          // m above the road
+const BOX_SCALE = 1.25;          // × the authored geometry
+const BOX_SPIN = 2.2;            // rad/s
+const BOX_BOB = 0.20;            // m of hover travel
+const BOX_EMIT_LO = 0.9, BOX_EMIT_HI = 1.7;   // emissiveIntensity pulse
+const BOX_POP_T = 0.2;           // s to shrink away when collected
+const BOX_IN_T = 0.4;            // s to scale back in on respawn
+const HALO_R = 1.5;              // m — the flat additive disc under each box
 
 /* ---------------- boost pads (contract 6.1 `pads[]`) ---------------- */
 const PAD_HW = 1.6, PAD_LEN = 4, PAD_MUL = 1.6, PAD_TOP = 1.10, PAD_TIME = 1.2;
@@ -90,6 +106,10 @@ const BUCKET = 10;               // m per entry in the arc-length lookup
 
 /* ---------------- module scratch — nothing below allocates ---------------- */
 const _dummy = new THREE.Object3D();
+/* Spline scratch for the storm curtain — module-level and single-writer, the
+   same house rule as _dummy above. */
+const _sp2 = { x: 0, y: 0, z: 0 };
+const _sd2 = { x: 0, y: 0, z: 0 };
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion();
@@ -143,7 +163,18 @@ export class ItemWorld {
       hitSeq: 0, hitTarget: -1, hitOwner: -1, hitItem: -1,
       pickSeq: 0, pickRacer: -1, pickItem: -1,
       padSeq: 0, padRacer: -1,
+      /* Somebody FIRED something. The AI has always fired 40-80 items a race
+         and none of it was legible from the cockpit — no sound past 70 m, no
+         particles at all (Race handed us `vfx: null`), and nothing in the log.
+         `fireNear` is the "close enough to be information" flag. */
+      fireSeq: 0, fireRacer: -1, fireItem: -1, fireNear: false,
+      /* A line of text for the things the game simply never said: a full slot
+         driving through a box, a tow with nothing to hook. */
+      noteSeq: 0, noteText: '',
     };
+    /* Per-box cooldown on the SLOT FULL note, so one long row of boxes does
+       not produce eight identical log lines. */
+    this._noteCd = 0;
 
     /* Per-racer state. Every field declared here, cleared by _clearState. */
     this.st = [];
@@ -180,6 +211,11 @@ export class ItemWorld {
       hazImmune: new Float32Array(MAX_HAZ),
       rollShown: -1,          // which item name the roulette is displaying
       rollTick: 0,
+      /* Bumped on the frame the roulette LANDS on something, which is the
+         moment the item is actually yours. hud.js keys its pickup callout off
+         this (contract 6.6) and deliberately ignores a change made while
+         `rolling` is true, so bumping it at pickup produced nothing at all. */
+      readySeq: 0,
       // boost pads — declared here like everything else (decision 4)
       padT: 0, padCd: 0, padMul: 1, padTop: 1, padLast: -1,
       sledFlame: 0,           // 1 while a vfx flame is lit for this racer
@@ -193,7 +229,7 @@ export class ItemWorld {
     s.towT = 0; s.towTarget = -1;
     s.ghostT = 0;
     s.hazImmune.fill(0);
-    s.rollShown = -1; s.rollTick = 0;
+    s.rollShown = -1; s.rollTick = 0; s.readySeq = 0;
     s.padT = 0; s.padCd = 0; s.padMul = 1; s.padTop = 1; s.padLast = -1;
     s.sledFlame = 0;
   }
@@ -277,13 +313,32 @@ export class ItemWorld {
     if (!n) { this.boxMesh = null; return; }
     const geo = this._keepGeo(itemBoxGeo(P, 149));
     const mat = this._keepMat(new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.55, metalness: 0.15,
-      emissive: 0x201400, emissiveIntensity: 1.0,
+      vertexColors: true, roughness: 0.35, metalness: 0.15,
+      /* Bright cyan, pulsed past the bloom threshold at the peak — the same
+         trick the boost pads use, and the reason they read at range while the
+         boxes did not. */
+      emissive: 0x2fd8f0, emissiveIntensity: BOX_EMIT_LO,
     }));
     const im = new THREE.InstancedMesh(geo, mat, n);
     im.castShadow = true; im.frustumCulled = false;
     this.group.add(im);
     this.boxMesh = im;
+    this.boxMat = mat;
+
+    /* A flat additive disc on the ground under each box. Three draw calls is
+       the budget for this whole file and this is the third: it is what makes a
+       ROW of boxes read as a row from 150 m, rather than four small cubes that
+       resolve into anything at all only once you are on top of them. */
+    const hgeo = this._keepGeo(new THREE.CircleGeometry(HALO_R, 18));
+    hgeo.rotateX(-Math.PI / 2);
+    const hmat = this._keepMat(new THREE.MeshBasicMaterial({
+      color: 0x2fd8f0, transparent: true, opacity: 0.35,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    const halo = new THREE.InstancedMesh(hgeo, hmat, n);
+    halo.frustumCulled = false; halo.renderOrder = 2;
+    this.group.add(halo);
+    this.boxHalo = halo;
     void P;
   }
 
@@ -437,11 +492,18 @@ export class ItemWorld {
        stripe. Its own material because polygonOffset and transparency are
        material state, not geometry. */
     const b = builder();
+    /* Two rings, not one flat disc. A single dark plane on dark rock is
+       invisible until you are on it, which makes the slick feel like bad luck
+       rather than a hazard you failed to read: the pale rim gives it an EDGE
+       and the lighter centre an iridescent sheen, so it reads as spilled oil
+       on any of the five surfaces. */
     b.plane(shade(P.glass, -0.3), 5.2, 5.2, 0, 0, 0, -Math.PI / 2, 0, 0);
+    b.plane(shade(P.glass, 0.45), 3.4, 3.4, 0, 0.012, 0, -Math.PI / 2, 0, 0);
+    b.plane(shade(P.paintAlt, 0.25), 1.7, 1.7, 0, 0.02, 0, -Math.PI / 2, 0, 0);
     const hg = this._keepGeo(b.done());
     this.hazMat = this._keepMat(new THREE.MeshStandardMaterial({
       vertexColors: true, roughness: 0.18, metalness: 0.35,
-      transparent: true, opacity: 0.9, depthWrite: false,
+      transparent: true, opacity: 0.95, depthWrite: false,
       polygonOffset: true, polygonOffsetFactor: -3,
       side: THREE.DoubleSide,
     }));
@@ -452,9 +514,12 @@ export class ItemWorld {
 
     /* One stretched cylinder, respanned per frame — three.js Line ignores
        linewidth on most platforms, so a "line" has to be geometry. */
-    const tg = this._keepGeo(new THREE.CylinderGeometry(0.055, 0.055, 1, 6).rotateX(Math.PI / 2));
+    /* 0.11 m of radius is a thread at any distance the tow actually spans.
+       Doubled, and lit, so the one item that visibly CONNECTS two cars looks
+       like it is doing something. */
+    const tg = this._keepGeo(new THREE.CylinderGeometry(0.11, 0.11, 1, 8).rotateX(Math.PI / 2));
     const tm = this._keepMat(new THREE.MeshStandardMaterial({
-      color: 0x4fd07a, emissive: 0x1d5c33, roughness: 0.5,
+      color: 0x4fd07a, emissive: 0x3fbf6a, emissiveIntensity: 1.3, roughness: 0.4,
     }));
     this.towMesh = new THREE.Mesh(tg, tm);
     this.towMesh.visible = false;
@@ -496,7 +561,12 @@ export class ItemWorld {
           // Roulette: cosmetic only, so Math.random is allowed (house rule 6).
           s.rollTick -= dt;
           if (s.rollTick <= 0) { s.rollTick = 0.06; s.rollShown = (Math.random() * ITEMS.length) | 0; }
-        } else s.rollShown = -1;
+        } else {
+          // The landing edge: was spinning last frame, is not now, and something
+          // came out of it.
+          if (s.rollShown >= 0 && hasItem(s.inv)) s.readySeq++;
+          s.rollShown = -1;
+        }
 
         if (s.boostT > 0) s.boostT -= dt;
         if (s.slowT > 0) s.slowT -= dt;
@@ -591,9 +661,21 @@ export class ItemWorld {
     }
     if (!this.nBox) return;
 
+    if (this._noteCd > 0) this._noteCd -= dt;
     for (let ri = 0; ri < this.racers.length; ri++) {
       const r = this.racers[ri], s = this.st[ri], v = r.vehicle;
-      if (r.finished || !canTake(s.inv)) continue;
+      if (r.finished) continue;
+      if (!canTake(s.inv)) {
+        /* Driving through a box with a full slot does nothing, and the game
+           never said why — which reads as "the boxes are broken". Player
+           only, and rate-limited: this is a nudge, not a nag. */
+        if (r.isPlayer && this._noteCd <= 0 && this._overABox(v, ri)) {
+          this._noteCd = 2.0;
+          this.events.noteSeq++;
+          this.events.noteText = 'SLOT FULL — FIRE IT';
+        }
+        continue;
+      }
       const near = this._near[ri];               // filled once, up in step()
       const b0 = this.bucket[clamp(Math.floor(near.s / BUCKET), 0, this.bucket.length - 1)];
       // The bucket points at the first box at or after this arc length; a car
@@ -609,6 +691,23 @@ export class ItemWorld {
         break;
       }
     }
+  }
+
+  /** Is this car inside a live box's pickup volume? Same test the collect
+      loop uses, factored out so the full-slot note cannot drift from it. */
+  _overABox(v, ri) {
+    const near = this._near[ri];
+    const b0 = this.bucket[clamp(Math.floor(near.s / BUCKET), 0, this.bucket.length - 1)];
+    for (let k = -1; k <= 4; k++) {
+      const bi = b0 + k;
+      if (bi < 0 || bi >= this.nBox || this.boxT[bi] > 0) continue;
+      const dx = v.pos.x - this.boxX[bi], dz = v.pos.z - this.boxZ[bi];
+      if (dx * dx + dz * dz > PICK_R * PICK_R) continue;
+      const dy = v.pos.y - this.boxY[bi];
+      if (dy * dy > PICK_Y * PICK_Y) continue;
+      return true;
+    }
+    return false;
   }
 
   _collect(ri, bi) {
@@ -800,14 +899,40 @@ export class ItemWorld {
    * the player).
    */
   _stormWall(r) {
-    if (!this.vfx) return;
+    if (!this.dust) return;
+    /* SMOKE BELONGS IN dust.js — vfx.js says so in its own header, and this
+       was calling vfx.sparks() for it: four hot points, which at a glance is
+       an electrical fault rather than a face full of grit. A ring of ochre
+       PUFFs at 3 m is what being inside a dust cloud looks like. */
     const v = r.vehicle;
     const a = this._time * 3.1;
-    for (let k = 0; k < 4; k++) {
-      const th = a + k * (Math.PI * 0.5);
+    for (let k = 0; k < 6; k++) {
+      const th = a + k * (Math.PI / 3);
       const cx = Math.sin(th), cz = Math.cos(th);
-      this.vfx.sparks(2, v.pos.x + cx * 2.2, v.pos.y + 0.8, v.pos.z + cz * 2.2,
-        cx, 0.35, cz, 2.2, 1.4, 0.72, 0.60, 0.42, 0.7);
+      this.dust.spawn(1, v.pos.x + cx * 3.0, v.pos.y + 0.9, v.pos.z + cz * 3.0,
+        1.6, 0.9, cx, cz, 0.72, 0.60, 0.42, DUST_KIND.PUFF);
+    }
+  }
+
+  /**
+   * The wall the storm actually is: a curtain of ochre dust thrown across the
+   * road ahead of whoever fired it. Sited off the ROAD, not off the car, so it
+   * spans the corridor rather than trailing one bumper.
+   */
+  _stormBurst(ri) {
+    if (!this.dust) return;
+    const near = this._near[ri];
+    const s0 = near ? near.s : 0;
+    const sp = this.spline;
+    for (let k = 0; k < 40; k++) {
+      const s = (s0 + 12 + (k % 8) * 3) % this.lapLength;
+      sp.posAt(s, _sp2);
+      sp.dirAt(s, _sd2);
+      const nx = -_sd2.z, nz = _sd2.x;
+      const w = sp.widthAt(s);
+      const lat = ((k / 40) * 2 - 1) * w;
+      this.dust.spawn(1, _sp2.x + nx * lat, _sp2.y + 0.6 + (k % 5) * 0.5, _sp2.z + nz * lat,
+        2.4, 1.6, 0, 0, 0.74, 0.62, 0.44, DUST_KIND.PUFF);
     }
   }
 
@@ -942,6 +1067,10 @@ export class ItemWorld {
     this.events.pickRacer = -1;
     this.events.pickItem = -1;
     const v = r.vehicle;
+    this.events.fireSeq++;
+    this.events.fireRacer = ri;
+    this.events.fireItem = def.id;
+    this.events.fireNear = !r.isPlayer && this._camNear(v, FIRE_LOG_D);
 
     switch (def.kind) {
       case 'boost':
@@ -963,7 +1092,7 @@ export class ItemWorld {
         this.pSpin[i] = def.spin;
         this.pOwner[i] = ri;
         this.pBounce[i] = 0;
-        if (r.isPlayer || this._camNear(v, 70)) this.audio.itemThrow(r.isPlayer ? 1 : 0.4);
+        if (r.isPlayer || this._camNear(v, FIRE_HEAR_D)) this.audio.itemThrow(r.isPlayer ? 1 : 0.4);
         break;
       }
       case 'hazard': {
@@ -978,18 +1107,32 @@ export class ItemWorld {
         for (let k = 0; k < this.st.length; k++) this.st[k].hazImmune[i] = 0;
         // the dropper gets a moment's grace so they cannot spin themselves
         s.hazImmune[i] = 1.0;
-        if (r.isPlayer || this._camNear(v, 60)) this.audio.itemDrop(r.isPlayer ? 1 : 0.4);
+        if (r.isPlayer || this._camNear(v, FIRE_HEAR_D)) this.audio.itemDrop(r.isPlayer ? 1 : 0.4);
         break;
       }
       case 'tow': {
         const ti = this._findTarget(r, def);
-        if (ti < 0) { this._boost(ri, ITEMS[ITEM.NITRO]); break; }   // never waste a pickup
+        if (ti < 0) {
+          this._boost(ri, ITEMS[ITEM.NITRO]);   // never waste a pickup
+          /* …but say so. Silently turning into a different item is the sort
+             of thing that makes a system feel broken rather than generous. */
+          if (r.isPlayer) {
+            this.events.noteSeq++;
+            this.events.noteText = 'NO LOCK — NITRO INSTEAD';
+          }
+          break;
+        }
         s.towT = def.time; s.towTarget = ti;
+        if (this.vfx) {
+          const tv = this.racers[ti].vehicle;
+          this.vfx.sparks(14, tv.pos.x, tv.pos.y + 0.5, tv.pos.z, 0, 1, 0, 5.0, 1.0,
+            0.31, 0.82, 0.48, 0.8);
+        }
         /* A tow never routes through _spin, so without this the only two
            effects in the roster that take time off somebody else would be
            invisible to every events reader. */
         this._noteHit(ti, ri, def.id);
-        if (r.isPlayer || this._camNear(v, 70)) this.audio.towSnap(r.isPlayer ? 1 : 0.4);
+        if (r.isPlayer || this._camNear(v, FIRE_HEAR_D)) this.audio.towSnap(r.isPlayer ? 1 : 0.4);
         break;
       }
       case 'sled':
@@ -1002,6 +1145,7 @@ export class ItemWorld {
         }
         break;
       case 'storm': {
+        this._stormBurst(ri);
         const myPos = r.pos || this.racers.length;
         for (let i = 0; i < this.racers.length; i++) {
           const o = this.racers[i];
@@ -1012,6 +1156,13 @@ export class ItemWorld {
           if (o.isPlayer) this.blindT = def.time;
         }
         this.audio.stormHit(r.isPlayer ? 1 : 0.5);
+        if (r.isPlayer) {
+          /* The one item whose whole effect happens to OTHER people. Without
+             this the player fires it, nothing visibly changes, and it reads as
+             a dud — which is precisely what QA reported. */
+          this.events.noteSeq++;
+          this.events.noteText = 'DUST STORM — EVERYONE AHEAD IS BLINDED';
+        }
         break;
       }
       default: break;
@@ -1061,22 +1212,43 @@ export class ItemWorld {
     if (!this.enabled) return;
 
     if (this.boxMesh) {
+      // One pulse for the whole row: an instanced material has one uniform.
+      if (this.boxMat) {
+        this.boxMat.emissiveIntensity =
+          BOX_EMIT_LO + (BOX_EMIT_HI - BOX_EMIT_LO) * (0.5 + 0.5 * Math.sin(t * 3.0));
+      }
       for (let i = 0; i < this.nBox; i++) {
-        const gone = this.boxT[i] > 0;
-        if (gone) {
-          _dummy.position.set(this.boxX[i], this.boxY[i], this.boxZ[i]);
-          _dummy.rotation.set(0, 0, 0);
-          _dummy.scale.setScalar(0.0001);
-        } else {
-          _dummy.position.set(this.boxX[i],
-            this.boxY[i] + Math.sin(t * 1.8 + i * 1.7) * 0.16, this.boxZ[i]);
-          _dummy.rotation.set(0, t * 1.1 + i * 0.9, 0);
-          _dummy.scale.setScalar(1);
+        const cd = this.boxT[i];
+        /* Scale, not a teleport to 0.0001. A box that vanishes between two
+           frames does not read as "you got that" — it reads as a glitch, and
+           the shrink is the only confirmation the world gives you. */
+        const live = cd <= 0;
+        const since = BOX_RESPAWN - cd;          // s since it was collected
+        let k = 1;
+        if (!live) {
+          if (since < BOX_POP_T) k = 1 - since / BOX_POP_T;      // shrink away
+          else if (cd < BOX_IN_T) k = 1 - cd / BOX_IN_T;         // scale back in
+          else k = 0;
         }
+        k = Math.max(0.0001, Math.min(1, k));
+        _dummy.position.set(this.boxX[i],
+          this.boxY[i] + (live ? Math.sin(t * 1.8 + i * 1.7) * BOX_BOB : 0), this.boxZ[i]);
+        _dummy.rotation.set(0, t * BOX_SPIN + i * 0.9, 0);
+        _dummy.scale.setScalar(k * BOX_SCALE);
         _dummy.updateMatrix();
         this.boxMesh.setMatrixAt(i, _dummy.matrix);
+
+        if (this.boxHalo) {
+          const hk = live ? (0.85 + 0.15 * Math.sin(t * 3.0 + i * 1.3)) : 0.0001;
+          _dummy.position.set(this.boxX[i], this.boxY[i] - BOX_HOVER + 0.06, this.boxZ[i]);
+          _dummy.rotation.set(0, 0, 0);
+          _dummy.scale.setScalar(hk);
+          _dummy.updateMatrix();
+          this.boxHalo.setMatrixAt(i, _dummy.matrix);
+        }
       }
       this.boxMesh.instanceMatrix.needsUpdate = true;
+      if (this.boxHalo) this.boxHalo.instanceMatrix.needsUpdate = true;
     }
 
     for (let i = 0; i < MAX_PROJ; i++) {
@@ -1152,6 +1324,15 @@ export class ItemWorld {
     out.name = def ? def.name : '';
     out.col = def ? def.col : 0;
     out.charges = out.rolling ? 0 : s.inv.charges;
+    /* The rest of hud.js's §6.6 contract, which nothing had ever filled in.
+       `seq` bumps when the ROULETTE LANDS, not when the box is taken: the
+       HUD deliberately swallows a seq change while `rolling` is true, so a
+       pickup-time bump produced no banner at all — which is why the callout
+       has never been seen. */
+    out.seq = s.readySeq;
+    out.icon = def ? (def.icon || '') : '';
+    out.use = def ? (def.use || 'FIRE') : '';
+    out.hint = def ? (def.hint || '') : '';
     return out;
   }
 
@@ -1312,6 +1493,7 @@ export class ItemWorld {
     this.boxT.fill(0);
     if (this.padHit) this.padHit.fill(0);
     this.blindT = 0;
+    this._noteCd = 0;
     this.stats.fired = 0; this.stats.hits = 0; this.stats.taken = 0;
     const e = this.events;
     e.hitSeq = 0; e.hitTarget = -1; e.hitOwner = -1; e.hitItem = -1;

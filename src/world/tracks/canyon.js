@@ -3,12 +3,23 @@
    ------------------------------------------------------------
    Data only: no three imports (see tracks/training.js).
 
+   ELEVATION. The front half of the lap (s 0-900) runs ON the wash floor:
+   every control point sits ~0.5 m above the canyon theme's base noise, so the
+   terrain bake has nothing to lift. It used to be authored 10-19 m higher, and
+   because the bake resolves a road above the base by raising terrain INTO an
+   embankment, that turned the whole front half into a causeway with 49 deg
+   drop-offs 13 m off the centreline and no walls to catch you -- the #1 reset
+   site on the campaign. The one place the road still stands proud of the floor
+   is s 490-610, ~5.4 m over a natural hollow: that embankment IS the slab THE
+   GAP is cut into, and the gap's ballistics need it level. The back half
+   (s 950-1550) is CUT INTO the mesas -- road below base -- which is the canyon
+   look and stays as drawn. dev/track-check.mjs gates the raise.
+
    The lap in four acts:
      s    0- 300  MESA LAUNCHER off the opening straight at 40+ m/s,
                   then a hip that turns you into the top sweeper
-     s  300- 470  the MESA TOP route peels off here and runs the bench
-                  above the wash, paying for the height with a shelf
-                  drop back on to the road
+     s  300- 470  the MESA TOP route peels off here and cuts a slot through
+                  the hoodoo, paying for the line with a step back down
      s  452- 500  THE SHELF: 2.5 m of ledge that simply stops
      s  560- 740  THE GAP. A 24 m void carved across the straight
                   behind a 3.2 m kicker. Ballistics say ~26 m/s clears
@@ -24,29 +35,32 @@ import { SURF } from '../surfaces.js';
 
 /* THE SLOT. Leaves the main line 70 m before THE GAP's kicker and rejoins 10 m
    past the landing, so a racer who bottles the gap has somewhere to go and
-   still passes a checkpoint with the same idx. */
+   still passes a checkpoint with the same idx. It drops off the gap slab into
+   the hollow the gap is cut through and climbs back to the road at s1 — both
+   ends meet the main line within 0.05 m. */
 const SLOT = {
   id: 'slot', name: 'THE SLOT', s0: 560, s1: 735, aiBias: 0.35,
   path: [
-    { x: -118.3, z: 189.9, y: 3.1, w: 6.5 }, { x: -141, z: 185.4, y: 4.2, w: 6.5 }, { x: -162.3, z: 179.5, y: 5.3, w: 6.5 },
-    { x: -181.5, z: 171.8, y: 6.4, w: 6.5 }, { x: -197.7, z: 161.3, y: 7.4, w: 6.5 }, { x: -209.9, z: 148.4, y: 8.4, w: 6.5 },
-    { x: -217.9, z: 133.6, y: 9.2, w: 6.5 }, { x: -223.3, z: 114.9, y: 9.9, w: 6.5 }, { x: -225.5, z: 92.8, y: 10.4, w: 6.5 },
-    { x: -223.5, z: 70, y: 10.5, w: 6.5 }, { x: -218.8, z: 47.3, y: 10.5, w: 6.5 }
+    { x: -118.3, z: 189.9, y: -3.2, w: 6.5 }, { x: -141, z: 185.4, y: -3.8, w: 6.5 }, { x: -162.3, z: 179.5, y: -4.3, w: 6.5 },
+    { x: -181.5, z: 171.8, y: -4.6, w: 6.5 }, { x: -197.7, z: 161.3, y: -4.7, w: 6.5 }, { x: -209.9, z: 148.4, y: -4.4, w: 6.5 },
+    { x: -217.9, z: 133.6, y: -4.1, w: 6.5 }, { x: -223.3, z: 114.9, y: -3.9, w: 6.5 }, { x: -225.5, z: 92.8, y: -3.4, w: 6.5 },
+    { x: -223.5, z: 70, y: -2.8, w: 6.5 }, { x: -218.8, z: 47.3, y: -2.3, w: 6.5 }
   ]
 };
 
-/* MESA TOP. An optional bench line above the wash: 15 m longer than the road it
-   replaces and it ends in a drop, so it is never the safe choice — it is the
-   stunt line, and the AI is told as much through a low aiBias. Its `jumps` are
-   in the ROUTE's own arc length. */
+/* MESA TOP. A slot line through the hoodoo, then a step back down: 23 m longer
+   than the road it replaces and it ends in a drop, so it is never the safe
+   choice — it is the stunt line, and the AI is told as much through a low
+   aiBias. Points 1-2 run BELOW the hoodoo's base noise, so the bake carves them
+   into a slot. Its `jumps` are in the ROUTE's own arc length. */
 const MESA_TOP = {
   id: 'mesatop', name: 'MESA TOP', s0: 300, s1: 470, aiBias: 0.15,
   path: [
-    { x: 111.9, z: 256.3, y: 8.5, w: 6.5 }, { x: 96.6, z: 269.4, y: 9.5, w: 6.5 },
-    { x: 79.8, z: 282.9, y: 11.5, w: 6.5 }, { x: 60.3, z: 293.5, y: 13.1, w: 6.5 },
-    { x: 39, z: 298.7, y: 13.5, w: 6.5 }, { x: 17.6, z: 297.5, y: 12.4, w: 6.5 },
-    { x: -2.7, z: 290.2, y: 9.8, w: 6.5 }, { x: -20.9, z: 278, y: 6.2, w: 6.5 },
-    { x: -36.7, z: 263.2, y: 2.4, w: 6.5 }, { x: -50.9, z: 248.9, y: -0.2, w: 6.5 }
+    { x: 111.9, z: 256.3, y: -2.3, w: 6.5 }, { x: 96.6, z: 269.4, y: -1.6, w: 6.5 },
+    { x: 79.8, z: 282.9, y: -0.4, w: 6.5 }, { x: 60.3, z: 293.5, y: 0.8, w: 6.5 },
+    { x: 39, z: 298.7, y: 1.2, w: 6.5 }, { x: 17.6, z: 297.5, y: 0.6, w: 6.5 },
+    { x: -2.7, z: 290.2, y: -0.8, w: 6.5 }, { x: -20.9, z: 278, y: -2.0, w: 6.5 },
+    { x: -36.7, z: 263.2, y: -2.8, w: 6.5 }, { x: -50.9, z: 248.9, y: -2.7, w: 6.5 }
   ],
   /* Route arc length, not the main line's. Sited at 150 of 194: any earlier and
      the ledge would fire the car over the bench's own curve back to the road. */
@@ -63,17 +77,17 @@ export default {
   difficulty: 0.45,
 
   path: [
-    { x: 233.4, z: 0, y: 4.3, w: 10 }, { x: 229.1, z: 49.8, y: 9.5, w: 9.8 }, { x: 222.5, z: 99.4, y: 13.4, w: 9.5 },
-    { x: 208.7, z: 147.4, y: 15.2, w: 9.1 }, { x: 186, z: 191.8, y: 14.8, w: 8.9 }, { x: 152.5, z: 228.8, y: 12.3, w: 8.6 },
-    { x: 111.1, z: 256.7, y: 8.4, w: 8.4 }, { x: 63.5, z: 271.5, y: 4.4, w: 8.2 }, { x: 13.6, z: 271.3, y: 1.3, w: 8 },
-    { x: -34.3, z: 257.6, y: -0.2, w: 8 }, { x: -76.5, z: 231, y: 0.4, w: 8.1 }, { x: -112.6, z: 196.4, y: 2.6, w: 8.2 },
+    { x: 233.4, z: 0, y: 1.0, w: 10 }, { x: 229.1, z: 49.8, y: 0.2, w: 9.8 }, { x: 222.5, z: 99.4, y: -1.8, w: 9.5 },
+    { x: 208.7, z: 147.4, y: -2.9, w: 9.1 }, { x: 186, z: 191.8, y: -3.1, w: 8.9 }, { x: 152.5, z: 228.8, y: -2.0, w: 8.6 },
+    { x: 111.1, z: 256.7, y: -2.3, w: 8.4 }, { x: 63.5, z: 271.5, y: -1.8, w: 8.2 }, { x: 13.6, z: 271.3, y: -2.4, w: 8 },
+    { x: -34.3, z: 257.6, y: -2.6, w: 8 }, { x: -76.5, z: 231, y: -3.5, w: 8.1 }, { x: -112.6, z: 196.4, y: -3.8, w: 8.2 },
     /* The three control points after THE GAP were re-graded in wave 6: the lap
        used to keep climbing at ~3.7 % through the landing, and a 24 m gap that
        lands on rising ground cases every time. The crest now arrives WITH the
        landing (s=654), so the runway is level and the climb resumes after it. */
-    { x: -143.8, z: 157.3, y: 5.7, w: 8.4 }, { x: -173.4, z: 117, y: 9.4, w: 8.6 }, { x: -202.5, z: 76.3, y: 9.9, w: 8.9 },
-    { x: -225.9, z: 32.1, y: 10.0, w: 9.2 }, { x: -241.5, z: -15.3, y: 8.2, w: 9.4 }, { x: -247.2, z: -65, y: 4.5, w: 9.5 },
-    { x: -241.8, z: -114.6, y: -0.1, w: 9.4 }, { x: -225.5, z: -161.8, y: -4.6, w: 9 }, { x: -196.2, z: -202.1, y: -8.4, w: 8.5 },
+    { x: -143.8, z: 157.3, y: -3.2, w: 8.4 }, { x: -173.4, z: 117, y: -2.4, w: 8.6 }, { x: -202.5, z: 76.3, y: -2.4, w: 8.9 },
+    { x: -225.9, z: 32.1, y: -2.3, w: 9.2 }, { x: -241.5, z: -15.3, y: -2.0, w: 9.4 }, { x: -247.2, z: -65, y: -2.1, w: 9.5 },
+    { x: -241.8, z: -114.6, y: -2.8, w: 9.4 }, { x: -225.5, z: -161.8, y: -4.6, w: 9 }, { x: -196.2, z: -202.1, y: -8.4, w: 8.5 },
     { x: -155.8, z: -231.2, y: -11.2, w: 7.9 }, { x: -107.8, z: -235.4, y: -12.8, w: 7.6 }, { x: -66.7, z: -207.5, y: -13.5, w: 7.5 },
     { x: -31.8, z: -171.6, y: -13.7, w: 7.5 }, { x: 13.9, z: -165.8, y: -13.8, w: 7.8 }, { x: 59.2, z: -187, y: -13.7, w: 8.2 },
     { x: 108.4, z: -193.1, y: -13.3, w: 8.5 }, { x: 155.5, z: -177.7, y: -12.1, w: 8.8 }, { x: 191, z: -143, y: -9.7, w: 9.1 },
@@ -96,9 +110,13 @@ export default {
   ],
 
   jumps: [
-    // 22 m of ramp at 5.0 m: the longest hang time on the campaign, fired down
-    // the opening straight at 40+ m/s. This is where the trick system lives.
-    { s: 100, len: 22, h: 5.0, name: 'MESA LAUNCHER' },
+    // A table, not a kicker. As a 5.0 m ramp this fired 141 m at 40+ m/s and
+    // landed inside the next sweeper on a climbing road -- the single worst
+    // reset site on the campaign. At 2.6 m the lip is 12 deg: ~90 m on to level
+    // road at racing speed, on to the deck at a crawl, and still ~2 s of air,
+    // so the trick system keeps its showpiece. Keep `cp`: checkpoint idx 1
+    // lives on this lip and track-check's MAX_CP_GAP fails without it.
+    { s: 100, len: 22, h: 2.6, kind: 'table', top: 14, down: 10, name: 'MESA LAUNCHER' },
     // Hip: the lip line is angled 15 deg the other way, so the car leaves it
     // already pointed into the sweeper. No gate — MESA LAUNCHER has one 150 m back.
     { s: 250, len: 12, h: 2.0, kind: 'hip', yaw: -15, cp: false },

@@ -325,7 +325,20 @@ race.resetHold), not edge.
 ### Settings keys (Save.settings(), applied by T5, edited via UI 'settings')
 quality ('low'|'medium'|'high'|'ultra'), fov (42..82 base 58), sens, volSfx, volMusic,
 music (bool), camMode, invertY, hudScale, grain (0|0.35|1), autoCentre (0|1|2),
-showTouch ('auto'|'on'|'off'), items (bool, default true — power-ups; mini-turbo ignores it)
+showTouch ('auto'|'on'|'off'), items (bool, default true — power-ups; mini-turbo ignores it),
+motionFx (0|0.5|1), tips (bool), trickAssist (0|1|2), rivals ('easy'|'normal'|'hard')
+
+`Save.settings()` stores one blob with no per-key whitelist, so adding a key needs only
+`main.js DEFAULTS` + `ui.js SETTINGS_SPEC`. Three of the four above reach the race through
+`Race`'s option bag: `trickAssist` (the player's Vehicle; rivals are pinned at 2), `tips`
+(gates the first-run cards) and `rivals` (via `main.js applyRivals()`, which writes
+`AI_BALANCE.player` and shifts `difficultyFor()`).
+
+**`vfx` is now threaded into Race** alongside terrain/sky/props/dust:
+`main.js` passes `App.world.vfx`, Race forwards it to `ItemWorld` and `RaceFX` (both of
+which were constructed with `vfx: null`), calls `vfx.update(dt, cam)` per frame and
+`vfx.dispose()` on teardown — an integrator building a Race by hand must pass it or every
+item and prop particle effect silently does nothing.
 
 ### Standings/timing source of truth
 racecore.RaceTracker per ARCHITECTURE.md. race.js owns wall-clock (raceTime starts at GO).

@@ -51,6 +51,8 @@ const SETTINGS_SPEC = [
   { key: 'items', label: 'POWER-UPS',
     hint: 'Item boxes, weapons and catch-up. OFF for clean time attack — the drift boost stays.',
     type: 'seg', opts: [[false, 'OFF'], [true, 'ON']], def: true },
+  { key: 'rivals', label: 'RIVALS', hint: 'How hard the AI races you. Applies from the next race.',
+    type: 'seg', opts: [['easy', 'EASY'], ['normal', 'NORMAL'], ['hard', 'HARD']], def: 'normal' },
   { key: 'quality', label: 'QUALITY', hint: 'Render tier. Drop it if the frame rate dips.',
     type: 'seg', opts: [['low', 'LOW'], ['medium', 'MED'], ['high', 'HIGH'], ['ultra', 'ULTRA']], def: 'high' },
   { key: 'fov', label: 'FIELD OF VIEW', hint: 'Base chase-camera FOV in degrees.',

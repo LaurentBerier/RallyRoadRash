@@ -423,9 +423,13 @@ AI follows the racing line with pure-pursuit steering + PI speed control against
 `racingLine.speed` scaled by skill; brakes early for corners/jumps by look-ahead; avoids/
 overtakes via lateral offset when a slower vehicle blocks the line; may take the shortcut
 (probability by skill); recovers via race.js reset when flagged stuck; makes occasional
-believable mistakes (noise on entry speed, late braking when aggressive). Balancing: mild —
-±4 % top-speed handicap by position, hard-capped, documented in config. **Same Vehicle
-physics as the player — AI outputs only `ctl`.**
+believable mistakes (noise on entry speed, late braking when aggressive). Balancing runs on
+TWO axes, both on the AI's *speed targets* and never on the vehicle: the ±1.5 % ladder by
+position among the six cars (`AI_BALANCE.leader`/`trailing`), and — since wave 7 — a band
+against the PLAYER's gap in seconds (`AI_BALANCE.player`, replaced wholesale by the RIVALS
+setting). The ladder alone kept the field beautifully balanced against itself while it drove
+off up the road. Both are hard-capped and eased. **Same Vehicle physics as the player — AI
+outputs only `ctl`.**
 
 ## Camera & feel — `camera.js`, `feel.js` (T8)
 
@@ -558,16 +562,35 @@ cues that already exist. `makeDrift()`'s key set does not change (boost-check A8
 
 ### 6.6 HUD payload additions (race.js writes, hud.js reads; pre-allocated, strings only on change)
 
+**IMPLEMENTED in wave 7.** hud.js had all of this built since wave 5 and race.js filled in
+none of it, so the pickup banner, the item icon, the race log, the mini-turbo charge arc,
+the boost bar, the trick pop and the FINAL LAP banner had never once drawn.
+
 ```
-vehicle: { …, drift 0..1, driftTier, boost 0..1, boostTier, padT,
-           trick: { id, name, pts, seq } }
+vehicle: { …, drift 0..1, driftTier, boost 0..1, boostTier,
+           trick: { id, name, pts, tier, seq } }        // Vehicle.hudDrift/hudTrick
 race:    { …, finalLap, style, styleBest }
-item:    { …, icon, seq }
-events:  { hitSeq, hitBy, hitWith, landSeq, padSeq }
+item:    { …, icon, seq, use, hint }                    // seq bumps when the ROULETTE LANDS
+events:  { hitSeq, hitBy, hitWith, dealtSeq, dealtTo, dealtWith,
+           rivalFireSeq, rivalFireBy, rivalFireWith,
+           noteSeq, noteText, landSeq, padSeq }
 ```
 
-Plus `hud.setInputMethod(m)` (P6), called beside `ui.setInputMethod`, and
-`hud.tip(id, text, ttl)` (P6) for first-run tips.
+`item.seq` bumps on the frame the roulette lands, **not** at pickup: `hud._itemEvent`
+deliberately swallows a seq change while `rolling` is true, so a pickup-time bump produced
+no banner at all. `use` is the verb on the prompt (`<NAME> — PRESS <KEY> TO <USE>`) and
+`hint` an optional second line; both live on the item defs and are gated by
+`dev/items-check.mjs`. `Vehicle.hudDrift(out)` / `hudTrick(out)` are allocation-free
+accessors that copy out of miniturbo.js's and tricks.js's private state.
+
+Plus `hud.setInputMethod(m)` (P6), called beside `ui.setInputMethod` — it never was until
+wave 7, so the keycap read "F" on a pad — and `hud.tip(id, text, ttl)` (P6) for first-run
+tips, which race.js now actually calls for `items`, `drift` and `pad`.
+
+**`vfx` is threaded into Race.** `main.js` passes `App.world.vfx`; Race hands it to both
+ItemWorld and RaceFX (which were constructed with `vfx: null`) and calls `vfx.update(dt, cam)`
+each frame and `vfx.dispose()` on teardown. It was the one member of `App.world` that leaked
+on every quit.
 
 ### 6.7 AI ↔ ItemWorld read-only accessors (P5 owns both sides)
 
@@ -578,7 +601,9 @@ threats(out)        // caller-owned typed arrays: live projectiles + hazards
                     //   { n, x, z, vx, vz, r, kind }
 nearestBox(ri, out)   nearestPad(ri, out)   canLock(ri)   hasItem(ri)
 events              // scalars: hitSeq, hitTarget, hitOwner, hitItem,
-                    //          pickSeq, pickRacer, pickItem, padSeq, padRacer
+                    //          pickSeq, pickRacer, pickItem, padSeq, padRacer,
+                    //          fireSeq, fireRacer, fireItem, fireNear,
+                    //          noteSeq, noteText
 ```
 
 Read-only means read-only: the AI never mutates anything it reaches through `ctx.items`.
@@ -610,8 +635,12 @@ in that file moves.
   from any one of them is silently dropped.
 - `EXTRA_TRACKS = ['thunder']`; `REQUIREMENT.thunder = { track: 'canyon', podium: true }`;
   `REWARDS.canyon.tracks = ['forest', 'thunder']`; whitelist over `ALL_TRACKS`.
-- Settings keys `motionFx` (0 | 0.5 | 1), `tips` (bool), `trickAssist` (0 | 1 | 2) in
-  `main.js DEFAULTS` (lead) and `ui.js SETTINGS_SPEC` (P6).
+- Settings keys `motionFx` (0 | 0.5 | 1), `tips` (bool), `trickAssist` (0 | 1 | 2) and
+  `rivals` ('easy' | 'normal' | 'hard') in `main.js DEFAULTS` (lead) and
+  `ui.js SETTINGS_SPEC` (P6). `save.js` has no per-key whitelist — settings are one blob —
+  so a new key needs nothing else. `rivals` drives `main.js`'s `RIVALS` table, which feeds
+  both `difficultyFor()` and `AI_BALANCE.player`; `trickAssist` reaches the player's Vehicle
+  through `Race`'s option bag (before wave 7 it reached no car at all).
 - Bindings (P4, `input.js`): `KeyQ`/`KeyE` → `roll ∓1`; pad buttons 4/5 (LB/RB) → roll;
   handbrake **held while airborne** is the trick modifier (steer rolls instead of yaws).
   Touch is unchanged.

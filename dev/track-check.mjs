@@ -20,8 +20,13 @@
      - a gap or drop whose landing runway climbs, or whose flight is bent:
        the siting rule volcano.js states in prose for CALDERA LEAP, enforced
      - a track with no finite `difficulty`, or THUNDER PARK not flagged bonus
+     - a RAISED ROAD: the terrain bake resolves an authored road above the
+       theme's base noise by lifting terrain into an embankment, so a road
+       authored too high becomes a causeway with unwalled drop-offs. Gated on
+       canyon (see its header); every track prints its profile.
    ============================================================ */
-import { buildTrackData } from '../src/world/track.js';
+import { buildTrackData, spanHas } from '../src/world/track.js';
+import { themeBaseFn } from '../src/world/terrain-bake.js';
 import { TRACKS } from '../src/world/tracks/index.js';
 import { SURFACES } from '../src/world/surfaces.js';
 
@@ -40,12 +45,57 @@ const MAX_BANK_DEG = 28;
    racing speed — h metres of fall is sqrt(2h/G) seconds of it. */
 const RUNWAY_M = 40, RUNWAY_GRADE = 0.02, FLIGHT_K = 1 / 80;
 const DROP_V = 25, G_ARCADE = 12.8;
+/* Raised road. `raise` is centreline y minus the theme base noise at that xz;
+   where it is positive the bake builds an embankment, and the shoulder it cuts
+   gets steeper and longer with the raise. RAISE_STEP is the sample spacing,
+   RAISE_RUN the longest embankment we will accept without walls on it.
+   MAX_RAISE is 6 m rather than the ~3 m the wash floor actually sits at
+   because canyon's gap slab (s 500-660) is a deliberate 5.8 m bench over a
+   natural hollow — the gap's runway has to be level. Only tracks listed in
+   RAISE_GATED fail; forest and volcano have intentional shelf roads. */
+const RAISE_STEP = 10, RAISE_THRESH = 4, RAISE_RUN = 200;
+const RAISE_GATED = { canyon: { s0: 40, s1: 900, max: 6.0 } };
 
 let failures = 0;
 const _sc = { x: 0, y: 0, z: 0 }, _sc2 = { x: 0, y: 0, z: 0 };
 const fail = (t, msg) => { failures++; console.log(`  FAIL [${t}] ${msg}`); };
 const warn = (t, msg) => console.log(`  warn [${t}] ${msg}`);
 const f1 = (v) => v.toFixed(1);
+
+/* How far the authored road stands above the theme's base terrain, and for how
+   long without walls. The bake lifts terrain to meet a road above the base, so
+   this is the height of the embankment the player can fall off. */
+function raiseAudit(id, def, td) {
+  const base = themeBaseFn(def.theme);
+  const sp = td.spline, L = sp.length;
+  const walled = (s) => td.walls.some((w) => spanHas(w.s0, w.s1, s, L));
+  let max = 0, maxS = 0, run = 0, runStart = 0, worstRun = 0, worstAt = 0, worstEnd = 0;
+  const gate = RAISE_GATED[id];
+  let gateMax = 0, gateAt = 0;
+  for (let s = 0; s < L; s += RAISE_STEP) {
+    const p = sp.posAt(s, _sc);
+    const r = p.y - base(p.x, p.z);
+    if (r > max) { max = r; maxS = s; }
+    if (gate && spanHas(gate.s0, gate.s1, s, L) && r > gateMax) { gateMax = r; gateAt = s; }
+    if (r > RAISE_THRESH && !walled(s)) {
+      if (run === 0) runStart = s;
+      run += RAISE_STEP;
+      if (run > worstRun) { worstRun = run; worstAt = runStart; worstEnd = s; }
+    } else run = 0;
+  }
+  console.log(`  raisedRoad  max ${f1(max)} m above base terrain at s=${Math.round(maxS)}` +
+    (worstRun > 0
+      ? `   longest unwalled embankment over ${RAISE_THRESH} m: ${worstRun} m (s=${Math.round(worstAt)}..${Math.round(worstEnd)})`
+      : `   no unwalled embankment over ${RAISE_THRESH} m`));
+  if (gate && gateMax > gate.max) {
+    fail(id, `road stands ${f1(gateMax)} m above the base terrain at s=${Math.round(gateAt)} ` +
+      `(limit ${gate.max} m over s ${gate.s0}..${gate.s1}) — the bake will build a causeway there`);
+  }
+  if (gate && worstRun > RAISE_RUN) {
+    fail(id, `${worstRun} m of unwalled embankment over ${RAISE_THRESH} m from s=${Math.round(worstAt)} ` +
+      `— over the ${RAISE_RUN} m limit; lower the road or wall it`);
+  }
+}
 
 /* deterministic sampler so a failure is reproducible */
 function rngFrom(seed) {
@@ -213,6 +263,9 @@ for (const def of TRACKS) {
     }
     if (!(q.amp <= MAX_WHOOP_AMP)) fail(id, `whoops ${q.s0}..${q.s1} amplitude ${q.amp} m > ${MAX_WHOOP_AMP} m`);
   }
+
+  /* ---------- 5c. raised road ---------- */
+  raiseAudit(id, def, td);
   if (td.banks.length || td.whoops.length || td.berms.length) {
     console.log(`  profile    ${td.banks.length} bank(s) ` +
       td.banks.map(b => `${b.s0}-${b.s1}@${b.deg}deg`).join(' ') +

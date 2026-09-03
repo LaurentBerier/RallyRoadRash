@@ -737,10 +737,19 @@ export function logStackGeo(P, seed) {
  * terrain level. The kit check's `sink` allowance covers the diamond's
  * bottom point.
  */
+/* PICKUP CYAN, and it is deliberately NOT from the theme palette. The box used
+   to be painted `P.hazard` — the same matte amber as every barrier, cone and
+   warning prop in every theme — over a near-black emissive, so at any distance
+   it read as one more piece of hazard furniture. A pickup has to be the one
+   object on the stage that is obviously not scenery, and it has to look the
+   same on all five stages so the lesson transfers. */
+const BOX_CORE = 0xdff8ff;           // cyan-white
+const BOX_MARK = 0x14c8e6;           // the ? and the ring under it
+
 export function itemBoxGeo(P, seed) {
   const b = builder();
   const S = 0.52;                      // half-edge
-  const core = P.hazard;
+  const core = BOX_CORE;
   // the cube, as six inset faces over a dark shell so the edges read
   b.box(shade(core, -0.45), S * 2.0, S * 2.0, S * 2.0, 0, 0.55, 0);
   const f = S * 1.72, d = S * 2.04;
@@ -750,20 +759,32 @@ export function itemBoxGeo(P, seed) {
   b.plane(shade(core, -0.12), f, f, -d * 0.5, 0.55, 0, 0, -Math.PI / 2, 0);
   b.plane(shade(core, 0.14), f, f, 0, 0.55 + d * 0.5, 0, -Math.PI / 2, 0, 0);
   b.plane(shade(core, -0.30), f, f, 0, 0.55 - d * 0.5, 0, Math.PI / 2, 0, 0);
-  // the accent chevron on the four upright faces — the "there is something
-  // in here" mark, and what makes it read as a pickup rather than a crate
-  const a = P.paintAlt;
+  /* A QUESTION MARK on each of the four upright faces, built from five accent
+     bars the same way the chevrons were. A chevron is a direction; a "?" is
+     the universal "unknown pickup", which is the one thing the box actually
+     means and the one thing it never said. */
+  const a = BOX_MARK;
+  const QM = [
+    // [w, h, x, y, rot] in face-local space — hook, stem, dot
+    [0.20, 0.06, -0.02, 0.20, 0],
+    [0.06, 0.10, 0.07, 0.14, 0],
+    [0.06, 0.09, 0.00, 0.06, 0],
+    [0.06, 0.09, 0.00, -0.02, 0],
+    [0.07, 0.07, 0.00, -0.14, 0],
+  ];
   for (let i = 0; i < 4; i++) {
     const ang = i * Math.PI * 2 / 4;
-    b.box(a, 0.30, 0.09, 0.05,
-      Math.sin(ang) * (d * 0.5 + 0.01), 0.62, Math.cos(ang) * (d * 0.5 + 0.01), 0, ang, 0.6);
-    b.box(a, 0.30, 0.09, 0.05,
-      Math.sin(ang) * (d * 0.5 + 0.01), 0.48, Math.cos(ang) * (d * 0.5 + 0.01), 0, ang, -0.6);
+    const sx = Math.sin(ang), cz = Math.cos(ang);
+    const off = d * 0.5 + 0.012;
+    for (const [w, h, lx, ly] of QM) {
+      b.box(a, w, h, 0.045,
+        sx * off + cz * lx, 0.55 + ly, cz * off - sx * lx, 0, ang, 0);
+    }
   }
   // the diamond it floats on
   b.cone(shade(a, -0.15), 0.20, 0.34, 4, 0, 0.20, 0, Math.PI, 0, 0);
   b.cone(shade(a, 0.10), 0.20, 0.24, 4, 0, 0.20, 0);
-  void seed;
+  void seed; void P;
   return b.done();
 }
 

@@ -33,6 +33,7 @@ import { VEHICLES, VEHICLE_BY_ID, statBars } from './game/vehicles.js';
 import { CameraRig } from './game/camera.js';
 import { Feel } from './game/feel.js';
 import { Race } from './game/race.js';
+import { AI_BALANCE } from './game/ai.js';
 import { UI } from './ui/ui.js';
 import { HUD } from './ui/hud.js';
 import {
@@ -51,7 +52,20 @@ const DEFAULTS = {
   /* motionFx scales the optional camera-and-post flourishes (speed blur,
      the live menu scene). Coarse pointers default to half: the effects
      that cost the most are the ones a phone can least afford. */
-  motionFx: 1, tips: true, trickAssist: 1
+  motionFx: 1, tips: true, trickAssist: 1,
+  rivals: 'normal'
+};
+
+/* How hard the field races you. `diff` slides the whole grid's skill through
+   difficultyFor(); `band` replaces AI_BALANCE.player, which is what keeps the
+   rivals near YOU rather than merely near each other. EASY widens the band so
+   a leading rival backs off sooner and further; HARD narrows the bottom of it
+   so nobody hands you the place. Applied when a race is built, which is why
+   the settings hint says "from the next race". */
+const RIVALS = {
+  easy: { diff: -0.20, band: { aheadSec: 2, aheadMul: 0.92, behindSec: 7, behindMul: 1.03, ramp: 4, cap: [0.86, 1.05] } },
+  normal: { diff: 0, band: { aheadSec: 3, aheadMul: 0.95, behindSec: 5, behindMul: 1.05, ramp: 4, cap: [0.90, 1.08] } },
+  hard: { diff: 0.18, band: { aheadSec: 4, aheadMul: 0.97, behindSec: 4, behindMul: 1.06, ramp: 4, cap: [0.95, 1.08] } },
 };
 
 const App = {
@@ -406,14 +420,19 @@ function startRace(trackId, vehicleId) {
     App.ui.boot(1, 'grid is forming');
     App.ui.bootDone();
 
+    /* Before difficultyFor() is read, not after: both halves of the RIVALS
+       setting have to be in place for the field this race builds. */
+    applyRivals();
     App.race = new Race({
       engine: App.engine, input: App.input, audio: App.audio,
       ui: App.ui, hud: App.hud, rig: App.rig, feel: App.feel,
       terrain: App.world.terrain, sky: App.world.sky,
-      props: App.world.props, dust: App.world.dust,
+      props: App.world.props, dust: App.world.dust, vfx: App.world.vfx,
       trackDef: def, trackData: App.world.terrain.trackData,
       vehicleSpec: spec, difficulty: difficultyFor(def),
       items: App.settings.items !== false,
+      trickAssist: App.settings.trickAssist,
+      tips: App.settings.tips !== false,
       profile: App.profile,
       onExit: quitToMenu,
       onProfile: (p) => { App.profile = p; },
@@ -431,6 +450,7 @@ function startRace(trackId, vehicleId) {
     if (w) {
       try {
         w.props.dispose(); w.sky.dispose(); w.dust.dispose();
+        if (w.vfx) w.vfx.dispose();
         if (w.terrain.group && w.terrain.group.parent) w.terrain.group.parent.remove(w.terrain.group);
         w.terrain.dispose();
       } catch (e2) { console.error(e2); }
@@ -445,7 +465,14 @@ function startRace(trackId, vehicleId) {
 /** Mild, documented curve: the tutorial is a walkover, the caldera is not. */
 function difficultyFor(def) {
   const i = TRACKS.indexOf(def);
-  return clamp(0.25 + i * 0.22, 0, 1);
+  const r = RIVALS[App.settings && App.settings.rivals] || RIVALS.normal;
+  return clamp(0.25 + i * 0.22 + r.diff, 0, 1);
+}
+
+/** Push the RIVALS setting into the driver model. Called once per race build. */
+function applyRivals() {
+  const r = RIVALS[App.settings && App.settings.rivals] || RIVALS.normal;
+  AI_BALANCE.player = r.band;
 }
 
 /**
@@ -557,6 +584,9 @@ function tick(dt) {
   if (input.lastMethod && input.lastMethod !== App._method) {
     App._method = input.lastMethod;
     App.ui.setInputMethod(input.lastMethod);
+    /* The HUD needs it too, and never got it: the item card's keycap and the
+       pickup prompt both name a key, and both said F to a pad player. */
+    App.hud.setInputMethod(input.lastMethod);
   }
   if (input.hit('KeyM')) {
     App.muted = !App.muted;

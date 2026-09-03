@@ -33,11 +33,13 @@ import { DUST_KIND } from '../world/dust.js';
 import { RaceTracker, formatTime } from './racecore.js';
 import { AIDriver, makeGridProfiles } from './ai.js';
 import { ItemWorld } from './itemworld.js';
+import { ITEMS } from './items.js';
 import { RaceFX } from './racefx.js';
 import { CAM } from './camera.js';
-import { applyResult, TRACK_ORDER } from './progression.js';
+import { applyResult, TRACK_ORDER, shouldTip, markTip } from './progression.js';
 import { Save } from '../core/save.js';
 import { makeRNG, clamp } from '../core/rng.js';
+import { spanHas } from '../world/track.js';
 
 export const RS = { GRID: 0, COUNTDOWN: 1, RUNNING: 2, FINISHED: 3, RESULTS: 4 };
 const RS_NAME = ['grid', 'countdown', 'running', 'finished', 'results'];
@@ -100,16 +102,30 @@ export class Race {
     this.engine = o.engine; this.input = o.input; this.audio = o.audio;
     this.ui = o.ui; this.hud = o.hud; this.rig = o.rig; this.feel = o.feel;
     this.terrain = o.terrain; this.sky = o.sky; this.props = o.props; this.dust = o.dust;
+    /* The world's particle pool. Both ItemWorld and RaceFX were constructed
+       with `vfx: null` and nothing ever called `vfx.update()`, so every item
+       spark, hit ring, wheel ribbon, sled flame and pad flash in the game was
+       allocated, wired and then never drawn — including props.js's own impact
+       sparks, which go through the same pool. Three draw calls, by design. */
+    this.vfx = o.vfx || null;
     this.trackDef = o.trackDef;
     this.trackData = o.trackData || o.terrain.trackData;
     this.spline = this.trackData.spline;
     this.shortcut = this.trackData.shortcutSpline || null;
+    /* Every alternate line, not just the one `shortcut` aliases. The
+       off-course net measures distance to the nearest LEGAL road, and a
+       route the net does not know about is a road that resets you for
+       driving it — canyon's MESA TOP sits 26 m off the main line, 4 m inside
+       the gate, and used to be uncheckable. */
+    this.routes = this.trackData.routes || [];
     this.playerSpec = o.vehicleSpec || VEHICLES[0];
     this.difficulty = clamp(o.difficulty == null ? 0.5 : o.difficulty, 0, 1);
     this.profile = o.profile || null;
     this.onExit = o.onExit || (() => { });
     this.onProfile = o.onProfile || (() => { });
     this.onSetting = o.onSetting || (() => { });
+    this.trickAssist = o.trickAssist == null ? 1 : (o.trickAssist | 0);
+    this.tips = o.tips !== false;
 
     this.laps = Math.max(1, this.trackDef.laps | 0);
     this.state = RS.GRID;
@@ -153,13 +169,13 @@ export class Race {
       scene: this.engine.scene, terrain: this.terrain, trackData: this.trackData,
       dust: this.dust, audio: this.audio, feel: this.feel, engine: this.engine,
       racers: this.racers, tracker: this.tracker, rng: this.rng,
-      enabled: o.items !== false, vfx: null,
+      enabled: o.items !== false, vfx: this.vfx,
     });
     /* Presentation. Everything this object does is a sound, a particle or a
        shake; nothing it does can change the race. See racefx.js. */
     this.fx = new RaceFX({
       audio: this.audio, feel: this.feel, dust: this.dust, terrain: this.terrain,
-      hud: this.hud, engine: this.engine, vfx: null,
+      hud: this.hud, engine: this.engine, vfx: this.vfx,
     });
     /* Set at the green flag and never cleared mid-race: a record set with
        items on is FLAGGED as such, and toggling them off on the last lap must
@@ -173,6 +189,10 @@ export class Race {
       // Read-only view of the item world, so a driver can aim, dodge and
       // decide whether a box is worth the detour. See ai-items.js.
       items: this.items, myId: 0, state: 'countdown',
+      /* Who the field is actually racing. AI_BALANCE.player reads the gap to
+         this slot; without it the grid balances beautifully against itself
+         while the player watches it disappear. */
+      playerId: PLAYER_SLOT,
     };
     this._look = { lookX: 0, lookY: 0, zoom: 0 };
     this._as = {
@@ -186,16 +206,46 @@ export class Race {
     this._hudRace = {
       state: 'grid', countdown: -1, position: FIELD, total: FIELD, lap: 1, laps: this.laps,
       raceTime: 0, lastLap: 0, bestLap: 0, wrongWay: false, resetHold: 0, offCourse: 0,
+      finalLap: false,
       nextCp: this._hudNextCp
     };
-    this._hudVeh = { speedKmh: 0, gear: 0, rpmNorm: 0, airborne: false, airTime: 0 };
+    /* The full §6.6 vehicle payload. `drift`/`boost`/`trick` were in hud.js's
+       contract from wave 5 and were never written, so the mini-turbo charge
+       arc, the boost bar and the trick pop have never drawn. */
+    this._hudVeh = {
+      speedKmh: 0, gear: 0, rpmNorm: 0, airborne: false, airTime: 0,
+      drift: 0, driftTier: 0, boost: 0, boostTier: 0, trick: null,
+    };
+    this._hudTrick = { id: 0, name: '', pts: 0, tier: 0, seq: 0 };
+    this._hudVeh.trick = this._hudTrick;
     this._hudDots = this.racers.map(r => ({ x: 0, z: 0, color: r.color, isPlayer: r.isPlayer }));
     this._hudRival = { name: '', gap: 0 };
-    this._hudItem = { enabled: true, id: -1, name: '', col: 0, charges: 0, rolling: false };
+    this._hudItem = {
+      enabled: true, id: -1, name: '', col: 0, charges: 0, rolling: false,
+      seq: 0, icon: '', use: '', hint: '',
+    };
+    /* Hit / dealt / pad / land, as sequence numbers. hud.js has drawn the race
+       log since wave 5 and nothing ever handed it an event, so `#hLog` has
+       been an empty box in the corner ever since. */
+    this._hudEvents = {
+      hitSeq: 0, hitBy: '', hitWith: '',
+      dealtSeq: 0, dealtTo: '', dealtWith: '',
+      rivalFireSeq: 0, rivalFireBy: '', rivalFireWith: '',
+      noteSeq: 0, noteText: '',
+      padSeq: 0, landSeq: 0,
+    };
     this._hudPayload = {
       race: this._hudRace, vehicle: this._hudVeh, dots: this._hudDots,
-      rival: null, item: this._hudItem,
+      rival: null, item: this._hudItem, events: this._hudEvents,
     };
+    /* Last-seen edges of ItemWorld's own counters. Separate from the HUD's,
+       because one items event can produce a different HUD event depending on
+       who it happened to. */
+    this._lastHitSeq = 0; this._lastPadSeq = 0;
+    this._lastFireSeq = 0; this._lastNoteSeq = 0;
+    this._tipPadSeq = 0;
+    /* A FIRE pressed during the roulette, held until the item lands. */
+    this._fireQueued = null;
 
     this._enterGrid(true);
   }
@@ -224,6 +274,10 @@ export class Race {
          `collRadius`. Bridging it here is the whole fix — neither file is
          mine to edit, and without it every car uses the 1.15 m fallback. */
       v.collideR = v.collRadius;
+      /* The TRICK ASSIST setting reached no car at all until this line: the
+         menu wrote it to the profile and nothing ever read it back on to a
+         vehicle. Rivals sit at ARCADE — they have no eyes for a landing. */
+      v.trickAssist = isPlayer ? (this.trickAssist | 0) : 2;
 
       const r = {
         id: i,
@@ -238,7 +292,7 @@ export class Race {
            mid-race costs more than the three slots do. */
         style: 0, bestTrick: 0, trickSeq: 0,
         ghostT: 0, flipT: 0, stuckT: 0, offT: 0,
-        bestS: null, noProgT: 0,
+        bestS: null, noProgT: 0, resetWhy: null,
         finished: false, pos: i + 1,
         lastGround: [],
         clunkT: new Float32Array(4),
@@ -357,6 +411,7 @@ export class Race {
     this.dust.clear();
     this.items.resetAll();
     this.tracker.resetAll();
+    this._fireQueued = null;
     this._enterGrid(false);
     this.input.lock();
     this.input.showTouch(true);
@@ -394,9 +449,20 @@ export class Race {
     if (this.state !== RS.RESULTS) {
       /* Items step BEFORE the cars, so a hit landed this frame is felt this
          frame rather than next. See the header note in itemworld.js. */
-      if (live && this.items.hasItem(PLAYER_SLOT) && this.input.hit('KeyF')) {
-        this.items.fire(PLAYER_SLOT, (raw.throttle || 0) < -0.25);
+      /* FIRE, with a 0.7 s memory. `hasItem` is false for the whole roulette,
+         so a press during it used to be eaten silently — and the roulette is
+         exactly when a player looks at the card and reaches for the key. Queue
+         it and fire on the frame the item lands. */
+      if (live && this.input.hit('KeyF')) {
+        const back = (raw.throttle || 0) < -0.25;
+        if (this.items.hasItem(PLAYER_SLOT)) this.items.fire(PLAYER_SLOT, back);
+        else this._fireQueued = { back };
       }
+      if (live && this._fireQueued && this.items.hasItem(PLAYER_SLOT)) {
+        this.items.fire(PLAYER_SLOT, this._fireQueued.back);
+        this._fireQueued = null;
+      }
+      if (!live) this._fireQueued = null;
       this.items.step(dt, live);
       this._stepVehicles(dt, raw);
       if (live) {
@@ -428,6 +494,7 @@ export class Race {
     this.sky.update(dt, cam, this.elapsed);
     this.props.update(dt, this.elapsed, cam);
     this.dust.update(dt);
+    if (this.vfx) this.vfx.update(dt, cam);
     this.engine.aimShadow(this.player.vehicle.pos, this.sky.sunDir);
 
     this._mixAudio(dt);
@@ -759,7 +826,7 @@ export class Race {
         const held = this.input.down('KeyR') || !!this.input.resetHeld;
         if (held && this.state !== RS.GRID && this.state !== RS.COUNTDOWN) {
           this.resetHold = Math.min(1, this.resetHold + dt / Math.max(0.05, T.holdTime));
-          if (this.resetHold >= 1) { this._respawn(r, 'MANUAL RESET'); this.resetHold = 0; }
+          if (this.resetHold >= 1) { this._respawn(r, 'MANUAL RESET', 'manual'); this.resetHold = 0; }
         } else if (this.resetHold > 0) {
           this.resetHold = Math.max(0, this.resetHold - dt * 3);
         }
@@ -784,7 +851,7 @@ export class Race {
       const inLava = v.surfaceId === SURF.LAVA && !v.airborne &&
         Math.hypot(v.vel.x, v.vel.z) < 7;
       r.lavaT = inLava ? (r.lavaT || 0) + dt : 0;
-      if (r.lavaT > 1.2) { this._respawn(r, 'SCORCHED — RECOVERED'); r.lavaT = 0; continue; }
+      if (r.lavaT > 1.2) { this._respawn(r, 'SCORCHED — RECOVERED', 'lava'); r.lavaT = 0; continue; }
 
       /* Wedged: nose-planted in a crevice or leaned hard on a wall. Not
          flipped (up.y can sit near 0.5), not stuck (the wheels still turn it
@@ -792,13 +859,22 @@ export class Race {
          standing vertically on its bumper for half a minute. */
       const wedged = v.up.y < 0.55 && Math.abs(v.speed) < 1.5 && !v.airborne;
       r.wedgeT = wedged ? (r.wedgeT || 0) + dt : 0;
-      if (r.wedgeT > 3) { this._respawn(r, 'RECOVERED'); r.wedgeT = 0; continue; }
+      if (r.wedgeT > 3) { this._respawn(r, 'RECOVERED', 'wedged'); r.wedgeT = 0; continue; }
 
       /* Off course is measured against the MAIN spline and, where the track
          has one, the shortcut — a legal detour is 40 m off the centreline and
          must not be dragged back onto it. */
       let d = this.spline.nearest(v.pos.x, v.pos.z, _near).d;
-      if (this.shortcut) d = Math.min(d, this.shortcut.nearest(v.pos.x, v.pos.z, _near2).d);
+      /* Only the routes whose span we are actually in — with 60 m of slack
+         either end for the merge — so a route on the far side of the map
+         cannot excuse being lost here. */
+      const L = this.spline.length;
+      for (let k = 0; k < this.routes.length; k++) {
+        const rt = this.routes[k];
+        if (!rt.spline || !spanHas(rt.s0 - 60, rt.s1 + 60, _near.s, L)) continue;
+        const rd = rt.spline.nearest(v.pos.x, v.pos.z, _near2).d;
+        if (rd < d) d = rd;
+      }
       /* Air never counts as lost: a set-piece jump may legally clear the
          corridor at apex, and being yanked out of the sky mid-flight is the
          worst reset the game can do. The clock resumes on touchdown. */
@@ -837,19 +913,24 @@ export class Race {
         r.noProgT = 0;
       } else if (!v.airborne) {
         r.noProgT = (r.noProgT || 0) + dt;
-        if (r.noProgT > (T.noProgressTime ?? 6)) { this._respawn(r, 'RECOVERED'); continue; }
+        if (r.noProgT > (T.noProgressTime ?? 6)) { this._respawn(r, 'RECOVERED', 'noprog'); continue; }
       }
 
-      if (r.flipT > T.flipTime) { this._respawn(r, 'RECOVERED'); continue; }
-      if (r.stuckT > T.stuckTime) { this._respawn(r, 'RECOVERED'); continue; }
-      if (r.offT > OFF_COURSE_TIME) { this._respawn(r, 'BACK ON COURSE'); continue; }
-      if (r.ai && r.ai.wantsReset) this._respawn(r, null);
+      if (r.flipT > T.flipTime) { this._respawn(r, 'RECOVERED', 'flip'); continue; }
+      if (r.stuckT > T.stuckTime) { this._respawn(r, 'RECOVERED', 'stuck'); continue; }
+      if (r.offT > OFF_COURSE_TIME) { this._respawn(r, 'BACK ON COURSE', 'off'); continue; }
+      if (r.ai && r.ai.wantsReset) this._respawn(r, null, 'ai');
     }
   }
 
-  /** Back on the road at the last gate the racer actually cleared. */
-  _respawn(r, banner) {
+  /** Back on the road at the last gate the racer actually cleared.
+      `why` is telemetry only (dev/qa-drive.js tallies it per racer): the
+      banner tells the player what happened, `why` tells us WHICH net caught
+      them, which is the difference between "this stage is hard" and "this
+      stage has a hole in it". */
+  _respawn(r, banner, why) {
     const v = r.vehicle;
+    r.resetWhy = why || null;
     const slot = this.tracker.lastSlotOf(r.id);
     // A few metres past the gate: dropping exactly on it spawns you in the
     // middle of a gantry and, on the line, facing a stationary grid.
@@ -875,6 +956,8 @@ export class Race {
     v.ghost = true;
     r.ghostT = TUNE.reset.ghostTime;
     r.flipT = 0; r.stuckT = 0; r.offT = 0;
+    // A shot queued during the roulette is not still wanted from the last gate.
+    if (r.isPlayer) this._fireQueued = null;
     /* The respawn teleports BACKWARD along the race line, so the watchdog
        baseline must re-arm from here or it fires again on arrival. */
     r.bestS = null; r.noProgT = 0;
@@ -965,10 +1048,17 @@ export class Race {
       this._hudNextCp.idx = slot.idx; this._hudNextCp.dist = p.distNext;
     }
 
+    /* The final lap, as a level — hud.js takes the edge off it itself. */
+    hr.finalLap = hr.lap >= this.laps && this.state === RS.RUNNING;
+
     this.items.hudFor(PLAYER_SLOT, this._hudItem);
+    this._feedEvents();
+    this._firstRunTips();
     const hv = this._hudVeh;
     hv.speedKmh = v.speedKmh; hv.gear = v.gear; hv.rpmNorm = v.rpmNorm;
     hv.airborne = v.airborne; hv.airTime = v.airTime;
+    v.hudDrift(hv);
+    v.hudTrick(this._hudTrick);
 
     for (let i = 0; i < this.racers.length; i++) {
       const d = this._hudDots[i], rv = this.racers[i].vehicle;
@@ -1074,6 +1164,87 @@ export class Race {
     });
   }
 
+  /**
+   * The three first-run tips that could never fire. `hud.tip`, the ids and the
+   * profile whitelist have all existed since wave 5; nothing ever called them
+   * for items, drift or pads, so the one place the HUD is allowed to EXPLAIN
+   * rather than report has been silent. One card each, once per profile.
+   */
+  _firstRunTips() {
+    if (!this.tips || !this.profile) return;
+    const m = this.hud._method || 'kb';
+    const fire = m === 'pad' ? 'X' : m === 'touch' ? 'the FIRE button' : 'F';
+    const back = m === 'pad' ? 'LT' : m === 'touch' ? 'BRAKE' : '\u2193';
+    let id = null, text = '';
+    if (this._hudItem.enabled && this._hudItem.name && !this._hudItem.rolling &&
+      shouldTip(this.profile, 'items')) {
+      id = 'items';
+      text = `Drive through the glowing boxes. ${fire} fires what you got — ` +
+        `hold ${back} to send it backwards.`;
+    } else if (this._hudVeh.driftTier > 0 && shouldTip(this.profile, 'drift')) {
+      id = 'drift';
+      text = 'Mini-turbo charged. Let the handbrake go and the boost fires ' +
+        'itself — the longer you dared hold the slide, the bigger it is.';
+    } else if (this._hudEvents.padSeq !== this._tipPadSeq && shouldTip(this.profile, 'pad')) {
+      id = 'pad';
+      text = 'Boost pad. They are free speed and they always work — ' +
+        'line one up on the exit of a corner, not the entry.';
+    }
+    this._tipPadSeq = this._hudEvents.padSeq;
+    if (!id) return;
+    this.hud.tip(id, text);
+    this.profile = markTip(this.profile, id);
+    this.onProfile(this.profile);
+  }
+
+  /**
+   * ItemWorld's event block -> the HUD's race log. Sequence numbers in, names
+   * out: the log has been drawn since wave 5 and nothing has ever handed it an
+   * event, so #hLog has been an empty box in the corner of the screen. The
+   * translation is here rather than in hud.js because names of racers are
+   * race.js's business and ItemWorld only knows slot indices.
+   */
+  _feedEvents() {
+    const ev = this.items.events, he = this._hudEvents;
+    const nameOf = (i) => (i >= 0 && this.racers[i]) ? this.racers[i].name : '';
+    const itemOf = (i) => (i >= 0 && ITEMS[i]) ? ITEMS[i].name : '';
+
+    /* One `hitSeq` covers everybody, so read the target to decide whether this
+       one happened TO the player or was dealt BY them — both are worth saying
+       and only one of them was ever going to be visible. */
+    if ((ev.hitSeq | 0) !== this._lastHitSeq) {
+      this._lastHitSeq = ev.hitSeq | 0;
+      if (ev.hitTarget === PLAYER_SLOT) {
+        he.hitSeq++;
+        he.hitBy = nameOf(ev.hitOwner);
+        he.hitWith = itemOf(ev.hitItem);
+      } else if (ev.hitOwner === PLAYER_SLOT) {
+        he.dealtSeq++;
+        he.dealtTo = nameOf(ev.hitTarget);
+        he.dealtWith = itemOf(ev.hitItem);
+      }
+    }
+    if (ev.padSeq !== this._lastPadSeq) {
+      this._lastPadSeq = ev.padSeq;
+      if (ev.padRacer === PLAYER_SLOT) he.padSeq++;
+    }
+    /* A rival firing something near you is the whole answer to "the AI never
+       uses items" — it fires constantly and none of it has ever been visible. */
+    if ((ev.fireSeq | 0) !== this._lastFireSeq) {
+      this._lastFireSeq = ev.fireSeq | 0;
+      if (ev.fireRacer >= 0 && ev.fireRacer !== PLAYER_SLOT && ev.fireNear) {
+        he.rivalFireSeq++;
+        he.rivalFireBy = nameOf(ev.fireRacer);
+        he.rivalFireWith = itemOf(ev.fireItem);
+      }
+    }
+    if ((ev.noteSeq | 0) !== this._lastNoteSeq) {
+      this._lastNoteSeq = ev.noteSeq | 0;
+      he.noteSeq++;
+      he.noteText = ev.noteText || '';
+    }
+  }
+
   /* ============================================================
      TEARDOWN — Race owns the world it was handed
      ============================================================ */
@@ -1090,6 +1261,9 @@ export class Race {
     this.dust.clear();
     this.items.resetAll();
     this.dust.dispose();
+    /* Race owns the world it was handed, and the pool is part of it — it was
+       the one member of App.world that leaked on every quit. */
+    if (this.vfx) { this.vfx.dispose(); this.vfx = null; }
     // terrain.dispose() frees its GPU objects but does not detach the clipmap.
     if (this.terrain.group && this.terrain.group.parent) {
       this.terrain.group.parent.remove(this.terrain.group);

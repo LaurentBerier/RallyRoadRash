@@ -21,23 +21,34 @@
       a stick position, and never fight the rack. Deadzone 0.02, own rate
       limit 6/s (the rack itself does 6.5/s — stay just inside it).
    3. Speed: scan the line forward over the stopping distance v²/(2·a) with
-      a = 8.5·grip(surface), take min over i of √(v_i² + 2·a·d_i) — the most
-      restrictive (speed, distance) pair — then scale by skill.
-   4. skill maps to [0.78 … 1.02] of line speed. Target ≥ 0.95·topSpeed ⇒
+      a = A_BRAKE·grip(surface), take min over i of √(v_i² + 2·a·d_i) — the
+      most restrictive (speed, distance) pair — then scale by skill. A JUMP
+      point's speed is an advisory CAP and is never scaled above 1.0.
+      A_BRAKE and track.js's LAT_ACCEL are MEASURED off the real cars
+      (dev/vehicle-check.mjs), not guessed: see docs/TUNING.md.
+   4. skill maps to [0.66 … 1.06] of line speed. Target ≥ 0.95·topSpeed ⇒
       throttle pinned to 1. Otherwise a P controller with a hysteresis band
       (brake in at +1.1 m/s, out at +0.2) so it never flutters.
    5. aggression shifts the brake point up to 12 % closer; a "mistake" adds
-      another 35 % for 1.2 s. consistency drives a per-corner entry-speed
+      another 25 % for 1.2 s. consistency drives a per-corner entry-speed
       error (±6 %) and a wandering steering bias (±0.02). A "corner" is one
       edge of "something ahead wants me slower than I am" — see CORNER_GATE.
    6. Jumps: inside 30 m the apex offset is dropped and we aim at the lip
       itself; inside 12 m the throttle is frozen and the brake released.
       In the 40 m before a GAP the target is floored at 0.98× line speed
       regardless of skill — that is what makes the canyon 24.2 m/s.
-   7. AIRBORNE IS ALL ZERO. Steer, throttle, brake, roll: nothing. The only
+   7. REAL AIR IS ALL ZERO — steer, throttle, brake, roll: nothing. The only
       exception is a canned trick planned at the lip (ai-items.js), which
       holds ONE input until the rotation is predicted to arrive and then
       goes hands-off too, because that tail is when the align assist runs.
+      A ROCK HOP IS NOT REAL AIR. The blackout used to start after 0.12 s of
+      airborne, which a stone or a whoop crest satisfies, so on rough ground
+      the hands came off the wheel several times a second. A flight is real
+      if it left a lip (jumpCommit within LIP_RECENT) or launched upward
+      (vel.y > LAUNCH_VY), or once it lasts past HOP_T or peaks above
+      AIR_PEAK_REAL. Otherwise ground steer is KEPT, steerOut is not decayed,
+      and throttle is merely capped at HOP_THR. Touchdown from real air runs
+      a LAND_GRACE exit rather than restarting cold from THR_BASE.
    8. THERE IS EXACTLY ONE LATERAL INPUT. Overtaking, dodging a projectile
       and detouring to a box all write the same `offset`, blended over
       AVOID_BLEND. A second one would fight the first.
@@ -53,9 +64,13 @@
       alternate lap, decided once per approach with
       p = AI_SHORTCUT.base + aiBias·skill. See AI_SHORTCUT.
   11. Recovery: flipped > TUNE.reset.flipTime, stuck > TUNE.reset.stuckTime,
-      or > 22 m off the centreline ⇒ `wantsReset`. The last 1.5 s before
-      that is spent reversing and steering back at the line, which quite
-      often works and always looks alive.
+      or further than TUNE.reset.offCourseDist from the nearest LEGAL road
+      (main line or an in-span route — see _legalD, and race.js's matching
+      test) for longer than TUNE.reset.offCourseTime ⇒ `wantsReset`, on the
+      player's numbers,
+      deliberately, so a rival never bails out of a slide a human would drive
+      out of. The last 1.5 s before that is spent reversing and steering back
+      at the line, which quite often works and always looks alive.
   12. Balancing is a cap on MY speed targets, never on the vehicle:
       `AI_BALANCE.enabled = false` disables it completely, and the factor is
       linear in race position (P1 → 0.985, P6 → 1.015, hard-clamped whatever
@@ -64,9 +79,15 @@
       driver aims for, and touches nothing the player can feel. Position
       comes from `ctx.position`, else from a 2 Hz `ctx.tracker` sample (see
       _standings, which the item brain needs anyway), else the factor is 1.
+      A SECOND axis rides on top: `AI_BALANCE.player` is a band against the
+      gap in seconds to `ctx.playerId`'s ratcheted raceS. The ladder alone
+      only knows a rival's place among six cars, so a field that had driven
+      off up the road stayed perfectly balanced against itself while the
+      player watched it go. main.js's RIVALS setting replaces this band
+      wholesale; without a `ctx.playerId` it is inert.
    ============================================================ */
 
-import { paintAt } from '../world/track.js';
+import { paintAt, spanHas, LAT_ACCEL } from '../world/track.js';
 import { SURFACES } from '../world/surfaces.js';
 import { G, TUNE } from './config.js';
 import {
@@ -89,6 +110,21 @@ export const AI_BALANCE = {
   trailing: 1.015,    // …and for P6 (or last, if the field is smaller)
   field: 6,           // position that reaches `trailing`
   ease: 1.5,          // s — time constant so the factor never steps
+  /* THE PLAYER BAND. The ladder above only knows a rival's place among six
+     cars, so a field that had collectively driven off up the road stayed
+     perfectly balanced against itself while the player watched it go. This
+     is the other axis: how far ahead of, or behind, the PLAYER this driver
+     is, in seconds, eased over `ramp` seconds' worth of gap and clamped so
+     it can never become either a tow rope or a roadblock.
+
+     Gap is read from the tracker's RATCHETED raceS, so a respawn does not
+     hand the whole grid a sudden reason to slow down. */
+  player: {
+    aheadSec: 3, aheadMul: 0.95,     // more than 3 s up the road ⇒ ease off
+    behindSec: 5, behindMul: 1.05,   // more than 5 s back ⇒ push
+    ramp: 4,                         // s of gap over which the factor eases in
+    cap: [0.90, 1.08],
+  },
 };
 
 /* ---------------------------------------------------------------
@@ -107,7 +143,19 @@ export const AI_BALANCE = {
    hard off switch the dev checks use — with per-route biases, zeroing
    `base`/`skill` no longer disables anything.
    --------------------------------------------------------------- */
-export const AI_SHORTCUT = { enabled: true, base: 0.25, skill: 0.60 };
+export const AI_SHORTCUT = {
+  enabled: true, base: 0.25, skill: 0.60,
+  /* COST AWARENESS. The take-up roll above knows how KEEN a driver is about a
+     detour and nothing at all about whether it is quick — so canyon's slot,
+     which the header itself measures at +2.8 s a lap, was taken most of the
+     time by the drivers best placed to jump the gap instead. Every alt now
+     carries `dtFrac`, the fraction of a lap it gives away against the main
+     line over the same span, and a route that loses more than `slowFrac` is
+     skipped unless the track ASKED for it with an aiBias of at least
+     `forceBias` (a stunt line a track wants driven says so).
+     `costAware: false` restores the old blind roll for the dev checks. */
+  costAware: true, slowFrac: 0.02, forceBias: 0.8,
+};
 
 /* ---------------------------------------------------------------
    Driver-model constants. Everything the report quotes lives here.
@@ -119,12 +167,25 @@ const LOOK_MIN = 7.0, LOOK_MAX = 34.0;
 const STEER_RATE = 6.0;       // 1/s on OUR output. The rack does 6.5/s.
 const STEER_DEAD = 0.02;      // rack fractions — kills idle dither
 
-const A_BRAKE = 8.5;          // m/s² before the surface grip multiplier
+/* MEASURED, not guessed: dev/vehicle-check.mjs puts real braking at 16.7 to
+   17.6 m/s^2 on DIRT (grip 0.82). At 8.5 the AI believed it needed twice the
+   distance it does, so it lifted absurdly early into every corner and spent a
+   quarter of a canyon lap under 8 m/s. 13.0 is ~0.76x measured -- still a
+   margin, but a racing one. Raise BRK_P before touching this again. */
+export const A_BRAKE = 13.0;  // m/s² before the surface grip multiplier
 const REACT_T = 0.12;         // s of travel shaved off every braking distance
 
-const SKILL_LO = 0.78, SKILL_HI = 1.02;   // line-speed scaling by skill
+/* Widened with the line speed. At 0.78..1.02 of a line that was itself far
+   too slow, the whole grid drove within 24 % of each other and all of it was
+   slow; against a line solved at LAT_ACCEL 10.5 the same band would put a
+   backmarker on the limit. 0.66 leaves a training rookie visibly cautious and
+   1.06 lets a caldera leader lean on it. */
+const SKILL_LO = 0.66, SKILL_HI = 1.06;   // line-speed scaling by skill
 const LATE_BRAKE = 0.12;      // aggression pulls the brake point this % closer
-const MISTAKE_LATE = 0.35;    // …and a mistake adds this much again
+/* …and a mistake adds this much again. 0.35 against the new brake model is
+   not a late brake, it is a guaranteed crash: a mistake should overshoot the
+   apex and cost a second, not put the car in the scenery. */
+const MISTAKE_LATE = 0.25;
 const MISTAKE_T = 1.2;        // s a mistake lasts before ordinary control resumes
 const MISTAKE_P_NEAR = 0.30;  // per-corner probability scale with a rival <8 m
 const MISTAKE_P_FAR = 0.04;   // …and without one
@@ -152,6 +213,25 @@ const FULL_COMMIT = 0.95;     // target ≥ this × topSpeed ⇒ throttle 1
 const JUMP_NEAR = 30, JUMP_COMMIT = 12;   // m before the lip
 const GAP_WIN = 40;           // m before a GAP jump where the floor applies
 const GAP_FRAC = 0.98;        // …at this fraction of the line's own speed
+/* REAL AIR vs A ROCK HOP. The air policy is a total input blackout, and it
+   used to start after AIR_MIN_T of airborne — which a stone, a rut or a
+   whoop crest all satisfy. On rough ground that is a driver whose hands come
+   off the wheel several times a second, which reads exactly as the sawing,
+   erratic rivals QA reported. Real air is declared by the LIP (we committed
+   to a jump within LIP_RECENT) or by the launch (vy over LAUNCH_VY), and
+   confirmed in flight by hang time or peak height. Everything else is a hop:
+   keep steering, just ease off.
+
+   The float window opens at TUNE.air.hangHi, so below it the car is still on
+   full gravity and lands where it was pointed — HOP_T is that same number. */
+const HOP_T = 0.35;           // = TUNE.air.hangHi; asserted below
+const LIP_RECENT = 0.5;       // s since jumpCommit that still counts as a lip
+const LAUNCH_VY = 3.0;        // m/s of upward launch that is a jump, not a bump
+const AIR_PEAK_REAL = 0.6;    // m over the launch point that is a jump too
+const HOP_THR = 0.6;          // throttle cap while hopping — 0.35 s of nose-up
+const LAND_GRACE = 0.35;      // s after a real landing that stays deliberate
+const LAND_STEER = 0.5;       // …|steer| cap through it
+const LAND_BRAKE = 0.6;       // …and brake cap
 const AIR_MIN_T = 0.12;       // s airborne before the air policy takes over —
                               //   below it every rut would zero the steering
 /* Landing-height probe: how far past the lip to sample the route for the
@@ -193,8 +273,14 @@ const LIFT_THROTTLE = 0.25;
 
 const SHORTCUT_WIN0 = 90, SHORTCUT_WIN1 = 20;   // m before the entry to decide
 
-const OFF_LINE_D = 22;        // m from the CENTRELINE before we call it lost
-const OFF_LINE_T = 0.6;       // s of dwell, so one bad frame is not a reset
+/* The SAME net the player gets, from the same numbers. These used to be 22 m
+   and 0.6 s against race.js's 30 m and 2.5 s, so a rival gave up on a slide
+   the player would have driven out of — four times more readily, on a stage
+   whose alternate routes the off-course test could not even see. A rival that
+   teleports out of a corner is the loudest possible tell that it is not
+   really racing. */
+const OFF_LINE_D = TUNE.reset.offCourseDist ?? 30;   // m from the CENTRELINE
+const OFF_LINE_T = TUNE.reset.offCourseTime ?? 2.5;  // s of dwell
 const RECOVER_T = 1.5;        // s of reverse-and-steer before giving up
 const RECOVER_THR = -0.7;
 
@@ -339,7 +425,7 @@ function buildAlt(trackData, rl, gapFloor, step, L, rd) {
       speed: 48, k: 0, surface: surf, jump: false,
     };
   }
-  // Menger curvature -> the same sqrt(7.5·grip·R) the racing line uses.
+  // Menger curvature -> the same sqrt(LAT_ACCEL·grip·R) the racing line uses.
   for (let i = 0; i < scN; i++) {
     const a = pts[i > 0 ? i - 1 : 0], b = pts[i], c = pts[i < scN - 1 ? i + 1 : scN - 1];
     const abx = b.x - a.x, abz = b.z - a.z;
@@ -351,7 +437,7 @@ function buildAlt(trackData, rl, gapFloor, step, L, rd) {
     const rad = kk > 1e-6 ? 1 / kk : 1e6;
     const grip = SURFACES[b.surface] ? SURFACES[b.surface].grip : 0.8;
     b.k = kk;
-    b.speed = clamp(Math.sqrt(7.5 * grip * rad), 9, 48);
+    b.speed = clamp(Math.sqrt(LAT_ACCEL * grip * rad), 9, 48);
   }
   // Brake propagation back from the rejoin, then accel forward from the split.
   const inPt = rl[e0 - 1], outPt = rl[e1];
@@ -386,8 +472,35 @@ function buildAlt(trackData, rl, gapFloor, step, L, rd) {
      would brake for the run-up to a canyon gap it is about to fly. */
   applyGapFloor(alt, altFloor, rd.jumps, L, e0, e0 + scN);
 
+  /* What the detour COSTS, in seconds and as a fraction of the lap. Same sum
+     dev/ai-check.mjs uses for an ideal lap: distance over advised speed, once
+     along the route samples and once along the main-line points they replace.
+     Computed here because this is the only place both lines are in hand, and
+     cached with the alt (routesFor's WeakMap), so it is once per track. */
+  let tAlt = 0;
+  for (let i = 1; i < scN; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const dd = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+    tAlt += dd / Math.max(1, 0.5 * (a.speed + b.speed));
+  }
+  let tMain = 0;
+  for (let i = e0; i < e1; i++) {
+    const a = rl[i - 1], b = rl[i];
+    const dd = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+    tMain += dd / Math.max(1, 0.5 * (a.speed + b.speed));
+  }
+  let tLap = 0;
+  for (let i = 1; i < N; i++) {
+    const a = rl[i - 1], b = rl[i];
+    const dd = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+    tLap += dd / Math.max(1, 0.5 * (a.speed + b.speed));
+  }
+
   return {
     id: rd.id, route: makeRoute(alt, altFloor),
+    /* + = slower than the road it replaces. */
+    dtSec: tAlt - tMain,
+    dtFrac: tLap > 0 ? (tAlt - tMain) / tLap : 0,
     /* The detour's OWN centreline, carried through so the alt can say which
        road it is. Without it the only spline anyone could ask for was
        trackData.shortcutSpline — routes[0] — and anything measuring a driver
@@ -461,6 +574,8 @@ export class AIDriver {
        track.js and six drivers sharing it would each read the last one's
        answer. This is the single most important line in the file. */
     this._n = { s: 0, d: 0, side: 1, lat: 0, x: 0, z: 0 };
+    // A second nearest() out for _legalD — never held at the same time as _n.
+    this._nAlt = { s: 0, d: 0, side: 1, lat: 0, x: 0, z: 0 };
     /* Returned every frame — the race flow consumes it immediately.
        `roll` per contract 6.4: EVERY copy site has to carry it or the trick
        modifier works in the dev check and silently not in the game. */
@@ -499,6 +614,7 @@ export class AIDriver {
        all three and none of them is worth a per-frame tracker query. */
     this.gapAheadSec = Infinity;
     this.behindSec = 0;
+    this.playerGapSec = 0;    // + = the player is ahead of me (AI_BALANCE.player)
 
     /* Caller-owned scratch for the two read-only ItemWorld accessors. Both
        are filled in place; nothing here is ever reallocated. */
@@ -524,6 +640,9 @@ export class AIDriver {
     this._airPlanned = false;
     this._airWas = false;
     this._airVy = 0;
+    this._lipT = 99;          // s since jumpCommit was last true
+    this._realAir = false;    // this flight is a jump, not a hop over a rock
+    this._landT = 0;          // s of the deliberate landing exit still to run
     this._airLandY = 0;
     this._tAir = 0;           // telemetry: the predicted hang time
 
@@ -597,6 +716,7 @@ export class AIDriver {
     this.threatOff = 0; this.seekOff = 0;
     this.steerOut = 0; this.braking = false; this.mistakeT = 0;
     this.entryErr = 0; this.bias = 0; this.jumpLatched = false;
+    this._lipT = 99; this._realAir = false; this._landT = 0;
     this.lastCornerIdx = 0; this.cornerT = 0;
     this.route = this.R.main;
     this.scCommitted = false; this.onShortcut = false; this.scDecided = false;
@@ -694,7 +814,14 @@ export class AIDriver {
     /* --- 1. where am I. ONE nearest() call, into MY out object. --- */
     const nr = this.spline.nearest(px, pz, this._n);
     this.s = nr.s;
-    this.offCourseD = nr.d;
+    /* Distance to the nearest LEGAL road, not to the centreline. race.js's
+       off-course net takes the min over the main line and every alternate
+       whose span we are in; this used to measure the centreline alone, so a
+       rival on a perfectly good detour was fine by the race flow and LOST by
+       its own driver — which self-resets, and then does it again from the
+       gate, and again. It was ~50 of canyon's ~100 rival resets, all from one
+       car, all at one place. Same rule, same numbers, both sides. */
+    this.offCourseD = this._legalD(px, pz, nr.d, nr.s);
     const halfW = this.spline.widthAt(nr.s);
 
     /* --- 2. route bookkeeping. Runs BEFORE _track because it can swap
@@ -904,7 +1031,13 @@ export class AIDriver {
       const j = (this.ri + k) % rn;
       const d = this._ahead(j);
       if (d > stopD) break;
-      const vi = pts[j].speed * lineScale;
+      /* A jump point's speed is an ADVISORY CAP, not a corner limit: it is
+         the speed that lands the car on the far side rather than over it, and
+         it already carries the over-fly margin. Scaling it up by a fast
+         driver's line scale is how a leader flies the landing. Corners still
+         scale both ways. */
+      const pj = pts[j];
+      const vi = pj.jump ? pj.speed * Math.min(1, lineScale) : pj.speed * lineScale;
       const de = d - react;
       const allowed = de > 0
         ? Math.sqrt(vi * vi + (2 * aBrake * de) / lateF)
@@ -1011,6 +1144,7 @@ export class AIDriver {
     steer = clamp(steer + this.bias, -1, 1);
 
     /* --- 10. jump commit: hold the throttle, drop everything else --- */
+    this._lipT = jumpCommit ? 0 : this._lipT + dt;
     if (jumpCommit) {
       if (!this.jumpLatched) {
         this.jumpLatched = true;
@@ -1035,11 +1169,22 @@ export class AIDriver {
        land it — unless a trick was planned at the lip (ai-items.js). */
     let handbrake = 0, roll = 0;
     if (!airborne) {
+      /* Touching down from REAL air is not the end of the manoeuvre: the car
+         arrives with a plan's worth of attitude and no speed target it has
+         acted on for two seconds. Give it a graded exit rather than a cold
+         restart at full lock and full brake. */
+      if (this._airWas && this._realAir) this._landT = LAND_GRACE;
       this._airWas = false;
+      this._realAir = false;
       this._airPlanned = false;
       this.trickPlan = TRICK_PLAN.NONE;
       this.trickIntent = false;
       this._trickJump = null;
+      if (this._landT > 0) {
+        this._landT -= dt;
+        steer = clamp(steer, -LAND_STEER, LAND_STEER);
+        brake = Math.min(brake, LAND_BRAKE);
+      }
     } else {
       if (!this._airWas) {
         /* The TRUE first airborne frame. `vel.y` here is the launch velocity
@@ -1048,8 +1193,24 @@ export class AIDriver {
         this._airWas = true;
         this._airPlanned = false;
         this._airVy = (V.vel && V.vel.y) || 0;
+        /* Decided HERE, off the launch, because that is the only frame on
+           which the two cheap tells are still true. */
+        this._realAir = this._lipT < LIP_RECENT || this._airVy > LAUNCH_VY;
       }
-      if (airTime > AIR_MIN_T) {
+      /* …and confirmed in flight, for a launch that neither tell caught: a
+         car this long in the air, or this far over where it left, is on a
+         jump whatever the lip said. */
+      if (!this._realAir &&
+        (airTime > HOP_T || (V.airPeak || 0) > AIR_PEAK_REAL)) this._realAir = true;
+
+      if (!this._realAir) {
+        /* A HOP. Both wheels are off a stone for a tenth of a second; the
+           car still lands where it was pointed, so keep pointing it. Ease
+           the throttle so the nose does not come up, and leave `steerOut`
+           alone — decaying it is what made the rack saw. */
+        throttle = Math.min(throttle, HOP_THR);
+        brake = 0;
+      } else if (airTime > AIR_MIN_T) {
         steer = 0;
         throttle = 0;
         brake = 0;
@@ -1249,6 +1410,25 @@ export class AIDriver {
   }
 
   /** skill × per-corner error × balancing × finished-cruise. */
+  /**
+   * Distance to the nearest road this car is ALLOWED to be on: the main
+   * centreline, or any alternate whose span contains our arc length (with the
+   * same 60 m of merge slack race.js uses). Only ever called once a frame, and
+   * only walks the routes whose window we are actually inside.
+   */
+  _legalD(px, pz, mainD, s) {
+    const A = this.R.alts;
+    if (!A.length || mainD <= OFF_LINE_D) return mainD;
+    let d = mainD;
+    for (let k = 0; k < A.length; k++) {
+      const a = A[k];
+      if (!a.spline || !spanHas(a.entryS - 60, a.exitS + 60, s, this.R.L)) continue;
+      const rd = a.spline.nearest(px, pz, this._nAlt).d;
+      if (rd < d) d = rd;
+    }
+    return d;
+  }
+
   _lineScale(state) {
     let sc = SKILL_LO + (SKILL_HI - SKILL_LO) * this.skill;
     sc *= this.balanceF;
@@ -1291,6 +1471,13 @@ export class AIDriver {
     const pace = Math.max(6, Math.abs(this.vehicle.speed) || 0, this.topSpeed * 0.45);
     const lead = T.progress(st[0]);
     this.behindSec = (lead && at > 0) ? Math.max(0, (lead.raceS - mine.raceS) / pace) : 0;
+    /* + = the player is ahead of me. Only meaningful once the flow names a
+       player slot; without one this stays 0 and the band is inert. */
+    this.playerGapSec = 0;
+    if (ctx && ctx.playerId !== undefined && ctx.playerId !== me) {
+      const pp = T.progress(ctx.playerId);
+      if (pp) this.playerGapSec = (pp.raceS - mine.raceS) / pace;
+    }
     if (at > 0) {
       const up = T.progress(st[at - 1]);
       this.gapAheadSec = up ? Math.max(0, (up.raceS - mine.raceS) / pace) : Infinity;
@@ -1313,6 +1500,22 @@ export class AIDriver {
       want = clamp(lerp(AI_BALANCE.leader, AI_BALANCE.trailing, t),
         Math.min(AI_BALANCE.leader, AI_BALANCE.trailing),
         Math.max(AI_BALANCE.leader, AI_BALANCE.trailing));
+    }
+    /* …then against the player. Multiplicative on top of the ladder so the
+       two say different things: the ladder keeps the pack together, this
+       keeps the pack near the person playing. */
+    const P = AI_BALANCE.player;
+    if (P) {
+      const g = this.playerGapSec || 0;
+      let mul = 1;
+      if (g > P.aheadSec) {
+        // The player is up the road; I am behind and should press on.
+        mul = lerp(1, P.behindMul, clamp((g - P.aheadSec) / Math.max(0.1, P.ramp), 0, 1));
+      } else if (g < -P.behindSec) {
+        // I am up the road on the player; ease off rather than disappear.
+        mul = lerp(1, P.aheadMul, clamp((-g - P.behindSec) / Math.max(0.1, P.ramp), 0, 1));
+      }
+      want = clamp(want * mul, P.cap[0], P.cap[1]);
     }
     const k = Math.min(1, dt / Math.max(0.05, AI_BALANCE.ease));
     this.balanceF += (want - this.balanceF) * k;
@@ -1370,6 +1573,9 @@ export class AIDriver {
          route with no authored bias behaves exactly as the single shortcut
          always did, because its multiplier is 1. */
       const bias = a.aiBias === null ? 1 : a.aiBias;
+      /* Too slow, and the track did not insist: don't. */
+      if (AI_SHORTCUT.costAware && a.dtFrac > AI_SHORTCUT.slowFrac &&
+        bias < AI_SHORTCUT.forceBias) continue;
       if (this.rng() < AI_SHORTCUT.base + bias * AI_SHORTCUT.skill * this.skill) {
         this.scCommitted = true;
         this.scIdx = k;

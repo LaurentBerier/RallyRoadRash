@@ -103,16 +103,72 @@ anything that loiters on it below 7 m/s for 1.2 s ("SCORCHED").
 ## AI
 
 `makeGridProfiles(count, difficulty01, rng)` ladders skill around
-`0.30 + 0.55·difficulty`; skill maps to **0.78–1.02× of the racing-line
+`0.30 + 0.55·difficulty`; skill maps to **0.66–1.06× of the racing-line
 speed**, plus start reaction, braking-point noise and mistake probability
 (rises when pressured by a rival within 8 m). Aggression trades later
 braking and later yielding; consistency trades corner-entry noise.
 
+### The speed model is MEASURED, not guessed (wave 7)
+
+`dev/vehicle-check.mjs` puts the real cars at **16.7–17.6 m/s² of braking**
+and **12.0–14.3 m/s² of sustained lateral** on DIRT (grip 0.82). The driver
+model believed 8.5 and 7.5 — about 0.55× of the slowest real car — so it
+lifted absurdly early into every corner and arrived roughly 11 m/s slow.
+
+| Constant | Where | Was | Now |
+|---|---|---|---|
+| `LAT_ACCEL` | `world/track.js` (exported) | 7.5 | **10.5** |
+| `A_BRAKE` | `game/ai.js` (exported) | 8.5 | **13.0** |
+| `SKILL_LO` / `SKILL_HI` | `game/ai.js` | 0.78 / 1.02 | **0.66 / 1.06** |
+| `MISTAKE_LATE` | `game/ai.js` | 0.35 | **0.25** |
+
+`LAT_ACCEL` is the one number the racing line, the AI's corner limit and the
+alternate-route solver all read — `ai.js` imports it rather than repeating the
+literal. If corners now overshoot, **raise `BRK_P` 0.5 → 0.8 before touching
+any of the four above.** A jump point's advisory speed is never scaled UP by a
+fast driver's line scale: it is a cap that already carries the over-fly margin.
+
+### Real air vs a rock hop
+
+The air policy is a total input blackout, and it used to begin after
+`AIR_MIN_T` (0.12 s) of airborne — which a stone, a rut or a whoop crest all
+satisfy, so on rough ground the driver's hands came off the wheel several
+times a second. That is the sawing, erratic rival QA reported. A flight is now
+declared REAL by the lip (`jumpCommit` within `LIP_RECENT` 0.5 s) or the
+launch (`vel.y > LAUNCH_VY` 3.0), and confirmed in flight by hang time
+(`HOP_T` = `TUNE.air.hangHi` 0.35 s) or peak height (`AIR_PEAK_REAL` 0.6 m).
+Anything else is a hop: ground steer is kept, `steerOut` is NOT decayed, and
+throttle is merely capped at `HOP_THR` 0.6. Touching down from real air runs a
+`LAND_GRACE` (0.35 s) exit that clamps steer to `LAND_STEER` and brake to
+`LAND_BRAKE` rather than restarting cold.
+
 - Difficulty per stage is set in `main.js` (`difficultyFor`) — training 0.25
-  rising to volcano 0.91.
+  rising to volcano 0.91, **plus the RIVALS setting's `diff`** (easy −0.20,
+  normal 0, hard +0.18).
 - **Balancing**: `AI_BALANCE` in ai.js — leader ×0.985, P6 ×1.015 on the
   AI's *speed targets* (never on the vehicle), eased over 1.5 s, hard-capped,
   `enabled:false` kills it entirely.
+- **…and the player band**, `AI_BALANCE.player` (wave 7). The ladder above
+  only knows a rival's place among six cars, so a field that had collectively
+  driven off up the road stayed perfectly balanced against itself while the
+  player watched it go. This is the other axis: the gap in seconds to the
+  PLAYER's ratcheted `raceS`, eased over `ramp` seconds of gap and clamped by
+  `cap`. `main.js`'s `RIVALS` table replaces the whole band per difficulty —
+  EASY backs a leading rival off sooner and further, HARD raises the floor so
+  nobody hands you the place.
+- **Route cost-awareness**: `AI_SHORTCUT.costAware` (wave 7). Every alt now
+  carries `dtSec`/`dtFrac` — what the detour costs against the road it
+  replaces, from the same per-point speed sum `ai-check` uses for an ideal
+  lap. A route losing more than `slowFrac` (2 %) is skipped unless the track
+  asked for it with an `aiBias` of at least `forceBias` (0.8). Measured:
+  canyon `slot` +2.0 s/lap and `mesatop` +2.1 s/lap (both now refused), forest
+  `highroute` −0.3 s/lap (still taken). `costAware: false` restores the old
+  blind roll — `dev/ai-check.mjs` gate g does exactly that, because it tests
+  the stitching, not the tuning.
+- **Rivals get the PLAYER's recovery net.** `OFF_LINE_D` / `OFF_LINE_T` in
+  ai.js now read `TUNE.reset.offCourseDist` / `offCourseTime` (30 m / 2.5 s)
+  instead of a private 22 m / 0.6 s — a rival used to give up on a slide a
+  human would have driven out of, four times more readily.
 - The AI enforces ≥0.98× line speed for 40 m before any gap jump regardless
   of skill — nobody lemmings into the canyon gap.
 - If AI weaves on the volcano rim or saws on corner exit, lengthen `LOOK_K`
@@ -171,6 +227,21 @@ reverse. Changing a weight needs no code change and no other file.
 the two specials deciding a race in its final metres. `dev/items-check.mjs`
 gates both, plus the two rubber-band assertions — if you rebalance the table,
 that suite tells you whether it is still a catch-up system.
+
+### `use` and `hint` are UI-owned (wave 7)
+
+Every item carries a `use` verb and an optional `hint`. The on-screen prompt
+is `<NAME> — PRESS <KEY> TO <USE>`; it used to read "TO FIRE" for all seven,
+which named a key and said nothing whatever about what pressing it would do.
+`{BACK}` in a hint is substituted per input method (↓ / LT / BRAKE).
+`dev/items-check.mjs` gate a fails an item with no `use`.
+
+Nothing was wrong with the AI's item USE — `dev/ai-check.mjs` gate y measures
+a 66 % hit rate against a 35 % gate, and the field throws 40–80 items a race.
+It was invisible: `race.js` handed both `ItemWorld` and `RaceFX` `vfx: null`
+and nothing ever called `vfx.update()`, so every item particle, hit ring,
+wheel ribbon, sled flame and pad flash in the game was allocated, wired and
+then never drawn. `AI_ITEM.shoot` needs no change; leave it at 0.30.
 
 ## Race rules (config.js `TUNE.reset`)
 

@@ -39,7 +39,8 @@
    ============================================================ */
 import { buildTrackData } from '../src/world/track.js';
 import { VEHICLES } from '../src/game/vehicles.js';
-import { AIDriver, makeGridProfiles, AI_BALANCE, AI_SHORTCUT } from '../src/game/ai.js';
+import { SURFACES } from '../src/world/surfaces.js';
+import { AIDriver, makeGridProfiles, AI_BALANCE, AI_SHORTCUT, A_BRAKE } from '../src/game/ai.js';
 import {
   predictAirTime, planAirTrick, stepAirTrick, rollTrickIntent,
   TRICK_PLAN, TRICKS_AVAILABLE, itemStyleFor, ITEM_STYLE,
@@ -59,7 +60,12 @@ const SPEC = VEHICLES[0];              // DUNE HOPPER, topSpeed 36
 const TURN_LO = 2.6, TURN_HI = 0.9;    // rad/s at 10 and 40 m/s
 const ACC_K = 1.2;                     // 1/s chase toward throttle·topSpeed
 const ACC_MAX = 8.0, COAST = 3.0;      // m/s²
-const BRAKE_DECEL = 9.0;               // m/s²
+/* The mock brakes as hard as the DRIVER plans to, because a gate on corner
+   entry speed measures nothing if the two disagree: at a flat 9 m/s^2 against
+   a driver that believed 8.5 this happened to be honest, and the moment
+   A_BRAKE moved it silently became a test of the mismatch instead of a test
+   of the AI. Surface grip is applied per step, exactly as ai.js does it. */
+const BRAKE_DECEL = A_BRAKE;           // m/s², before grip
 
 const CROSS_LIMIT = 7.0, CROSS_FRAC = 0.99;
 const SHARP = 18.0, SHARP_LO = 0.70, SHARP_HI = 1.15;
@@ -67,6 +73,7 @@ const LAP_FACTOR = 2.5;
 const SKILL_GAP = 0.06;
 const PAIR_MIN = 1.2, PAIR_OFFSET_T = 3.0, PAIR_OFFSET = 1.0;
 const ENTRY_ERR_MAX = 0.0601;          // ai.js ENTRY_ERR, +epsilon
+const HOP_THR_EXPECT = 0.6;            // ai.js HOP_THR
 
 let failures = 0;
 const fail = (t, m) => { failures++; console.log(`  FAIL [${t}] ${m}`); };
@@ -106,6 +113,13 @@ class MockCar {
   }
   get speed() { return this.along; }
 
+  /* Grip under the mock car. `surfaceId` is set by the harness from the real
+     paint table each step; anything unknown reads the default. */
+  gripHere() {
+    const s = SURFACES[this.surfaceId];
+    return s && s.grip ? s.grip : 0.8;
+  }
+
   placeAt(x, z, yaw) {
     this.pos.x = x; this.pos.z = z; this.pos.y = 0;
     this.yaw = yaw; this.along = 0;
@@ -120,7 +134,7 @@ class MockCar {
 
     const cmd = ctl.throttle * this.spec.topSpeed;
     let a = clamp((cmd - this.along) * ACC_K, -COAST, ACC_MAX);
-    a -= ctl.brake * BRAKE_DECEL;
+    a -= ctl.brake * BRAKE_DECEL * this.gripHere();
     const next = this.along + a * dt;
     // brakes stop you at zero; only negative throttle actually reverses
     this.along = (ctl.brake > 0 && this.along > 0 && next < 0) ? 0 : Math.max(next, -6);
@@ -494,9 +508,18 @@ for (const def of TRACKS) {
    p = 0.25 + 0.6·skill, so at skill 0.95 a driver takes it on ~82 % of
    approaches: four laps is enough to guarantee at least one in practice
    and the seed makes that reproducible.
+
+   Run with AI_SHORTCUT.costAware OFF, and restored after — exactly as gate c3
+   toggles base/skill. This gate is about the PLUMBING: the stitch, the index
+   swaps, the rejoin, and how tightly the detour is driven. Whether a given
+   detour is worth taking is a tuning question, it is measured and printed
+   below as `costs`, and with cost awareness on canyon's slot is correctly
+   refused — which would make this gate fail for the right reason.
    ============================================================ */
 {
   const ACE = { name: 'ACE', skill: 0.95, aggression: 0.5, consistency: 0.9 };
+  const wasCost = AI_SHORTCUT.costAware;
+  AI_SHORTCUT.costAware = false;
   for (const def of [canyon, forest]) {
     const td = buildTrackData(def);
     const ideal = idealLapTime(td);
@@ -514,7 +537,17 @@ for (const def of TRACKS) {
     }
     if (s.laps < 4) fail(`${def.id}/shortcut`, `only completed ${s.laps} of 4 laps`);
     if (s.nan) fail(`${def.id}/shortcut`, 'NaN on the shortcut route');
+    /* What each alternate costs against the road it replaces — the number
+       AI_SHORTCUT.costAware decides on. Positive is slower. */
+    const alts = (r.drv && r.drv[0] && r.drv[0].R && r.drv[0].R.alts) || [];
+    console.log('  costs: ' + (alts.length
+      ? alts.map(a => `${a.id} ${a.dtSec >= 0 ? '+' : ''}${f1(a.dtSec)} s/lap ` +
+        `(${(a.dtFrac * 100).toFixed(1)} %)` +
+        `${AI_SHORTCUT.costAware === false && a.dtFrac > AI_SHORTCUT.slowFrac &&
+          (a.aiBias === null ? 1 : a.aiBias) < AI_SHORTCUT.forceBias ? ' [refused when costAware]' : ''}`).join('  ·  ')
+      : 'none'));
   }
+  AI_SHORTCUT.costAware = wasCost;
 }
 
 /* ============================================================
@@ -602,6 +635,28 @@ for (const def of TRACKS) {
       `${f2(c.steer)} / ${f2(c.throttle)} / ${f2(c.brake)}`);
   } else console.log('  airborne:  steer 0, throttle 0, brake 0, handbrake 0, roll 0');
   car.airborne = false; car.airTime = 0;
+  d.update(DT, ctx);           // land it, and burn off the landing grace
+  for (let k = 0; k < 40; k++) { c = d.update(DT, ctx); car.step(DT, c); }
+
+  /* …and the other half of that policy: a ROCK HOP is not a jump. Two tenths
+     of a second off a stone, no lip commit and no upward launch — the hands
+     stay on the wheel. Blacking out here is what made rivals saw across rough
+     ground several times a second. */
+  const onGround = d.update(DT, ctx).steer;
+  car.airborne = true; car.airTime = 0.2; car.vel.y = 0; car.airPeak = 0.1;
+  c = d.update(DT, ctx);
+  /* Against the GROUNDED command, not against zero: the point is that a hop
+     changes nothing about where the car is being pointed. */
+  if (Math.abs(c.steer - onGround) > 0.05) {
+    fail('hop', `a 0.2 s hop with no lip and no launch moved steer from ` +
+      `${f2(onGround)} to ${f2(c.steer)}`);
+  } else if (c.throttle > HOP_THR_EXPECT + 1e-6) {
+    fail('hop', `hop throttle ${f2(c.throttle)} over the ${HOP_THR_EXPECT} cap`);
+  } else {
+    console.log(`  hop:       0.2 s off a stone holds steer ${f2(c.steer)} ` +
+      `(ground ${f2(onGround)}), throttle capped at ${f2(c.throttle)}`);
+  }
+  car.airborne = false; car.airTime = 0; car.airPeak = 0;
 
   // finished: cruise
   ctx.state = 'finished';

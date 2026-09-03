@@ -155,6 +155,10 @@ export class Input {
         `<div class="rbtn pause">&#10073;&#10073;</div>` +
       `</div>`;
     this.touchEl = wrap;
+    /* Published so the HUD can arm it when an item is ready. The keycap on the
+       item card names a key, which is meaningless on touch — the button IS the
+       key, so the button has to carry the signal instead. */
+    this.fireBtn = wrap.querySelector('.rbtn.fire');
     this.touch.active = true;
 
     /* ---- steering pad ---- */

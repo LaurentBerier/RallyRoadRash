@@ -447,8 +447,17 @@ export function paintAt(trackDef, s, x, z, lat, L) {
    3.  RACE DATA
    ============================================================ */
 
-/** Grip-scaled lateral acceleration the racing line is solved for. */
-const LAT_ACCEL = 7.5;
+/* Grip-scaled lateral acceleration the racing line is solved for.
+
+   MEASURED, not guessed. dev/vehicle-check.mjs puts the real cars at 12.0 to
+   14.3 m/s^2 of sustained lateral on DIRT (grip 0.82); this used to be 7.5,
+   which is 0.55x of the slowest of them. Everything downstream inherited
+   that: the racing line advised a speed no car had to work for, and the AI
+   arrived at every corner about 11 m/s slower than it could have. 10.5 is
+   ~0.75x measured, and because the AI then multiplies by its own skill scale
+   the line speed a driver actually asks for lands near 0.8x of that again --
+   quick, and still inside the tyre. */
+export const LAT_ACCEL = 10.5;
 const RL_STEP = 6;              // racing-line sample stride, metres
 const RL_MIN_SPEED = 9;         // never advise a crawl — the AI would park
 const RL_MAX_SPEED = 48;

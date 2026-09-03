@@ -838,9 +838,24 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   box-shadow:0 0 calc(14 * var(--s)) color-mix(in srgb,var(--ic,#ff7a1a) 34%,transparent);
   animation:air-pop .28s cubic-bezier(.2,1.3,.3,1);
 }
+/* Name over verb. The card has to answer both "what have I got" and "what
+   does firing it do", and the name alone answers only the first. */
+.itemcard .namecol{display:flex;flex-direction:column;gap:calc(1 * var(--s));line-height:1.1}
 .itemcard b{
   font-size:max(9px,calc(11 * var(--s)));font-weight:900;font-style:italic;
   letter-spacing:.14em;color:var(--ic,var(--acc));white-space:nowrap;
+}
+.itemcard .use{
+  font-size:max(7px,calc(8.5 * var(--s)));font-weight:700;letter-spacing:.10em;
+  color:var(--fg-2);white-space:nowrap;text-transform:uppercase;opacity:.92;
+}
+/* One pulse the frame the roulette lands, so the card announces itself
+   instead of quietly changing in the corner of the eye. */
+.itemcard.ready{animation:it-ready .6s cubic-bezier(.2,1.3,.3,1)}
+@keyframes it-ready{
+  0%{transform:scale(1)}
+  30%{transform:scale(1.12);box-shadow:0 0 calc(26 * var(--s)) var(--ic,#ff7a1a)}
+  100%{transform:scale(1)}
 }
 .itemcard .charges{display:flex;gap:calc(3 * var(--s))}
 .itemcard .charges i{
@@ -857,11 +872,13 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
    anywhere, that F throws one. */
 .itemcard .firekey{
   font-style:normal;font-family:var(--mono);font-weight:800;
-  font-size:max(8px,calc(9.5 * var(--s)));letter-spacing:.06em;color:var(--fg-2);
-  padding:calc(2 * var(--s)) calc(5 * var(--s));
-  border:1px solid var(--line-2);border-bottom-width:calc(2 * var(--s));
-  border-radius:calc(2 * var(--s));background:rgba(255,255,255,.06);
-  margin-left:calc(2 * var(--s));
+  /* Doubled. At 9.5 it read as a footnote on the thing it is instructing. */
+  font-size:max(12px,calc(15 * var(--s)));letter-spacing:.06em;
+  color:var(--ic,var(--acc));
+  padding:calc(3 * var(--s)) calc(8 * var(--s));
+  border:1px solid var(--ic,var(--line-2));border-bottom-width:calc(3 * var(--s));
+  border-radius:calc(2 * var(--s));background:rgba(255,255,255,.08);
+  margin-left:calc(4 * var(--s));
 }
 
 /* ---------------- trick pop ----------------
@@ -1072,6 +1089,20 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
 #touch .rbtn.drift.on{background:var(--cyan);color:#03181b;box-shadow:0 0 18px rgba(79,216,232,.35)}
 #touch .rbtn.fire{border-color:rgba(255,210,63,.55);color:var(--warn)}
 #touch .rbtn.fire.on{background:var(--warn);color:#1a1200;box-shadow:0 0 18px rgba(255,210,63,.4)}
+/* ARMED: an item is ready. The keycap tells a keyboard player which key to
+   press and told a touch player nothing at all, because the button IS the
+   key — so the button itself has to be the signal. */
+#touch .rbtn.fire.armed{
+  border-color:var(--ic,var(--warn));color:var(--ic,var(--warn));
+  animation:fire-armed 1.1s ease-in-out infinite;
+}
+@keyframes fire-armed{
+  0%,100%{box-shadow:0 0 6px color-mix(in srgb,var(--ic,#ffd23f) 30%,transparent)}
+  50%{box-shadow:0 0 22px color-mix(in srgb,var(--ic,#ffd23f) 75%,transparent)}
+}
+@media (prefers-reduced-motion:reduce){
+  #touch .rbtn.fire.armed{animation:none;box-shadow:0 0 16px color-mix(in srgb,var(--ic,#ffd23f) 60%,transparent)}
+}
 
 /* ============================================================
    ROTATE TOAST — portrait phones only, once, never blocking
