@@ -41,19 +41,32 @@ import {
 import { BOUNCE_FOR, WASTE_FACING } from './props-recipes.js';
 
 /* ---------------- module scratch (no per-frame allocation) ---------------- */
-/**
- * A `heroModels` url, resolved so it does not depend on which page is asking.
- *
- * DRESSING authors these repo-root-relative ('assets/models/heroes/x.glb'),
- * which a browser resolves against the PAGE. That is correct from the game at
- * the root and wrong from every harness in dev/, where it becomes
- * '/dev/assets/...' and 404s — so the heroes were invisible in firstlight,
- * which is the one place they were going to be looked at. Resolving against
- * this module's own url instead is page-independent and still relative to
- * wherever the game is served from, which Sandscape needs.
- */
-const _ROOT = new URL('../../', import.meta.url);
-const heroUrl = (url) => (url ? new URL(url, _ROOT).href : null);
+/* ------------------------------------------------------------------
+   where a hero model actually lives
+   ------------------------------------------------------------------
+   DRESSING authors these repo-root-relative ('assets/models/heroes/x.glb'),
+   which is the right way to WRITE one and the wrong way to FETCH one, for two
+   separate reasons:
+
+     • a browser resolves it against the PAGE, so from the harnesses in dev/ it
+       becomes '/dev/assets/...' and 404s — the heroes were invisible in
+       firstlight, the one place they were going to be looked at; and
+     • it fetches whether or not the file was ever declared, so a tree with no
+       assets/ took five 404s for models nobody said existed, which breaks the
+       hard-rule-1 gate.
+
+   So the authored path is turned into a manifest KEY and looked up, exactly as
+   contract 8.6 says a model should be. The manifest is the inventory: no
+   entry, no fetch, and whoever owns the page supplies the lookup, which is
+   also what makes the base correct from both the root and dev/.
+   ------------------------------------------------------------------ */
+let _heroSrc = null;
+
+/** @param {(key: string) => (string|null)} fn — e.g. assets.url */
+export function setHeroSource(fn) { _heroSrc = typeof fn === 'function' ? fn : null; }
+
+/** 'assets/models/heroes/x.glb' -> 'models/heroes/x' */
+const heroKey = (url) => String(url || '').replace(/^assets\//, '').replace(/\.glb$/i, '');
 
 const _dummy = new THREE.Object3D();
 const _pp = { x: 0, y: 0, z: 0 };
@@ -291,7 +304,10 @@ export function planHeroModels(p) {
       p.group.add(fb);
     }
 
-    loadModel(heroUrl(h.url)).then((g) => {
+    // No source, or no manifest entry: the fallback that just went in stands.
+    const url = _heroSrc ? _heroSrc(heroKey(h.url)) : null;
+    if (!url) continue;
+    loadModel(url).then((g) => {
       if (!g) return;                       // the fallback stays; nothing to do
       if (p._disposed) { disposeModel(g); return; }
       g.rotation.set(0, site.yaw, 0);

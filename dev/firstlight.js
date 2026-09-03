@@ -21,7 +21,7 @@ import * as THREE from 'three';
 import { Engine } from '../src/core/engine.js';
 import { bakeTrack, Terrain } from '../src/world/terrain.js';
 import { TRACKS } from '../src/world/tracks/index.js';
-import { Props } from '../src/world/props.js';
+import { Props, setHeroSource } from '../src/world/props.js';
 import { Sky, SKY_THEMES } from '../src/world/sky.js';
 import { Dust } from '../src/world/dust.js';
 import { VFX } from '../src/world/vfx.js';
@@ -78,6 +78,11 @@ async function boot() {
      because sky.update() rebuilds the env whenever it is marked dirty. */
   if (envMode === 'image') {
     loadAssets('../assets/manifest.json').then((map) => {
+      /* The hero GLBs go through the manifest too, so their urls come out
+         based on '../assets/' and resolve from dev/ rather than against this
+         page. Set before the env texture below because it is the same map. */
+      const A = new Assets(map);
+      setHeroSource((key) => A.url(key));
       const tex = new Assets(map).get('env/' + def.theme);
       if (tex) { sky.setEnvImage(tex); envNote = 'image'; }
       else envNote = 'no env/' + def.theme + ' in the manifest — shader env';

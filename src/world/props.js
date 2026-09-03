@@ -58,6 +58,10 @@ import {
   wastelandGeo, planWasteland, planHeroModels, flushWasteland,
   disposeHeroModels, runEmbers,
 } from './props-wasteland.js';
+/* Whoever owns the page says where the hero GLBs live — main.js from the asset
+   manifest, the dev harnesses from their own. No source means no hero models
+   and the kit fallbacks stand, which is the state a tree with no assets/ is in. */
+export { setHeroSource } from './props-wasteland.js';
 import {
   hash2, boulderGeo, hoodooGeo, pineGeo, logGeo, basaltGeo, ventGeo,
   coneGeo, tyreStackGeo, railQuad, rockMaterial,

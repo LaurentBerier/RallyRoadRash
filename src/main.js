@@ -24,7 +24,7 @@ import { Assets, NO_ASSETS, loadAssets } from './core/assets.js';
 import { MenuScene } from './ui/menuscene.js';
 import { bakeTrack, Terrain } from './world/terrain.js';
 import { Sky, SKY_THEMES } from './world/sky.js';
-import { Props } from './world/props.js';
+import { Props, setHeroSource } from './world/props.js';
 import { Dust } from './world/dust.js';
 import { VFX } from './world/vfx.js';
 import { setGroundTexture } from './world/terrain-shader.js';
@@ -162,6 +162,8 @@ async function boot() {
        The lookup is lazy, so it is correct to install it before the manifest
        exists; it simply answers null until then. */
     setCarcassSource((id) => App.assets.url('models/' + id + '-carcass'));
+    // Same rule for the stages' hero landmarks (8.9): manifest or nothing.
+    setHeroSource((key) => App.assets.url(key));
     /* The menu scene built its machine at boot, when that lookup still said
        null. Nothing about the CHOICE of machine has changed, so setVehicle
        would short-circuit — ask for the rebuild explicitly. */
