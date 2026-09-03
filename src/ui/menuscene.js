@@ -160,7 +160,17 @@ export class MenuScene {
    */
   rebuildVehicle() {
     const id = this.vehicleId;
-    this.vehicle = null;          // defeat setVehicle's unchanged-spec guard
+    /* _dropVehicle FIRST, and no nulling before it.
+       This used to null `this.vehicle` to defeat setVehicle's unchanged-spec
+       guard — but _dropVehicle opens with `if (!this.vehicle) return;`, so
+       nulling first turned the drop into a no-op: the old machine was never
+       disposed and never removed from the turntable, and setVehicle built a
+       second one on top of it. Two superimposed vehicles is why the garage
+       showed a procedural cab, bullbar and light bar THROUGH the generated
+       carcass, and it leaked a Vehicle on every boot, because main.js calls
+       this the moment the asset manifest resolves.
+       _dropVehicle nulls the field itself once it has disposed, which is all
+       the unchanged-spec guard ever needed. */
     this._dropVehicle();
     this.setVehicle(id);
   }

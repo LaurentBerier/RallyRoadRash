@@ -1130,6 +1130,19 @@ export class Vehicle {
     return deepest;
   }
 
+  /**
+   * Impulse `j` along unit `n` at arm `r` — the public door onto the one
+   * correct impulse in this file.
+   *
+   * Everything outside used to reach in and write `vel`/`omega` with its own
+   * arithmetic: props.resolve() reflects the velocity by hand, arsenal._spin()
+   * does `omega.y += side * 3.2`, resolveVehiclePair() rolls a third variant.
+   * Three answers to one question, and only this one carries the body-frame
+   * inertia, so only this one makes a car ROTATE the way its mass says it
+   * should. New callers use this; the old three are being moved onto it.
+   */
+  applyImpulse(n, j, r) { this._applyImpulse(n, j, r); }
+
   /** Impulse `j` along unit `n`, applied at arm `r` from the centre of mass.
       Linear and angular both, with the body-frame inertia. */
   _applyImpulse(n, j, r) {
