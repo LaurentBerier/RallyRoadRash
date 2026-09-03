@@ -219,3 +219,42 @@ Left in `.sandscape/generated/` for the package that owns them:
   `music-training_d71b1ec5-….wav`, 105.0 s → P5, `assets/music/`.
 - **Rocket fire** (sfx, 10) — `999c5c58b79c1ef67e0eae6c4e21306e/generated_assets/audio/`
   `sfx-rocket-fire_d4385f6b-….wav`, 2.04 s → P5, `assets/sfx/`.
+
+### Salvage after the session-limit stall
+
+The first launch of the six-package wave was killed by an API session limit within a
+couple of minutes. It had already **spent 495 coins**, and none of it had been placed.
+Everything below is paid for and staged under `.sandscape/generated/`. **Regenerating any
+of it burns coins for a file we already own.** Where a `3d` run produced two GLBs, the one
+named here is the one `meta.primary_output` points at — always the smaller; the other is a
+15 MB raw mesh and is not wanted.
+
+**Hero concepts** (P4, 10 each). Canyon and volcano each have a `-clean` re-roll; prefer it.
+
+| theme | file under `.sandscape/generated/` |
+|---|---|
+| canyon | `7a3f050ac4a386c1b3cd92d998deb421/canyon-hero-concept_be46a518-7a0d-446c-a461-ebdb6cbd77a1.png` |
+| canyon (clean) | `23e4435a1441b69b41a6c1267f4f1809/canyon-hero-concept-clean_7080649c-52aa-4801-ab9d-7cfc6beca8e2.png` |
+| forest | `35200500a4156816b5e3d563c85db670/forest-hero-concept_9a860943-b54f-4fe1-9ca8-105c1ecf2184.png` |
+| volcano | `6a73de5db6b44d8caf6205bd2377e167/volcano-hero-concept_a14841bb-b026-419e-acb6-e66ed7c7036b.png` |
+| volcano (clean) | `4aea401d89ee67729e844dc2f78e55c4/volcano-hero-concept-clean_a1ec3217-2fa9-4767-99ae-bc921b0b4664.png` |
+| training | `8978d533a8a960516f06aac5a60b1bc2/training-hero-concept_d1f24341-49ca-4aa8-b20b-17301be33d9a.png` |
+| thunder | `482719573afcc83e2ac5dd7441afa5e1/thunder-hero-concept_75ae5bd7-08d9-4bfa-9bad-db86a99f1ecc.png` |
+
+**Hero models** (P4, 80 each — all five done, 400 coins):
+
+| theme | file under `.sandscape/generated/…/generated_assets/assets/` |
+|---|---|
+| canyon | `8f83db672d1a29b1217bdd8fd2128c80/…/canyon-hero_2a4c3d19-2877-44ce-a6a7-2e52289eac22.glb` (2.8 MB) |
+| forest | `208595727078f1758e4fc9e292fafd1a/…/forest-hero_c92c98f9-b438-426c-9556-19b671e7349a.glb` (3.0 MB) |
+| volcano | `c0aaa815d615bc82e98806bd9f6b712c/…/volcano-hero_7a25c025-9439-472c-a9d5-841bc48ae086.glb` (2.9 MB) |
+| training | `3b809a826fedd23f695b4b9608bb198f/…/training-hero_06a954a7-c4f6-41e7-8824-fe4f1318a9d4.glb` (3.3 MB) |
+| thunder | `4eb261c9a9de7a79462ed52a096cf384/…/thunder-hero_31d3600c-10e8-4e75-a13d-9a62ce32848b.glb` (1.1 MB) |
+
+**Env panorama** (P1, 10): `44a606818f89f02935f4d3a8055501cf/training-env_86d726c9-fa51-4d4d-894b-3cb46f28b6c6.png` (3.1 MB, 16:9 — still needs the local pad to 2:1 and the size reduction).
+
+**Canyon music** (P5, 15): `c8d22fa409d6d57a61f5ef829ac4d643/generated_assets/audio/music-canyon_7e9ff58a-3d9d-4b52-9bbd-5040c5cf06fb.wav` (17.7 MB).
+
+Two source files also survived the stall, both complete and both parsing:
+`src/world/kit-arsenal.js` (all four §8.8 signatures) and `src/world/kit-wasteland.js`
+(P4's twelve new factories, split out of `kit.js` because `kit.js` was already large).
