@@ -94,15 +94,27 @@ head('a  launchers: one per machine, deltas inside 15 %');
 /* ============================================================
    b — the ammo and reload rules
    ============================================================ */
-head('b  ammo: a full rack at the grid, a reload between shots, a cap');
+head('b  ammo: empty at the grid, a crate arms you, a reload between shots, a cap');
 {
   const L = LAUNCHERS.hopper;
   const st = makeArsenal('hopper');
-  eq(st.ammo, W.ammoStart, 'starts loaded');
+  // Nobody leaves the grid loaded any more — ammoStart is 0, and a fresh
+  // arsenal has to prove that before anything else in this section is
+  // meaningful.
+  eq(st.ammo, 0, 'a fresh arsenal starts empty');
   eq(st.ammoCap, W.ammoCap, '…with the cap from the table');
+  eq(canFire(st), false, 'an empty rack cannot fire');
+  eq(spend(st), false, '…and spend() refuses it');
+
+  // From here on the rack is loaded, exactly as if the car had just driven
+  // through a crate — and every rule below (reload cycle, the cap,
+  // resetArsenal) is still worth gating on a rack that has rockets in it,
+  // whatever put them there.
+  eq(addAmmo(st, W.crateAmmo), W.crateAmmo, 'a crate loads three');
+  eq(st.ammo, W.crateAmmo, '…and the rack now carries them');
   eq(canFire(st), true, 'a loaded rack can fire');
   eq(spend(st), true, 'the first shot goes');
-  eq(st.ammo, W.ammoStart - 1, '…and costs one rocket');
+  eq(st.ammo, W.crateAmmo - 1, '…and costs one rocket');
   ok(Math.abs(st.reloadT - L.reload) < 1e-9, `…and starts the ${L.reload} s reload`);
   eq(canFire(st), false, 'no shot during the reload');
   eq(spend(st), false, '…and spend() refuses one');
@@ -113,17 +125,17 @@ head('b  ammo: a full rack at the grid, a reload between shots, a cap');
   eq(canFire(st), true, '…and the tube is live again');
   let shots = 0;
   for (let i = 0; i < 20; i++) { if (spend(st)) shots++; tick(st, 5); }
-  eq(shots, W.ammoStart - 1, 'the rest of the rack fires, one per reload');
-  eq(st.ammo, 0, 'and then it is empty');
+  eq(shots, W.crateAmmo - 1, 'the rest of the crate fires, one per reload');
+  eq(st.ammo, 0, 'and then it is empty again');
   eq(spend(st), false, 'an empty rack fires nothing');
-  eq(addAmmo(st, W.crateAmmo), W.crateAmmo, 'a crate loads three');
+  eq(addAmmo(st, W.crateAmmo), W.crateAmmo, 'a second crate loads three more');
   eq(addAmmo(st, 99), W.ammoCap - W.crateAmmo, 'a load past the cap loads only the room');
   eq(st.ammo, W.ammoCap, '…and the rack is exactly full');
   eq(addAmmo(st, 1), 0, 'a full rack takes nothing — the crate stays on the road');
   giveNitro(st); giveSlow(st, true); spend(st);
   resetArsenal(st);
   ok(st.ammo === W.ammoStart && st.reloadT === 0 && st.nitroT === 0 && st.slowT === 0,
-    'resetArsenal is the grid: full rack, nothing burning, nothing cut');
+    'resetArsenal is the grid: empty rack, nothing burning, nothing cut');
   const keys = Object.keys(makeArsenal('moto')).length;
   eq(Object.keys(st).length, keys, 'the state has a fixed shape');
   const moto = makeArsenal('moto');

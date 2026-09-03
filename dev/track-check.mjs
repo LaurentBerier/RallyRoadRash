@@ -37,6 +37,14 @@ const CROSS_MIN_DS = 60;
 const PLAYABLE = 600;
 const MAX_GAP_NEED = 34;               // m/s; nothing in the game goes faster
 const MIN_WHOOP_WL = 5, MAX_WHOOP_AMP = 0.7;
+/* Whoops are the only large-scale road bump the carve allows this close to a
+   race: the road is 100% carved inside 1.30x half-width, so nothing else on
+   the surface can throw a car this hard. The grid is where every race begins,
+   and a car that is still bouncing before the field has had room to spread
+   out is not fun — it is a coin-flip pileup. So a stage gets a minimum
+   distance between the grid and its first whoop span, and a cap on how much
+   total whoop length any one lap can carry. */
+const MAX_WHOOP_LAP_M = 90, MIN_WHOOP_GRID_M = 200;
 const MAX_BANK_DEG = 28;
 /* Landing runway. A jump that lands on rising ground cases every time, and a
    flight over a bend puts the car in the scenery: 40 m of runout at no more
@@ -271,11 +279,25 @@ for (const def of TRACKS) {
       fail(id, `bank ${b.s0}..${b.s1} is ${b.deg} deg — over the ${MAX_BANK_DEG} deg limit`);
     }
   }
+  let whoopLenTotal = 0;
   for (const q of td.whoops) {
     if (!(q.wl >= MIN_WHOOP_WL)) {
       fail(id, `whoops ${q.s0}..${q.s1} wavelength ${q.wl} m — under ${MIN_WHOOP_WL} m the heightfield cannot hold it`);
     }
     if (!(q.amp <= MAX_WHOOP_AMP)) fail(id, `whoops ${q.s0}..${q.s1} amplitude ${q.amp} m > ${MAX_WHOOP_AMP} m`);
+    whoopLenTotal += bypassLen(sp, q.s0, q.s1);
+    // The grid is always at s=0, and the loop is circular, so "distance from
+    // the grid" has two candidates: forward from s=0 out to the span's near
+    // edge (q.s0), or backward from the span's far edge (q.s1) round through
+    // the finish line back to s=0 (L - q.s1). Whichever is shorter is how
+    // close the span actually sits to the line every car starts and re-crosses.
+    const distFromGrid = Math.min(q.s0, L - q.s1);
+    if (distFromGrid < MIN_WHOOP_GRID_M) {
+      fail(id, `whoops ${q.s0}..${q.s1} sit ${f1(distFromGrid)} m from the grid — under the ${MIN_WHOOP_GRID_M} m minimum, the field is still bunched when it hits them`);
+    }
+  }
+  if (whoopLenTotal > MAX_WHOOP_LAP_M) {
+    fail(id, `${f1(whoopLenTotal)} m of whoops on one lap — over the ${MAX_WHOOP_LAP_M} m limit`);
   }
 
   /* ---------- 5c. raised road ---------- */

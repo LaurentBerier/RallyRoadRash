@@ -114,7 +114,7 @@ const AIR = [
    switched weapons off would otherwise wonder why the road still glows. */
 const ARSENAL = [
   ['rocket', 'ROCKETS',
-    'One tube, six to twelve rounds depending on the machine. FIRE sends one straight ' +
+    'One tube, empty off the grid — a crate loads three, and it holds up to twelve. FIRE sends one straight ' +
     'ahead; hold the back key as you press FIRE and it launches behind you instead — the ' +
     'one answer to somebody who just passed you.'],
   ['crate', 'AMMO CRATES',

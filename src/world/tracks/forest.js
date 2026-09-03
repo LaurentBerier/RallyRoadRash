@@ -8,8 +8,9 @@
    through the hairpin, grass everywhere you leave the ruts.
 
      s    0- 260  wet valley floor, MUD, third gear and patience —
-                  with THE CORDUROY (whoops, 120-190) in the worst of
-                  it, where the ruts have set hard
+                  graded hardpack under the grid itself so lap one
+                  starts on grip, then THE CORDUROY (whoops, 210-260)
+                  once the field has had room to spread out
      s  350- 750  the climb: 55 m over 400 m on a SHELF cut into the
                   mountainside — rock wall outboard, the valley falling
                   away inboard — with a table and 60 m of 14 deg bank
@@ -67,6 +68,8 @@ export default {
   surfaceDefault: SURF.DIRT,
   paints: [
     { s0: 1620, s1: 260, type: SURF.MUD },       // valley bottom, wraps past the line
+    // Graded hardpack over the start/finish straight so lap one begins on grip.
+    { s0: 1740, s1: 90, type: SURF.ROAD },
     { s0: 1020, s1: 1200, type: SURF.MUD },      // the shelf hairpin never dries out
     { s0: 560, s1: 700, type: SURF.ROCK },       // scree shelf on the steep part
     { s0: 0, s1: 1799, type: SURF.GRASS, lat0: 10, lat1: 90 },
@@ -90,8 +93,11 @@ export default {
     { s: 1650, len: 13, h: 2.4, kind: 'hip', yaw: 14 }
   ],
 
-  // THE CORDUROY: set ruts in the valley mud, 6.5 m apart.
-  whoops: [{ s0: 120, s1: 190, wl: 6.5, amp: 0.35 }],
+  // THE CORDUROY: set ruts in the valley mud, 7 m apart. Moved off the grid
+  // (was 120-190, 90 m from the line — the field was still bunched when it
+  // hit) and eased from amp 0.35 so a lap-one pack isn't bouncing before it
+  // has had room to spread out; still inside the MUD paint, which ends at 260.
+  whoops: [{ s0: 210, s1: 260, wl: 7, amp: 0.28 }],
   // A canted shelf on the climb. The corner is nearly straight here; the camber
   // is the mountain's, not a racing line's.
   banks: [{ s0: 640, s1: 700, deg: 14 }],

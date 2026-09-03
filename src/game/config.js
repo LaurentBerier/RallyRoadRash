@@ -529,7 +529,7 @@ export const TUNE = {
      in the next county.
      --------------------------------------------------------------- */
   weapons: {
-    ammoStart: 6,           // rockets every machine leaves the grid with
+    ammoStart: 0,           // nobody leaves the grid loaded — the first crate arms you
     ammoCap: 12,            // …and the most a rack holds. A hoard is not a plan.
     crateAmmo: 3,           // rockets per crate
     crateRespawn: 3.5,      // s before a taken crate is back
@@ -647,6 +647,36 @@ export const TUNE = {
          touched. 1.24 puts the envelope at rider-plus-elbows. */
       bike: { radius: 1.24, spread: 1.00 },
     },
+  },
+
+  /* ---------------------------------------------------------------
+     PROPS THAT GIVE WAY
+     A tree is a static background instance until something hits it hard
+     enough to matter, and a dynamic body from that moment until it stops
+     moving again. These six numbers are the entire switch; the contact
+     model itself is borrowed from TUNE.collide above rather than invented
+     a second time, because a prop and a rival car are the same problem.
+     --------------------------------------------------------------- */
+  props: {
+    massRatio: 0.30,        // a prop yields when its own mass is under this fraction of
+                            //       the machine's. 0.30 caps the 245 kg moto at 73.5 kg
+                            //       and the 1010 kg redline at 303, which is exactly the
+                            //       line between "shoulder a fuel drum aside" and "stop
+                            //       at a pine". Raise it and the bike stops being a bike.
+    transferFrac: 0.65,     // 0..1 of the momentum an ideal equal-and-opposite hit would
+                            //       move. Under 1 because a tree that gives way also
+                            //       BREAKS, and the energy spent breaking it never
+                            //       arrives at either body.
+    popUp: 1.6,             // m/s of lift on the knocked prop at a reference hit. A prop
+                            //       that only ever slides reads as a decal being dragged
+                            //       across the ground.
+    sleepSpeed: 0.4,        // m/s below which a body counts as still.
+    sleepTime: 0.3,         // s it must stay still before it stops costing anything. Once
+                            //       asleep it is scenery again — lying down, not solid.
+    poolSize: 24,           // bodies simulated at once, stage-wide, preallocated. This
+                            //       number IS the per-frame cost of the feature, and a
+                            //       full pool recycles its most distant sleeper rather
+                            //       than growing.
   },
 
   /* ---------------------------------------------------------------
