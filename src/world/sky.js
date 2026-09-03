@@ -1,17 +1,28 @@
 /* ============================================================
    DAY SKIES
    ------------------------------------------------------------
-   Four static skies, one per track theme. Nothing here moves fast:
+   Five static skies, one per track theme. Nothing here moves fast:
    the sun never moves at all (terrain bakes its occlusion mask once,
    so a moving sun would desynchronise the shadows from the ground),
    the clouds drift at a couple of degrees a minute, and the only
    thing with any real motion is the ash column over the caldera.
 
-   Everything is a dome, a billboard, or a quad soup. There is no
-   atmospheric scattering integral — a hand-tuned ramp reads better
-   at 60 fps than a physically correct one at 40.
+   Wave 8 swapped the hand-tuned zenith ramp for the real thing:
+   the vendored Preetham dome (three/addons/objects/Sky.js) paints the
+   sky, and a TRANSPARENT overlay dome on top of it carries the three
+   jobs a scattering integral cannot do — the panorama band, the
+   caldera's ash and embers, and the ground haze below the horizon.
+   Everything else (sun billboard, clouds, vista ring, plume) is
+   untouched.
+
+   The reason to bother: with the ramp, `hazeColor` was a hand-picked
+   hex and the dome, the FogExp2 colour and the terrain's haze uniform
+   were three authored numbers that drifted apart every time one of
+   them was retuned. They are now all read off ONE model, so they
+   cannot disagree — see deriveSkyColors() and §8.5.
    ============================================================ */
 import * as THREE from 'three';
+import { Sky as PhysicalSky } from 'three/addons/objects/Sky.js';
 import { makeRNG, clamp } from '../core/rng.js';
 import { makeCloudSprite, makeSmokeSprite } from './textures.js';
 
@@ -43,6 +54,26 @@ import { makeCloudSprite, makeSmokeSprite } from './textures.js';
    `vista` / `vistaColor` / `vistaFade` describe the silhouette ring at 5–7.5
    km. It is the FALLBACK: when assets carry a `sky/<theme>` panorama the
    dome shows that instead and the ring hides itself.
+
+   ATMOSPHERE (§8.5). `turbidity` / `rayleigh` / `mie` / `mieG` are the
+   Preetham parameters the physical dome is built from — turbidity is how much
+   is in the air, rayleigh how blue the clear part of it is, mie/mieG how big
+   and how forward-scattering the particles are (a bigger mie is a wider,
+   hotter aureole around the sun).
+
+   `skyExposure` is NOT art. The Preetham shader's output is HDR in units
+   nobody chose, so every theme carries the one multiplier that puts its
+   horizon back where the retired ramp had it — measured, to four places, and
+   re-measured by dev/sky-check.mjs against a ±15 % band. If you retune
+   turbidity/rayleigh/mie you MUST re-derive skyExposure, and sky-check will
+   tell you so.
+
+   `zenith` / `horizon` / `hazeColor` are the RETIRED ramp's endpoints. They
+   paint nothing any more: hazeColor and horizonColor are derived from the
+   model now. They stay because they are the reference skyExposure is
+   calibrated against — delete them and the calibration has nothing to be
+   calibrated to. `groundHaze` is still live (the overlay and the env's ground
+   bounce both read it); so is everything else in here.
    ============================================================ */
 export const SKY_THEMES = {
   /* clean noon over an empty airfield: flat light, nothing to misread */
@@ -52,6 +83,7 @@ export const SKY_THEMES = {
     sunColor: 0xfff3e2, sunIntensity: 2.85,
     hemiSky: 0xa8c8ff, hemiGround: 0x7a6a52, hemiIntensity: 0.60,
     zenith: 0x2b68c2, horizon: 0xcadef2, hazeColor: 0xc2d5e8,
+    turbidity: 2.2, rayleigh: 1.6, mie: 0.005, mieG: 0.80, skyExposure: 0.2668,
     groundHaze: 0x9aa89a,
     cloudAmount: 0.55, cloudTint: 0xffffff, cloudShade: 0x93a8c2,
     cloudY: 1250, cirrus: 0.35,
@@ -69,6 +101,7 @@ export const SKY_THEMES = {
     sunColor: 0xffd2a0, sunIntensity: 2.95,
     hemiSky: 0x9dbde8, hemiGround: 0x8c6444, hemiIntensity: 0.55,
     zenith: 0x2f63ae, horizon: 0xf0c491, hazeColor: 0xe0b58a,
+    turbidity: 7.0, rayleigh: 2.2, mie: 0.005, mieG: 0.80, skyExposure: 0.3048,
     groundHaze: 0xb08256,
     cloudAmount: 0.62, cloudTint: 0xffe6cc, cloudShade: 0xa08498,
     cloudY: 1500, cirrus: 0.55,
@@ -86,6 +119,10 @@ export const SKY_THEMES = {
     sunColor: 0xffe0b4, sunIntensity: 2.25,
     hemiSky: 0xb6d2e6, hemiGround: 0x4c5638, hemiIntensity: 0.75,
     zenith: 0x3d80bc, horizon: 0xe2ece6, hazeColor: 0xcedcd4,
+    /* Thick and grey, and the mie kept deliberately small: at turbidity 10 a
+       0.012 mie put 8 % of the whole dome over the 1.30 bloom threshold and
+       veiled the frame every time the camera came round to the sun. */
+    turbidity: 10.0, rayleigh: 2.0, mie: 0.004, mieG: 0.70, skyExposure: 0.4480,
     groundHaze: 0x9aab9c,
     cloudAmount: 1.00, cloudTint: 0xf6f0e6, cloudShade: 0x8e9aa6,
     cloudY: 900, cirrus: 0.30,
@@ -103,6 +140,7 @@ export const SKY_THEMES = {
     sunColor: 0xff8c4e, sunIntensity: 1.55,
     hemiSky: 0x5a3038, hemiGround: 0x2c1c16, hemiIntensity: 0.65,
     zenith: 0x241c2c, horizon: 0x8e3a18, hazeColor: 0x6e2c1c,
+    turbidity: 20.0, rayleigh: 3.0, mie: 0.020, mieG: 0.85, skyExposure: 0.0775,
     groundHaze: 0x40201a,
     cloudAmount: 0.50, cloudTint: 0x6a4a44, cloudShade: 0x241614,
     cloudY: 1100, cirrus: 0.25,
@@ -126,6 +164,11 @@ export const SKY_THEMES = {
     sunColor: 0xffb070, sunIntensity: 2.60,
     hemiSky: 0x7c6ea4, hemiGround: 0x6e4630, hemiIntensity: 0.62,
     zenith: 0x1f2a68, horizon: 0xff9a3c, hazeColor: 0xdd8846,
+    /* mie 0.012 rather than the 0.02 a nine-degree sun wants: at 0.02 the
+       aureole peaked at 6x the bloom threshold, seven times the old dome's
+       brightest pixel. 0.012 halves that and still glows. Raise it once
+       somebody has looked at it. */
+    turbidity: 8.0, rayleigh: 2.6, mie: 0.012, mieG: 0.80, skyExposure: 0.3704,
     groundHaze: 0x8a5030,
     cloudAmount: 0.78, cloudTint: 0xffd0a4, cloudShade: 0x5c3a56,
     cloudY: 1350, cirrus: 0.70,
@@ -226,6 +269,163 @@ const GLSL_NOISE = /* glsl */`
                mix(mix(h31(i+vec3(0,0,1)),h31(i+vec3(1,0,1)),f.x),mix(h31(i+vec3(0,1,1)),h31(i+vec3(1,1,1)),f.x),f.y),f.z); }
 `;
 
+/* ============================================================
+   THE SAME MODEL, IN JAVASCRIPT
+   ------------------------------------------------------------
+   A line-for-line port of vendor/three/examples/jsm/objects/Sky.js, so the
+   haze colour, the fog colour and the terrain's haze uniform can be READ OFF
+   the dome instead of guessed at. Every constant below is copied from that
+   file; if it is ever revendored, diff these against it.
+
+   Two deliberate departures from the vendored shader, both applied to the
+   GLSL as well so the two stay in step:
+
+     • no solar disc. `sunAngularDiameterCos` gives a 0.53° dot at 19000x the
+       sky, which lands INSIDE our own sun billboard (1.1–3.4° per theme) and
+       is seven times brighter than it. Two suns is one too many, and the
+       billboard is the one with a per-theme colour and size.
+
+     • an output multiplier, `skyExposure`. The shader's units are its own;
+       this is what puts them back in ours.
+
+   `sunPosition` is fed the UNIT sun direction, exactly as three's own example
+   does, which pins vSunfade at 1 and the output gamma at 1/2.4.
+   ============================================================ */
+const TOTAL_RAYLEIGH = [5.804542996261093e-6, 1.3562911419845635e-5, 3.0265902468824876e-5];
+const MIE_CONST = [1.8399918514433978e14, 2.7798023919660528e14, 4.0790479543861094e14];
+const CUTOFF_ANGLE = 1.6110731556870734, STEEPNESS = 1.5, EE = 1000.0;
+const RAYLEIGH_ZENITH_LENGTH = 8.4e3, MIE_ZENITH_LENGTH = 1.25e3;
+const THREE_OVER_SIXTEENPI = 0.05968310365946075, ONE_OVER_FOURPI = 0.07957747154594767;
+const SKY_AMBIENT = [0.0, 0.0003, 0.00075];
+
+/** Elevation the haze/horizon colours are sampled at: a hair above the line,
+    where the air is thickest but the model is not yet clamped. */
+export const HAZE_H = 0.02;
+/** Azimuths in the horizon-band mean. The fog is one colour for every
+    heading, so the number it gets is the average of every heading. */
+const AZ_SAMPLES = 64;
+
+/**
+ * Resolve a theme into the numbers both the shader and the port work from.
+ * @param {string|object} theme  a SKY_THEMES key, or a theme object
+ */
+export function skyParams(theme) {
+  const t = typeof theme === 'string' ? (SKY_THEMES[theme] || SKY_THEMES.training) : theme;
+  const d = t.sunDir, n = Math.hypot(d.x, d.y, d.z) || 1;
+  const sun = [d.x / n, d.y / n, d.z / n];
+  const rayleigh = t.rayleigh === undefined ? 1 : t.rayleigh;
+  const mie = t.mie === undefined ? 0.005 : t.mie;
+  const turbidity = t.turbidity === undefined ? 2 : t.turbidity;
+  // sunPosition is a unit vector, so exp(y/450000) > 1 and the clamp pins
+  // vSunfade at exactly 1 — which is also why rayleighCoefficient == rayleigh.
+  const sunfade = 1 - clamp(1 - Math.exp(sun[1] / 450000), 0, 1);
+  const zc = clamp(sun[1], -1, 1);
+  const sunE = EE * Math.max(0, 1 - Math.exp(-((CUTOFF_ANGLE - Math.acos(zc)) / STEEPNESS)));
+  const c = 0.2 * turbidity * 1e-17;              // totalMie's `( 0.2 * T ) * 10E-18`
+  return {
+    turbidity, rayleigh, mie, mieG: t.mieG === undefined ? 0.8 : t.mieG,
+    exposure: t.skyExposure === undefined ? 1 : t.skyExposure,
+    sun, sunE, sunfade,
+    betaR: TOTAL_RAYLEIGH.map(v => v * (rayleigh - (1 - sunfade))),
+    betaM: MIE_CONST.map(v => 0.434 * c * v * mie)
+  };
+}
+
+/**
+ * Linear radiance the dome shows looking down `d`, with skyExposure applied.
+ * @param p    from skyParams()
+ * @param out  length-3 array, written in place and returned
+ */
+export function skyRadiance(p, dx, dy, dz, out) {
+  const n = Math.hypot(dx, dy, dz) || 1;
+  dx /= n; dy /= n; dz /= n;
+  // the shader's 90° cutoff: below the horizon it keeps showing the horizon
+  const za = Math.acos(Math.max(0, dy));
+  const inv = 1 / (Math.cos(za) + 0.15 * Math.pow(93.885 - (za * 180) / Math.PI, -1.253));
+  const sR = RAYLEIGH_ZENITH_LENGTH * inv, sM = MIE_ZENITH_LENGTH * inv;
+  const cosTheta = dx * p.sun[0] + dy * p.sun[1] + dz * p.sun[2];
+  const rPhase = THREE_OVER_SIXTEENPI * (1 + Math.pow(cosTheta * 0.5 + 0.5, 2));
+  const g2 = p.mieG * p.mieG;
+  const mPhase = ONE_OVER_FOURPI * ((1 - g2) / Math.pow(1 - 2 * p.mieG * cosTheta + g2, 1.5));
+  // the shader's `mix(vec3(1), pow(..., 1/2), clamp(pow(1 - sun.y, 5), 0, 1))`
+  const zf = clamp(Math.pow(1 - p.sun[1], 5), 0, 1);
+  const gamma = 1 / (1.2 + 1.2 * p.sunfade);
+  for (let i = 0; i < 3; i++) {
+    const bR = p.betaR[i], bM = p.betaM[i];
+    const Fex = Math.exp(-(bR * sR + bM * sM));
+    const frac = (bR * rPhase + bM * mPhase) / (bR + bM);
+    const lin = Math.pow(p.sunE * frac * (1 - Fex), 1.5)
+      * (1 + zf * (Math.sqrt(p.sunE * frac * Fex) - 1));
+    out[i] = Math.pow((lin + 0.1 * Fex) * 0.04 + SKY_AMBIENT[i], gamma) * p.exposure;
+  }
+  return out;
+}
+
+/**
+ * Azimuthal mean of the dome at elevation `h`. This is the horizon "colour"
+ * for anything that only gets one — the fog, the vista ring's base, the
+ * skyline band's wash — and the luminance dev/sky-check calibrates against.
+ */
+export function skyBandColor(p, h, out) {
+  const ch = Math.sqrt(Math.max(0, 1 - h * h));
+  const s = [0, 0, 0];
+  out[0] = out[1] = out[2] = 0;
+  for (let i = 0; i < AZ_SAMPLES; i++) {
+    const a = (i / AZ_SAMPLES) * Math.PI * 2;
+    skyRadiance(p, Math.cos(a) * ch, h, Math.sin(a) * ch, s);
+    out[0] += s[0]; out[1] += s[1]; out[2] += s[2];
+  }
+  out[0] /= AZ_SAMPLES; out[1] /= AZ_SAMPLES; out[2] /= AZ_SAMPLES;
+  return out;
+}
+
+/**
+ * §8.5's derivation. `haze` and `horizon` are the SAME number on purpose:
+ * the whole point of deriving them is that the FogExp2 colour, the terrain's
+ * haze uniform and the dome cannot disagree, and two values with two names is
+ * how they used to.
+ */
+export function deriveSkyColors(theme) {
+  const p = skyParams(theme);
+  const band = skyBandColor(p, HAZE_H, [0, 0, 0]);
+  return { params: p, haze: band, horizon: band.slice(), zenith: skyRadiance(p, 0, 1, 0, [0, 0, 0]) };
+}
+
+/** Rec.709 luminance of a length-3 linear triple. */
+export function lum3(c) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }
+
+/* ---------------- the two patches to the vendored shader ----------------
+   Applied to the material's own strings, never to vendor/. Both are asserted
+   by a substring check, because a silent no-op here would show up as a sky
+   that is simply the wrong brightness — and that reads as a tuning mistake,
+   not as a failed patch. */
+const SKY_DISC_SRC = 'L0 += ( vSunE * 19000.0 * Fex ) * sundisk;';
+const SKY_OUT_SRC = 'gl_FragColor = vec4( retColor, 1.0 );';
+
+/**
+ * Turn a vendored Sky into ours: the solar disc removed, an exposure
+ * multiplier added, and — for the IBL copy only — a ground bounce under the
+ * horizon, because the model just keeps showing sky down there and the
+ * underside of a car is not lit by sky.
+ */
+function patchSkyMaterial(mat, withGround) {
+  let fs = mat.fragmentShader;
+  if (fs.indexOf(SKY_DISC_SRC) < 0 || fs.indexOf(SKY_OUT_SRC) < 0) {
+    console.warn('[RALLY ROAD RASH] vendored Sky.js shader changed shape — sky patch skipped');
+    return;
+  }
+  fs = fs.replace(SKY_DISC_SRC, '// solar disc removed: sky.js draws its own, per theme');
+  fs = fs.replace(SKY_OUT_SRC, withGround
+    ? `vec3 envCol = retColor * uSkyExposure;
+       // dim, warm, and the reason the underside of a car is not black
+       envCol = mix(envCol, uEnvGround, smoothstep(0.0, -0.45, normalize(vWorldPosition - cameraPosition).y));
+       gl_FragColor = vec4( envCol, 1.0 );`
+    : 'gl_FragColor = vec4( retColor * uSkyExposure, 1.0 );');
+  mat.fragmentShader = 'uniform float uSkyExposure;\n'
+    + (withGround ? 'uniform vec3 uEnvGround;\n' : '') + fs;
+  mat.needsUpdate = true;
+}
+
 export class Sky {
   /**
    * @param renderer  WebGLRenderer (PMREM needs it)
@@ -246,10 +446,17 @@ export class Sky {
     /* STATIC per track. terrain.js bakes shadows against this exact vector. */
     this.sunDir = new THREE.Vector3(t.sunDir.x, t.sunDir.y, t.sunDir.z).normalize();
     this.sunColor = new THREE.Color(t.sunColor);
-    this.hazeColor = new THREE.Color(t.hazeColor);
-    this.horizonColor = new THREE.Color(t.horizon);
-    this.zenithColor = new THREE.Color(t.zenith);
     this.sunIntensity = t.sunIntensity;
+
+    /* §8.5: read off the model, not authored. Same names, same three
+       consumers (FogExp2, main.js syncSun's terrain haze, the overlay), one
+       source. Done before anything is built, because the fog and the overlay
+       both want the answer. */
+    const derived = deriveSkyColors(t);
+    this.skyModel = derived.params;
+    this.hazeColor = new THREE.Color().fromArray(derived.haze);
+    this.horizonColor = new THREE.Color().fromArray(derived.horizon);
+    this.zenithColor = new THREE.Color().fromArray(derived.zenith);
 
     this.group = new THREE.Group();
     this.group.matrixAutoUpdate = true;
@@ -257,15 +464,18 @@ export class Sky {
 
     // the dome paints every pixel the world does not cover
     scene.background = null;
-    this.fog = new THREE.FogExp2(t.hazeColor, t.fogHint);
+    this.fog = new THREE.FogExp2(0x000000, t.fogHint);
+    this.fog.color.copy(this.hazeColor);
     this._prevFog = scene.fog || null;
     scene.fog = this.fog;
 
     this._time = 0;
     this._envDirty = true;
     this.envRT = null;
+    this._envImage = null;         // §8.5: a set equirect wins over the shader env
     this._skyline = null;          // optional panorama; the ring is the fallback
 
+    this._buildSkyDome();
     this._buildDome();
     this._buildSun();
     this._buildVista();
@@ -311,25 +521,62 @@ export class Sky {
     this._envDirty = true;
   }
 
-  /* ---------------- the dome ---------------- */
+  /* ---------------- the physical dome ----------------
+     The vendored Preetham model, and the only thing painting plain sky. The
+     box is 1x1x1 scaled out to DOME_R; the shader forces gl_Position.z to the
+     far plane anyway and this thing neither tests nor writes depth, so its
+     actual size is only about staying inside the frustum.
+
+     The uniforms object is SHARED with the IBL copy in _buildEnv, which is
+     what makes the reflections and the sky the same sky by construction
+     rather than by two matching edits. */
+  _buildSkyDome() {
+    const t = this.theme;
+    const mesh = new PhysicalSky();
+    const u = mesh.material.uniforms;
+    u.turbidity.value = this.skyModel.turbidity;
+    u.rayleigh.value = this.skyModel.rayleigh;
+    u.mieCoefficient.value = this.skyModel.mie;
+    u.mieDirectionalG.value = this.skyModel.mieG;
+    u.sunPosition.value.copy(this.sunDir);        // unit, exactly as the port assumes
+    u.uSkyExposure = { value: this.skyModel.exposure };
+    u.uEnvGround = { value: new THREE.Color(t.groundHaze).multiplyScalar(0.55) };
+    patchSkyMaterial(mesh.material, false);
+    mesh.material.depthWrite = false;
+    mesh.material.depthTest = false;
+    mesh.material.fog = false;
+    mesh.scale.setScalar(DOME_R);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = -1000;
+    this.skyUniforms = u;
+    this.skyMesh = mesh;
+    this.group.add(mesh);
+  }
+
+  /* ---------------- the overlay dome ----------------
+     Everything the scattering integral cannot do, and nothing else: the
+     SKYLINE panorama band, the caldera's ash and ember blocks, and the ground
+     haze below the horizon. Fully transparent everywhere those three say
+     nothing, so the physical dome shows through untouched.
+
+     premultipliedAlpha, because the ember block is ADDITIVE and the other two
+     are coverage. Premultiplied source-over is the one blend that does both:
+     a covering layer writes (colour * alpha, alpha), an additive one writes
+     (colour, 0). */
   _buildDome() {
     const t = this.theme;
     const b = this.budget;
     const ash = !!t.ash;
-    const geo = new THREE.SphereGeometry(DOME_R, b.domeW, b.domeH);
+    const geo = new THREE.SphereGeometry(DOME_R * 0.98, b.domeW, b.domeH);
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, fog: false,
+      transparent: true, premultipliedAlpha: true,
       // no depth at all: this is a background fill, drawn before anything opaque
       depthWrite: false, depthTest: false,
       defines: ash ? { ASH: 1, ASH_OCT: b.ashOct } : {},
       uniforms: {
-        uZenith: { value: this.zenithColor },
-        uHorizon: { value: this.horizonColor },
         uHaze: { value: this.hazeColor },
         uGround: { value: new THREE.Color(t.groundHaze) },
-        uSunCol: { value: new THREE.Color(t.sunDiscColor) },
-        uSunDir: { value: this.sunDir },
-        uHalo: { value: t.haloStrength },
         uTime: { value: 0 },
         uAsh: { value: t.ash || 0 },
         uAshCol: { value: new THREE.Color(t.ashColor || 0x333333) },

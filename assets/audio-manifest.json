@@ -1,0 +1,38 @@
+{
+  "music": {
+    "training": { "url": "music/training.mp3", "durationSec": 104.986 },
+    "canyon":   { "url": "music/canyon.mp3",   "durationSec": 105.038 },
+    "forest":   { "url": "music/forest.mp3",   "durationSec": 105.038 },
+    "volcano":  { "url": "music/volcano.mp3",  "durationSec": 105.038 },
+    "thunder":  { "url": "music/thunder.mp3",  "durationSec": 105.091 },
+    "menu":     { "url": "music/menu.mp3",     "durationSec": 90.044 }
+  },
+  "sfx": {
+    "rocketFire":      { "url": "sfx/rocket-fire.mp3" },
+    "rocketFlyby":     { "url": "sfx/rocket-flyby.mp3" },
+    "explodeNear":     { "url": "sfx/explode-near.mp3" },
+    "explodeFar":      { "url": "sfx/explode-far.mp3" },
+    "ammoPickup":      { "url": "sfx/ammo-pickup.mp3" },
+    "nitroPickup":     { "url": "sfx/nitro-pickup.mp3" },
+    "nitroBurst":      { "url": "sfx/nitro-burst.mp3" },
+    "ammoEmpty":       { "url": "sfx/ammo-empty.mp3" },
+    "crateBreak":      { "url": "sfx/crate-break.mp3" },
+    "crashHeavy":      { "url": "sfx/crash-heavy.mp3" },
+    "crashLight":      { "url": "sfx/crash-light.mp3" },
+    "landHeavy":       { "url": "sfx/land-heavy.mp3" },
+    "landSoft":        { "url": "sfx/land-soft.mp3" },
+    "metalScrape":     { "url": "sfx/metal-scrape.mp3" },
+    "spinOutSkid":     { "url": "sfx/spin-out-skid.mp3" },
+    "checkpointChime": { "url": "sfx/checkpoint-chime.mp3" },
+    "lapBell":         { "url": "sfx/lap-bell.mp3" },
+    "finalLapHorn":    { "url": "sfx/final-lap-horn.mp3" },
+    "countdownBeep":   { "url": "sfx/countdown-beep.mp3" },
+    "countdownGo":     { "url": "sfx/countdown-go.mp3" },
+    "finishCrowd":     { "url": "sfx/finish-crowd.mp3" },
+    "positionUp":      { "url": "sfx/position-up.mp3" },
+    "positionDown":    { "url": "sfx/position-down.mp3" },
+    "uiTick":          { "url": "sfx/ui-tick.mp3" },
+    "uiConfirm":       { "url": "sfx/ui-confirm.mp3" },
+    "uiBack":          { "url": "sfx/ui-back.mp3" }
+  }
+}

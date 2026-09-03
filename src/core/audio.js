@@ -22,6 +22,9 @@
 
 import { SURFACES, SURF } from '../world/surfaces.js';
 import * as ARCADE_SFX from './audio-arcade.js';
+import { MusicBank } from './music.js';
+import { SfxBank } from './sfx.js';
+import * as WEAPONS from './audio-weapons.js';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const hz = (midi) => 440 * Math.pow(2, (midi - 69) / 12);
@@ -99,6 +102,12 @@ export class Audio {
     this._surfW = new Float32Array(SURFACES.length);
     this._surfW[SURF.DIRT] = 1;
     this._step = 0; this._musicT0 = null; this._musicLastT = 0; this._inten = 0;
+
+    // Contract 8.7: the sampled soundtrack and sample bank. Both take `this`
+    // and are safe to construct with no ctx — they only ever touch it inside
+    // methods that check for one first, same as everything above.
+    this._sfx = new SfxBank(this);
+    this._music = new MusicBank(this);
   }
 
   /* `external` lets the whole graph be built on an OfflineAudioContext, which is
@@ -123,6 +132,12 @@ export class Audio {
     this._buildGrains();
     this._buildMusic();
     this.ready = true;
+
+    /* Fetch + decodeAudioData AFTER ready — never before, there is no ctx
+       until this point. Fire-and-forget: init() stays synchronous, and both
+       banks are no-ops for every caller until their promise resolves. */
+    this._sfx.load();
+    this._music.load();
 
     /* init() happens on the first user gesture, which can be long after the
        menu has already picked a car, a volume and a music mode. Replay the
@@ -533,6 +548,18 @@ export class Audio {
     this.raceBus = ctx.createGain(); this.raceBus.gain.value = 0.0001;
     this.menuBus.connect(this.mBus); this.raceBus.connect(this.mBus);
 
+    /* Contract 8.7: everything generative funnels through one of these two
+       gates rather than straight into menuBus/raceBus. MusicBank mutes the
+       gate for a bus the instant it has a sample theme playing there, and
+       opens it back up the instant it doesn't — the generative loop is the
+       fallback for a MISSING sample, not a second track playing under one
+       that exists. Idle at gain 1 (fully open) when MusicBank never loads
+       anything, which is exactly today's behaviour. */
+    this.raceGen = ctx.createGain(); this.raceGen.gain.value = 1;
+    this.raceGen.connect(this.raceBus);
+    this.menuGen = ctx.createGain(); this.menuGen.gain.value = 1;
+    this.menuGen.connect(this.menuBus);
+
     this.mVerb = ctx.createConvolver(); this.mVerb.buffer = this._impulse(2.6, 2.4);
     this.mVerbG = ctx.createGain(); this.mVerbG.gain.value = 0.42;
     this.menuBus.connect(this.mVerb); this.mVerb.connect(this.mVerbG);
@@ -541,16 +568,16 @@ export class Audio {
     // shared per-layer filters: notes only ever create an osc and a gain
     this.bassFilt = ctx.createBiquadFilter(); this.bassFilt.type = 'lowpass';
     this.bassFilt.frequency.value = 420; this.bassFilt.Q.value = 4.5;
-    this.bassFilt.connect(this.raceBus);
+    this.bassFilt.connect(this.raceGen);
     this.arpFilt = ctx.createBiquadFilter(); this.arpFilt.type = 'bandpass';
     this.arpFilt.frequency.value = 1500; this.arpFilt.Q.value = 1.1;
-    this.arpFilt.connect(this.raceBus);
+    this.arpFilt.connect(this.raceGen);
     this.padFilt = ctx.createBiquadFilter(); this.padFilt.type = 'lowpass';
     this.padFilt.frequency.value = 1300; this.padFilt.Q.value = 0.8;
-    this.padFilt.connect(this.menuBus);
+    this.padFilt.connect(this.menuGen);
     this.mBassFilt = ctx.createBiquadFilter(); this.mBassFilt.type = 'lowpass';
     this.mBassFilt.frequency.value = 520; this.mBassFilt.Q.value = 3.0;
-    this.mBassFilt.connect(this.menuBus);
+    this.mBassFilt.connect(this.menuGen);
 
     // percussion voices, same trick as the grains so the beat allocates nothing
     this._perc = [];
@@ -561,7 +588,7 @@ export class Audio {
       bp.frequency.value = 8000; bp.Q.value = 1.2;
       const g = ctx.createGain(); g.gain.value = 0.0001;
       const p = ctx.createStereoPanner(); p.pan.value = 0;
-      src.connect(bp); bp.connect(g); g.connect(p); p.connect(this.raceBus);
+      src.connect(bp); bp.connect(g); g.connect(p); p.connect(this.raceGen);
       src.start(ctx.currentTime, (i * 1.13) % src.buffer.duration);
       this._perc.push({ src, bp, g, p });
     }
@@ -592,11 +619,18 @@ export class Audio {
     if (mode === this.musicMode) return;
     this.musicMode = mode;
     this._step = 0; this._musicT0 = null;
+    this._music.setMode(mode);
     if (!this.ready) return;
     const t = this.now();
     this.menuBus.gain.setTargetAtTime(mode === 'menu' ? 1 : 0.0001, t, mode === 'menu' ? 0.5 : 0.8);
     this.raceBus.gain.setTargetAtTime(mode === 'race' ? 1 : 0.0001, t, mode === 'race' ? 0.4 : 0.8);
   }
+
+  /** Contract 8.7. race.js calls this from `_enterGrid`; a theme with no
+      sample track just leaves the generative race loop playing, unchanged.
+      Safe with no context — MusicBank remembers the theme and applies it
+      once (if ever) it finishes loading. */
+  setRaceTheme(theme) { this._music.setRaceTheme(theme); }
 
   /** Called every frame with the app clock. Steps are placed on the app clock
       and mapped onto the audio clock with a short lookahead, so a dropped frame
@@ -605,6 +639,7 @@ export class Audio {
     if (!this.ready || !this.musicOn || this.musicMode === 'off') return;
     const inten = clamp(intensity || 0, 0, 1);
     this._inten += (inten - this._inten) * 0.04;
+    this._music.tick(this._inten);
     const race = this.musicMode === 'race';
     const spb = 60 / (race ? 132 : 100) / 4;              // one sixteenth
     if (this._musicT0 == null) { this._musicT0 = t; this._step = 0; }
@@ -639,13 +674,13 @@ export class Audio {
       const oct = (k === 12) ? 12 : 0;
       this._note(this.mBassFilt, hz(root - 12 + oct), when, 0.26, 0.090, 'sawtooth', 0);
     }
-    if (k === 0 || k === 8) this._kick(this.menuBus, when, 0.30);
+    if (k === 0 || k === 8) this._kick(this.menuGen, when, 0.30);
     if (k === 4 || k === 12) this._percHit(when, 7200, 1.1, 0.035, 0.020, k === 4 ? -0.2 : 0.2);
     if ((bar & 3) === 3 && k >= 8) {                      // sparse lead arp
       if ((k & 1) === 0) {
         const n = ch[(k >> 1) % 3] + 24;
-        this._note(this.menuBus, hz(n), when, 0.36, 0.036, 'triangle', 5);
-        this._note(this.menuBus, hz(n), when + 0.30, 0.30, 0.016, 'triangle', -5);
+        this._note(this.menuGen, hz(n), when, 0.36, 0.036, 'triangle', 5);
+        this._note(this.menuGen, hz(n), when + 0.30, 0.30, 0.016, 'triangle', -5);
       }
     }
   }
@@ -655,8 +690,8 @@ export class Audio {
   _raceStep(s, when, inten) {
     const k = s & 15, bar = (s >> 4) % 4;
     const ch = RACE_CHORDS[bar], root = ch[0];
-    if (k === 0 || k === 4 || k === 8 || k === 12) this._kick(this.raceBus, when, 0.42 + inten * 0.16);
-    if (inten > 0.55 && k === 14) this._kick(this.raceBus, when, 0.26);
+    if (k === 0 || k === 4 || k === 8 || k === 12) this._kick(this.raceGen, when, 0.42 + inten * 0.16);
+    if (inten > 0.55 && k === 14) this._kick(this.raceGen, when, 0.26);
     // hats: eighths always, sixteenths once it heats up
     if ((k & 1) === 0 || inten > 0.32) {
       const acc = (k & 1) === 0 ? 1 : 0.5;
@@ -675,7 +710,7 @@ export class Audio {
     }
     if (inten > 0.85 && k === 0) {                        // final-lap stab
       for (let i = 0; i < 3; i++) {
-        this._note(this.raceBus, hz(ch[i] + 12), when, 0.40, 0.026, 'sawtooth', i * 6 - 6);
+        this._note(this.raceGen, hz(ch[i] + 12), when, 0.40, 0.026, 'sawtooth', i * 6 - 6);
       }
     }
   }
@@ -822,11 +857,12 @@ export class Audio {
     const t = this.now(), f = clamp(force, 0.15, 2.2);
     const sid = surface == null ? this.surfaceId : surface | 0;
     const s = SURFACES[sid] || SURFACES[SURF.DIRT];
+    const soft = sid === SURF.SAND || sid === SURF.MUD || sid === SURF.GRASS ? 1 : 0;
+    if (this._sfx.play(soft ? 'landSoft' : 'landHeavy', { gain: f * 0.7, rate: 0.92 + Math.random() * 0.16 })) return;
     this.thud(f * 0.9);
     this.clunk(Math.min(f * 0.7, 1), -0.3);
     this.clunk(Math.min(f * 0.7, 1) * 0.85, 0.32);
     const wet = sid === SURF.MUD ? 1 : 0;
-    const soft = sid === SURF.SAND || sid === SURF.MUD || sid === SURF.GRASS ? 1 : 0;
     // spray: grains scattered forward in time, so it flies rather than clicks
     const n = Math.min(7, 2 + Math.round(f * 3 * (0.4 + s.dust)));
     for (let i = 0; i < n; i++) {
@@ -853,6 +889,7 @@ export class Audio {
       cannot resolve into a note, then debris. Force scales all three. */
   crash(force = 1, pan = 0) {
     if (!this.ready) return;
+    if (this._sfx.play(force >= 1.15 ? 'crashHeavy' : 'crashLight', { gain: clamp(force, 0.15, 2.5) * 0.6, pan })) return;
     const ctx = this.ctx, t = this.now();
     const f = clamp(force, 0.15, 2.5), pn = clamp(pan, -1, 1);
     const o = ctx.createOscillator(); o.type = 'sine';
@@ -898,8 +935,16 @@ export class Audio {
       its own about 200 ms after the calls stop. */
   scrape(surface = SURF.ROCK, amount = 1) {
     if (!this.ready) return;
+    const amt = clamp(amount, 0, 1);
+    // The continuous bed below is a synth loop, same as every surface bed —
+    // there is no "sample if present" version of a loop that runs for as
+    // long as the caller keeps calling. What a sample CAN do is the onset:
+    // a one-shot accent the instant the body starts dragging.
+    if (amt > 0.15 && this._scrapeReq <= 0.05) {
+      this._sfx.play('metalScrape', { gain: 0.5 + amt * 0.3, rate: 0.92 + Math.random() * 0.16 });
+    }
     this._scrapeSurf = surface | 0;
-    this._scrapeReq = Math.max(this._scrapeReq, clamp(amount, 0, 1));
+    this._scrapeReq = Math.max(this._scrapeReq, amt);
   }
 
   /* ---------------- race cues ---------------- */
@@ -916,17 +961,33 @@ export class Audio {
 
      Six cues left with the roulette in wave 8 — itemRoll, itemThrow, itemDrop,
      towSnap, sledLaunch and stormHit spoke for a seven-item inventory that no
-     longer exists. The rocket/nitro cues that replace them (contract 8.7) are
-     P5's, and every caller in arsenal.js already guards them, so the arsenal
-     is silent rather than broken until P5 lands. */
+     longer exists. The rocket/nitro cues that replace them (contract 8.7) now
+     live in core/audio-weapons.js, same split, just below. */
   boostTier(tier) { ARCADE_SFX.boostTier(this, tier); }
   boostFire(tier, gain) { ARCADE_SFX.boostFire(this, tier, gain); }
-  spinOut(gain) { ARCADE_SFX.spinOut(this, gain); }
+  spinOut(gain) { if (this._sfx.play('spinOutSkid', { gain })) return; ARCADE_SFX.spinOut(this, gain); }
+
+  /* ---- arsenal (contract 8.7) ----
+     Bodies live in core/audio-weapons.js, same split as audio-arcade.js
+     above and for the same reason: this file stays under the house line.
+     Every one is sample-first (core/sfx.js) with synth code behind it.
+     arsenal.js already calls all eight of these guarded (`if (A.rocketFire)
+     …`), so they must exist and be silent-but-safe with no context and no
+     samples loaded. */
+  rocketFire(gain, pan) { WEAPONS.rocketFire(this, gain, pan); }
+  rocketFlyby(pan) { WEAPONS.rocketFlyby(this, pan); }
+  rocketHit(gain, pan, near) { WEAPONS.rocketHit(this, gain, pan, near); }
+  ammoPickup() { WEAPONS.ammoPickup(this); }
+  nitroPickup() { WEAPONS.nitroPickup(this); }
+  nitroBurst() { WEAPONS.nitroBurst(this); }
+  ammoEmpty() { WEAPONS.ammoEmpty(this); }
+  crateBreak(gain) { WEAPONS.crateBreak(this, gain); }
 
   /** 3, 2, 1 — deliberately low and dry so GO reads as a release. */
   countdownBeep(n = 3) {
     if (!this.ready) return;
     const t = this.now(), i = clamp(3 - (n | 0), 0, 2);
+    if (this._sfx.play('countdownBeep', { gain: 0.8, rate: Math.pow(2, i / 24) })) return;
     const f = 196 * Math.pow(2, i / 24);          // barely rising: tension, not melody
     this._note(this.busSfx, f, t, 0.20, 0.17, 'square', 0);
     this._note(this.busSfx, f * 0.5, t, 0.16, 0.10, 'sine', 0);
@@ -936,6 +997,7 @@ export class Audio {
   /** GO — a bright major stab an octave above the beeps, with a lift under it. */
   countdownGo() {
     if (!this.ready) return;
+    if (this._sfx.play('countdownGo', { gain: 0.9 })) return;
     const t = this.now();
     const CH = [587.33, 739.99, 880.0, 1174.66];  // D major
     for (let i = 0; i < CH.length; i++) {
@@ -950,6 +1012,7 @@ export class Audio {
   /** Two notes, fast, up — has to survive being heard 14 times a lap. */
   checkpoint() {
     if (!this.ready) return;
+    if (this._sfx.play('checkpointChime', { gain: 0.8 })) return;
     const t = this.now();
     this._note(this.busSfx, 1174.66, t, 0.10, 0.085, 'triangle', 0);
     const g = this._note(this.busSfx, 1567.98, t + 0.065, 0.22, 0.075, 'triangle', 0);
@@ -961,6 +1024,7 @@ export class Audio {
       sounding like a synth pad with a fast attack. `final` adds the riser. */
   lapBell(final = false) {
     if (!this.ready) return;
+    if (this._sfx.play(final ? 'finalLapHorn' : 'lapBell', { gain: 0.9 })) return;
     const t = this.now(), base = final ? 784 : 659.25;
     const P = [1, 2.01, 2.76, 5.4, 8.93], A = [0.10, 0.055, 0.040, 0.020, 0.011];
     const D = [1.7, 1.2, 0.95, 0.55, 0.32];
@@ -981,6 +1045,10 @@ export class Audio {
       settle rather than celebrate — you finished, that is all. */
   finishFanfare(won = false) {
     if (!this.ready) return;
+    // A crowd sample is ambience, not a competing melody — it LAYERS under
+    // the stinger below rather than replacing it, unlike every other cue's
+    // sample check. Broadband noise and a tonal phrase don't fight.
+    this._sfx.play('finishCrowd', { gain: 0.7 });
     const t = this.now();
     if (won) {
       const MEL = [587.33, 739.99, 880.0, 1174.66], OFF = [0, 0.13, 0.26, 0.42];
@@ -1011,6 +1079,7 @@ export class Audio {
       never mask the engine. A short whoosh with a tick on the landing. */
   positionUp() {
     if (!this.ready) return;
+    if (this._sfx.play('positionUp', { gain: 0.85 })) return;
     const t = this.now();
     this._burst(t, 0.22, 'bandpass', 500, 2400, 2.4, 0.075, -0.2, this.busSfx);
     this._note(this.busSfx, 1318.51, t + 0.19, 0.11, 0.070, 'triangle', 0);
@@ -1018,6 +1087,7 @@ export class Audio {
   }
   positionDown() {
     if (!this.ready) return;
+    if (this._sfx.play('positionDown', { gain: 0.85 })) return;
     const t = this.now();
     this._burst(t, 0.24, 'bandpass', 2200, 420, 2.4, 0.070, 0.2, this.busSfx);
     this._note(this.busSfx, 440, t + 0.20, 0.14, 0.065, 'triangle', 0);
@@ -1075,6 +1145,8 @@ export class Audio {
 
   ui(kind = 'tick') {
     if (!this.ready) return;
+    const sampleName = kind === 'tick' ? 'uiTick' : kind === 'ok' ? 'uiConfirm' : kind === 'back' ? 'uiBack' : null;
+    if (sampleName && this._sfx.play(sampleName, { gain: 0.7 })) return;
     const t = this.now();
     if (kind === 'tick') this.ping(1900, 0.05, 0.045, 'square');
     else if (kind === 'hover') this.ping(2600, 0.03, 0.016, 'sine');

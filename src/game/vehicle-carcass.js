@@ -63,7 +63,17 @@ const RACK_DEFAULT = 6, RACK_MAX = 12;
    (index.html at the root); dev/garage.js overrides it with '../assets/…'
    and `?model=0` sets it null. main.js may point it at assets.url() once
    the manifest carries model entries — either answer is a relative url. */
-let _source = (id) => 'assets/models/' + id + '-carcass.glb';
+/* No default. A guessed path is a second source of truth, and the earlier one
+   wins: this used to default to 'assets/models/<id>-carcass.glb', so the menu
+   scene fetched a GLB at boot — before main.js had installed the manifest
+   lookup — and bypassed the manifest entirely. On a tree with no assets/ that
+   is a 404 in the console for a file nobody ever said existed, which is a QA
+   gate (hard rule 1), and it also made contract 8.6's "read it with
+   assets.url(id)" untrue in the one place it mattered.
+   Whoever owns the page declares the source: main.js from the manifest, and
+   dev/garage.js from its own ?model flag. Until then there is no carcass, and
+   no carcass means today's procedural body. */
+let _source = null;
 export function setCarcassSource(fn) { _source = typeof fn === 'function' ? fn : null; }
 
 /* core/models.js pulls GLTFLoader, which the Node harnesses must never see,

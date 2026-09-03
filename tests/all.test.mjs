@@ -135,6 +135,19 @@ test('deep: kit-check (set-dressing geometry gates)', () => {
   run(['--experimental-loader', './dev/loader.mjs', 'dev/kit-check.mjs']);
 });
 
+/* No loader shim on these two: both are deliberately three-free. model-check
+   reads the GLB container out of its own bytes because GLTFLoader wants a DOM,
+   and audio-check exercises Audio/MusicBank/SfxBank with no AudioContext. A
+   check that needs the renderer or a sound card to answer "is this file within
+   budget" is not a check you can run before a commit. */
+test('deep: model-check (carcass GLB container + fit budgets)', () => {
+  run(['dev/model-check.mjs']);
+});
+
+test('deep: audio-check (manifest ↔ files, every cue has a fallback)', () => {
+  run(['dev/audio-check.mjs']);
+});
+
 /* Registered before src/game/tricks.js exists. The check is a stub that exits
    0 today and fails loudly the moment the module lands without real gates
    behind it — see dev/trick-check.mjs. */

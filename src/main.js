@@ -157,12 +157,15 @@ async function boot() {
     App.ui.setAssets(App.assets);
     App.menuScene.assets = App.assets;
     /* Where a vehicle's carcass GLB lives (contract 8.6). The manifest is the
-       only source — no conventional path fallback, so deleting an entry really
-       does disable that machine's model rather than half-disabling it. Set
-       here rather than at boot because `models/<id>` is a manifest lookup and
-       there is no manifest until this resolves; a race is built long after,
-       and one built earlier simply keeps the procedural body it already has. */
+       only source — no guessed path, so an entry that is absent really does
+       mean "draw the procedural body" instead of "fetch it anyway and 404".
+       The lookup is lazy, so it is correct to install it before the manifest
+       exists; it simply answers null until then. */
     setCarcassSource((id) => App.assets.url('models/' + id + '-carcass'));
+    /* The menu scene built its machine at boot, when that lookup still said
+       null. Nothing about the CHOICE of machine has changed, so setVehicle
+       would short-circuit — ask for the rebuild explicitly. */
+    if (App.menuScene && App.menuScene.rebuildVehicle) App.menuScene.rebuildVehicle();
     // Repaint whatever is on screen so art that arrived late is used.
     if (App.state === AS.MENU || App.state === AS.TRACKS || App.state === AS.GARAGE) {
       showScreen(App.state === AS.TRACKS ? 'tracks' : App.state === AS.GARAGE ? 'garage' : 'main');

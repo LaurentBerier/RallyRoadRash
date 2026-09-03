@@ -149,6 +149,22 @@ export class MenuScene {
     if (this.dust) this.dust.setTheme(this.theme);
   }
 
+  /**
+   * Rebuild the machine on the pad even though it has not changed.
+   *
+   * For when something the BUILD reads has changed rather than the choice of
+   * machine — the asset manifest arriving after boot, which is what tells
+   * vehicle-carcass where the generated bodies live. setVehicle() short-
+   * circuits on an unchanged spec, which is right for the garage and wrong
+   * here, so this is the explicit way to ask for the work again.
+   */
+  rebuildVehicle() {
+    const id = this.vehicleId;
+    this.vehicle = null;          // defeat setVehicle's unchanged-spec guard
+    this._dropVehicle();
+    this.setVehicle(id);
+  }
+
   /** The garage swaps the machine on the pad. */
   setVehicle(vehicleId) {
     if (vehicleId) this.vehicleId = vehicleId;
