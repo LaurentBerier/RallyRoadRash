@@ -263,6 +263,22 @@ export class Feel {
   addShake(v) { this.rig.addShake((v || 0) * this.intensity); }
 
   /**
+   * A one-frame white pop from something that went off on screen — the rocket
+   * blast, and until now the only writer of `_flash` was landing().
+   *
+   * MAX, not assignment. `_flash` is written into uFlash once per update() and
+   * cleared there, so this is a REQUEST for a frame rather than a state: two
+   * rockets in the same frame make one pop of the louder of them, not a
+   * blown-out screen. With no engine attached the field is still set and still
+   * cleared by the next update, so the call is a no-op on a headless build
+   * rather than a branch every caller has to spell out.
+   */
+  flash(amt) {
+    const a = clamp(amt || 0, 0, 1) * this.intensity;
+    if (a > this._flash) this._flash = a;
+  }
+
+  /**
    * The nitro post-fx (contract 8.4): radial blur, the blue-white push, the
    * vignette pinch and the zoom warp all read one uniform, and this is the
    * one place it is set. arsenal.js hands in 0..1 every frame the player

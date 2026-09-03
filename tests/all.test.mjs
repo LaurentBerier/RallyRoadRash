@@ -152,6 +152,10 @@ test('deep: sky-check (per-theme sky params, exposure calibration, sunDir)', () 
   run(['--experimental-loader', './dev/loader.mjs', 'dev/sky-check.mjs']);
 });
 
+test('deep: props-check (the mass rule, the dynamic pool, sleep and reset)', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/props-check.mjs']);
+});
+
 /* Registered before src/game/tricks.js exists. The check is a stub that exits
    0 today and fails loudly the moment the module lands without real gates
    behind it — see dev/trick-check.mjs. */

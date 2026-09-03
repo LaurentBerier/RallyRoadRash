@@ -9,6 +9,8 @@
      • confetti   the finish line, and nothing else
      • rings      the pressure front of a hit, the flash of a boost pad
      • ribbons    the trail behind a projectile and the flame off a boost
+     • fireball   a rocket detonating — and it is built out of the three
+                  above plus dust, not out of a fourth system. See below.
 
    THE THREE DRAW CALLS
    --------------------
@@ -126,11 +128,16 @@ export class VFX {
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           vec3 vv = (viewMatrix * vec4(aVel, 0.0)).xyz;
           // Only the STREAK tile stretches along its travel; a spark is a
-          // point of light and a confetto tumbles on its own axis.
-          float isStreak = step(2.5, aParam.y);
+          // point of light and a confetto tumbles on its own axis. Matched
+          // EXACTLY rather than as "tile >= 3": the sheet grew to 3x3 for
+          // GLOW, and a >= test would have read every tile past the streak as
+          // a streak and smeared the fireball down its own velocity.
+          float isStreak = step(abs(aParam.y - 3.0), 0.5);
           vStretch = mix(1.0, clamp(1.0 + length(vv.xy) * 0.055, 1.0, 3.4), isStreak);
           vAng = mix(aSeed * 6.2832 + aParam.z * uTime, atan(vv.y, vv.x + 1e-6), isStreak);
-          vTile = vec2(mod(aParam.y, 2.0), floor(aParam.y * 0.5)) * 0.5;
+          // cell = (id % 3, id / 3) on a 3x3 sheet — the same arithmetic
+          // textures.js draws with, from the same id.
+          vTile = vec2(mod(aParam.y, 3.0), floor(aParam.y / 3.0)) / 3.0;
           // metres -> pixels straight out of the projection, same as dust.js
           float px = projectionMatrix[1][1] * uViewH * 0.5 / max(-mv.z, 0.30);
           gl_PointSize = clamp(aParam.x * px * sqrt(vStretch), 1.0, uMaxPx);
@@ -148,7 +155,7 @@ export class VFX {
           pc.x /= vStretch;
           // every tile fades to zero alpha at its border, so a rotated corner
           // samples the gutter and discards
-          vec2 uv = clamp(pc + 0.5, 0.0, 1.0) * 0.5 + vTile;
+          vec2 uv = clamp(pc + 0.5, 0.0, 1.0) / 3.0 + vTile;
           vec4 t = texture2D(uTex, uv);
           if (t.a < 0.008) discard;
           // additive: alpha is the WEIGHT, the colour is the energy. Sparks
@@ -342,9 +349,14 @@ export class VFX {
        going to black. */
     const geo = new THREE.PlaneGeometry(2, 2);
     geo.rotateX(-Math.PI / 2);
+    /* The RING quadrant, baked into the quad's uv once. Tile 2 on the 3x3
+       sheet is cell (2, 0) — the same (id % 3, id / 3) the shader computes,
+       written out here because this mesh is a plain MeshBasicMaterial and has
+       no aParam to compute it from. */
     const uv = geo.attributes.uv;
+    const T3 = 1 / 3;
     for (let i = 0; i < uv.count; i++) {
-      uv.setXY(i, uv.getX(i) * 0.5, uv.getY(i) * 0.5 + 0.5);
+      uv.setXY(i, uv.getX(i) * T3 + 2 * T3, uv.getY(i) * T3);
     }
     this.ringGeo = geo;
     this.ringMat = new THREE.MeshBasicMaterial({
@@ -460,6 +472,90 @@ export class VFX {
       // dark, slow, and it hangs — the difference between a bang and a bloom
       this.dust.spawn(6, x, y + 0.2, z, radius * 1.5, radius * 0.45, 0, 0,
         0.13, 0.11, 0.10, DUST_KIND.PUFF);
+    }
+  }
+
+  /**
+   * A rocket detonating. The one effect in this file that has to read as a
+   * THING rather than as a flourish, and the reason the sheet grew a GLOW
+   * tile: SPARK's core is a deliberate pinpoint so it survives the bloom, and
+   * a fireball made of pinpoints is a firework.
+   *
+   * THREE LAYERS, STAGGERED BY LIFE. A particle pool has no timeline, so
+   * "staggered" here means the short layer is finished before the long one
+   * has moved: white-hot is gone in a tenth of a second, the orange body
+   * burns for a third of one, the dim tail lingers for a second where the
+   * fire was. The body and the tail RISE — `_emit`'s gravity argument takes a
+   * negative — while the debris in step 5 falls under a positive one, and
+   * that opposition is the whole reason the shape reads as combustion rather
+   * than as a sphere of sprites.
+   *
+   * STILL THREE DRAW CALLS. Every particle below is the shared Points pool,
+   * the front is the shared ring InstancedMesh, and the black half of the
+   * plume is dust.spawn(..., PUFF) exactly as this file's header insists — an
+   * additive pool cannot draw anything dark, so smoke could never have lived
+   * here even if a fourth call were free.
+   *
+   * @param x,y,z  the blast point
+   * @param r      blast radius in metres. Every size, speed and count below
+   *               scales off it, so one number covers a hand grenade and a
+   *               fuel drum.
+   */
+  fireball(x, y, z, r) {
+    const R = r > 0.8 ? r : 0.8;
+
+    /* 1. THE FLASH. A few wide white-hot balls at the core, over before the
+       eye resolves them. Well above 1 on every channel so the bloom takes
+       them outright — this is the single frame that says "explosion". */
+    for (let i = 0; i < 4; i++) {
+      const a = Math.random() * 6.2832, t = Math.random() * 0.30 * R;
+      this._emit(x + Math.cos(a) * t, y + 0.25 + Math.random() * 0.35, z + Math.sin(a) * t,
+        0, 1.2 + Math.random() * 1.4, 0,
+        R * (0.55 + Math.random() * 0.28), VFX_TILE.GLOW,
+        2.60, 2.30, 1.85,
+        0.10 + Math.random() * 0.07, 1.8, -0.30, 0);
+    }
+
+    /* 2. THE BODY. Orange, thrown out and up in a wide cone, dragged hard so
+       it stops expanding early and then simply burns where it stopped. */
+    for (let i = 0; i < 12; i++) {
+      const a = Math.random() * 6.2832;
+      const t = Math.tan(0.95 * Math.sqrt(Math.random()));
+      const sp = R * (0.90 + Math.random() * 1.50);
+      this._emit(x, y + 0.20, z,
+        Math.cos(a) * t * sp, sp * (0.55 + Math.random() * 0.85), Math.sin(a) * t * sp,
+        R * (0.30 + Math.random() * 0.30), VFX_TILE.GLOW,
+        1.85, 0.78, 0.20,
+        0.28 + Math.random() * 0.24, 1.30, -0.34, 0);
+    }
+
+    /* 3. THE TAIL. Dim, slow, long: the fire going out. Additive cannot
+       darken, so "smoky" here is a low ember red that the sky washes into
+       nothing — the actual black is dust's, in step 5. */
+    for (let i = 0; i < 7; i++) {
+      const a = Math.random() * 6.2832, t = Math.random() * 0.55 * R;
+      this._emit(x + Math.cos(a) * t, y + 0.35 + Math.random() * 0.5 * R, z + Math.sin(a) * t,
+        Math.cos(a) * 0.7, 0.9 + Math.random() * 1.1, Math.sin(a) * 0.7,
+        R * (0.42 + Math.random() * 0.42), VFX_TILE.GLOW,
+        0.52, 0.22, 0.09,
+        0.72 + Math.random() * 0.55, 0.85, -0.18, 0);
+    }
+
+    /* 4. THE FRONT. A second ring, tighter and quicker than shock()'s, so the
+       pressure wave reads as LEAVING the fire rather than as a decal drawn
+       around it. Both are the same InstancedMesh. */
+    this._ring(x, y + 0.06, z, R * 0.10, R * 1.55, Math.random() * 3.14, 1, 0.26,
+      1.90, 1.25, 0.55);
+
+    /* 5. EMBERS, DEBRIS AND SMOKE. The embers are ours. The clods thrown out
+       of the crater are made of GROUND, so they are dust's — with dust's
+       gravity, drag and ground contact, none of which this pool has. */
+    this.sparks(16, x, y + 0.30, z, 0, 1, 0, R * 4.2, 1.25, 1.55, 0.92, 0.36, 0.5);
+    if (this.dust) {
+      this.dust.spawn(7, x, y + 0.25, z, R * 0.95, R * 0.40, 0, 0,
+        0.42, 0.34, 0.26, DUST_KIND.CLOD);
+      this.dust.spawn(9, x, y + 0.45, z, R * 0.70, R * 0.55, 0, 0,
+        0.11, 0.10, 0.09, DUST_KIND.PUFF);
     }
   }
 

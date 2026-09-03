@@ -30,6 +30,12 @@ import { buildTrackData } from '../src/world/track.js';
 import { TRACKS } from '../src/world/tracks/index.js';
 import { Vehicle } from '../src/game/vehicle.js';
 import { SURF } from '../src/world/surfaces.js';
+/* Sections h and i. arsenal.js pulls three.js in, which is why the loader
+   shim is already on the command line; nothing at its top level touches a DOM,
+   and §h never constructs an Arsenal — it borrows one method off the
+   prototype. feel.js has no imports but core/rng.js. */
+import { Arsenal } from '../src/game/arsenal.js';
+import { Feel } from '../src/game/feel.js';
 
 const W = TUNE.weapons, N = TUNE.nitro, B = TUNE.boost;
 
@@ -403,6 +409,227 @@ head('g  Vehicle.placeAt zeroes nitroT / reloadT / ammo / ammoCap');
     ok(Number.isFinite(out.x) && Number.isFinite(out.y) && Number.isFinite(out.z),
       `${S.id}: muzzleWorld answers on a headless car`);
   }
+}
+
+/* ============================================================
+   h — THE BLAST: a rocket lifts a car and flips it
+   ------------------------------------------------------------
+   Arsenal._launch is the weapon layer's only writer on a car's velocity, and
+   it is exercised here against a REAL headless Vehicle rather than against a
+   re-derivation of its arithmetic. `this` is a two-field stand-in —
+   { racers: [{ vehicle }] }, which is every field the method reads — and the
+   method is called through Function.prototype.call, so what runs is the
+   shipped code, including Vehicle.applyImpulse and the body-frame inertia
+   tensor that is the entire reason this path exists at all.
+
+   Five assertions, and the first two are the bug that shipped:
+
+     • IT LIFTS. The old path wrote `omega.y += side * 3.2` and NOTHING else,
+       so a direct hit was a pirouette on the tarmac. vel.y must be positive.
+     • IT FLIPS. |ωx| + |ωz| must be non-zero. "The car is spinning" is not
+       the same claim as "the car went over", and only the second one is what
+       an explosion looks like.
+     • THE AXIS CARRIES INFORMATION. A hit on the FLANK must roll harder than
+       it pitches and a hit from BEHIND the reverse. That asymmetry is the
+       only thing in the whole effect that tells a player which direction the
+       rocket arrived from, and it is the one thing a hand-rolled `omega.y +=`
+       can never produce.
+     • IT ADDS NO YAW OF ITS OWN. `spinT` and the yaw kick belong to _spin,
+       which is deliberately the single writer of the spin-out (decision 3).
+       The arm here is horizontal and the shove has a vertical, so the torque
+       is purely horizontal and ω.y must come out of _launch untouched.
+     • NEITHER CLAMP CAN BE ESCAPED. Δv is bounded by TUNE.collide.maxDeltaV —
+       reused rather than reinvented, because "how much velocity may one
+       contact add" is the same question a car-on-car impulse answers — and Δω
+       by TUNE.weapons.flipW. Splash is strictly weaker than direct at the
+       same range.
+   ============================================================ */
+head('h  the blast: it lifts, it flips, it points, and neither clamp escapes');
+{
+  const flat = {
+    heightAt: () => 0,
+    normalAt(x, z, e, out) { return out.set(0, 1, 0); },
+    surfaceAt: () => SURF.DIRT,
+    onRoad: () => 1,
+  };
+  const launch = Arsenal.prototype._launch;
+  ok(typeof launch === 'function', 'Arsenal._launch exists');
+
+  /** A car at the origin facing +Z, at rest, with a one-racer Arsenal behind
+      it. Nothing else in Arsenal is constructed or needed. */
+  function mock(S) {
+    const v = new Vehicle(null, flat, S, { headless: true });
+    v.placeAt(0, 0, 0);
+    v.vel.set(0, 0, 0);
+    v.omega.set(0, 0, 0);
+    return { vehicle: v, racers: [{ vehicle: v }] };
+  }
+  /** Fire a blast whose shove points (dx, dz) and read what it did. */
+  function hit(S, dx, dz, direct) {
+    const m = mock(S);
+    launch.call(m, 0, dx, dz, direct);
+    const v = m.vehicle;
+    return {
+      dv: v.vel.length(), up: v.vel.y,
+      roll: Math.abs(v.omega.dot(v.forward)),
+      pitch: Math.abs(v.omega.dot(v.right)),
+      yaw: Math.abs(v.omega.y),
+      flip: Math.abs(v.omega.x) + Math.abs(v.omega.z),
+      w: v.omega.length(),
+    };
+  }
+
+  const CAP = TUNE.collide.maxDeltaV;
+  console.log(`      machine     Δv      up     roll    pitch    yaw   |   splash Δv`);
+  for (const S of VEHICLES) {
+    const flank = hit(S, 1, 0, true);        // from the side: must ROLL
+    const rear = hit(S, 0, 1, true);         // from behind: must PITCH
+    const splash = hit(S, 1, 0, false);
+    console.log(`      ${S.id.padEnd(10)} ${f2(flank.dv).padStart(5)}  ` +
+      `${f2(flank.up).padStart(5)}  ${f2(flank.roll).padStart(6)}  ` +
+      `${f2(flank.pitch).padStart(6)}  ${f2(flank.yaw).padStart(5)}   |   ` +
+      `${f2(splash.dv).padStart(5)}   (rear roll ${f2(rear.roll)} pitch ${f2(rear.pitch)})`);
+
+    ok(flank.up > 0.5, `${S.id}: a direct hit LIFTS the car (vel.y ${f2(flank.up)})`);
+    ok(flank.flip > 0.05,
+      `${S.id}: …and flips it — |ωx|+|ωz| ${f2(flank.flip)}, not a yaw-only kick`);
+    ok(flank.roll > flank.pitch, `${S.id}: a flank hit rolls more than it pitches ` +
+      `(${f2(flank.roll)} vs ${f2(flank.pitch)})`);
+    ok(rear.pitch > rear.roll, `${S.id}: a hit from behind pitches more than it rolls ` +
+      `(${f2(rear.pitch)} vs ${f2(rear.roll)})`);
+    ok(flank.yaw < 1e-6 && rear.yaw < 1e-6,
+      `${S.id}: the launch adds no yaw — _spin stays the one writer of the spin-out`);
+    ok(Math.abs(flank.dv - W.launchV) < 1e-3,
+      `${S.id}: a direct hit is exactly ${W.launchV} m/s of Δv (${f2(flank.dv)})`);
+    ok(splash.dv < flank.dv - 1e-6,
+      `${S.id}: splash is strictly weaker than direct at the same range ` +
+      `(${f2(splash.dv)} < ${f2(flank.dv)})`);
+    ok(flank.dv <= CAP + 1e-6 && splash.dv <= CAP + 1e-6,
+      `${S.id}: Δv never exceeds collide.maxDeltaV (${CAP})`);
+    ok(flank.w <= W.flipW + 1e-6 && rear.w <= W.flipW + 1e-6,
+      `${S.id}: Δω never exceeds weapons.flipW (${W.flipW}) — ` +
+      `${f2(Math.max(flank.w, rear.w))} rad/s`);
+  }
+
+  /* The Δv clamp with the numbers as shipped can never bite — launchV is 7
+     and maxDeltaV is 26 — so it is proved by making it bite. A gate that only
+     passes because its own input is small is not a gate. */
+  {
+    const was = W.launchV;
+    W.launchV = CAP * 10;
+    const huge = hit(VEHICLE_BY_ID.moto, 1, 0, true);
+    W.launchV = was;
+    ok(Math.abs(huge.dv - CAP) < 1e-3,
+      `a point-blank blast ten times over the cap is clamped to ${CAP} m/s ` +
+      `(${f2(huge.dv)})`);
+    ok(huge.w <= W.flipW + 1e-6,
+      `…and its spin is still held at flipW (${f2(huge.w)} rad/s)`);
+    eq(W.launchV, was, 'the clamp probe put TUNE.weapons.launchV back');
+  }
+
+  /* Mass cancels out of the angular response — I ∝ m·k² and j ∝ m — so the
+     245 kg moto and the 1680 kg truck must arrive at the SAME ceiling off the
+     same shove. Without the flipW scaling the moto span four times faster
+     than the truck, purely because it is small. */
+  {
+    let lo = Infinity, hi = -Infinity;
+    for (const S of VEHICLES) {
+      const w = hit(S, 1, 0, true).w;
+      if (w < lo) lo = w;
+      if (w > hi) hi = w;
+    }
+    ok(hi - lo < 1e-6,
+      `every machine flips at the same rate: ${f2(lo)}–${f2(hi)} rad/s ` +
+      `(mass cancels; only flipW decides)`);
+  }
+
+  /* And a car that has no applyImpulse — an older Vehicle, a mock in another
+     test — must be skipped rather than crash the whole weapon layer. */
+  {
+    const bare = { racers: [{ vehicle: { mass: 900 } }] };
+    let threw = false;
+    try { launch.call(bare, 0, 1, 0, true); } catch (e) { void e; threw = true; }
+    ok(!threw, 'a vehicle without applyImpulse is skipped, not thrown at');
+  }
+}
+
+/* ============================================================
+   i — Feel.flash: the white pop, and what it does with no engine
+   ------------------------------------------------------------
+   The rocket had no screen response at all before wave 9. `flash` is the new
+   channel and it is a REQUEST for one frame rather than a state, which is the
+   only shape that survives two rockets going off in the same frame: they make
+   one pop of the louder of them, never a sum.
+
+   The no-engine case is not hypothetical. Feel is constructed before the
+   composer on some paths and re-reads engine.final every frame precisely
+   because setQuality hands out a new ShaderPass — so "there is no uFlash right
+   now" is a normal state, and it has to be a no-op rather than a throw.
+   ============================================================ */
+head('i  Feel.flash: max not assignment, cleared every frame, silent with no engine');
+{
+  const makeRig = () => ({
+    cam: { quaternion: { x: 0, y: 0, z: 0, w: 1 } },
+    shake: 0, kickPitch: 0, kickYaw: 0, fovOffset: 0,
+    addShake(v) { this.shake += v; },
+    setRumble(a, b) { this.rumble = a; this.sway = b; },
+  });
+
+  ok(typeof Feel.prototype.flash === 'function', 'Feel.flash exists');
+
+  /* ---- with no engine: nothing to write to, and nothing breaks ---- */
+  {
+    const feel = new Feel(makeRig(), null);
+    let threw = false;
+    try {
+      feel.flash(0.35);
+      feel.update(1 / 60, null);
+      feel.flash(1);
+      feel.update(1 / 60, null);
+    } catch (e) { void e; threw = true; }
+    ok(!threw, 'flash() with no engine attached is a no-op, not a throw');
+    eq(feel._flash, 0, '…and leaves nothing behind for the next frame');
+  }
+
+  /* ---- with one: it lands, and it is gone the frame after ---- */
+  {
+    const uFlash = { value: -1 };
+    const engine = { final: { uniforms: { uFlash } } };
+    const feel = new Feel(makeRig(), engine);
+    feel.flash(0.35);
+    ok(Math.abs(feel._flash - 0.35) < 1e-9, 'the request is held until the next update');
+    feel.flash(0.10);
+    ok(Math.abs(feel._flash - 0.35) < 1e-9,
+      'a WEAKER request in the same frame does not overwrite the stronger one');
+    feel.flash(0.80);
+    ok(Math.abs(feel._flash - 0.80) < 1e-9, '…and a stronger one does');
+    feel.update(1 / 60, null);
+    ok(Math.abs(uFlash.value - 0.80) < 1e-9, `it reaches uFlash (${f2(uFlash.value)})`);
+    eq(feel._flash, 0, 'and is cleared in the same update — one frame, never two');
+    feel.update(1 / 60, null);
+    eq(uFlash.value, 0, 'the second frame writes the zero through');
+  }
+
+  /* ---- the master scale reaches it, like every other channel ---- */
+  {
+    const feel = new Feel(makeRig(), null);
+    feel.intensity = 0;
+    feel.flash(1);
+    eq(feel._flash, 0, 'intensity 0 silences the flash with everything else');
+    feel.intensity = 0.5;
+    feel.flash(1);
+    ok(Math.abs(feel._flash - 0.5) < 1e-9, 'and scales it in between');
+    feel.reset();
+    eq(feel._flash, 0, 'reset() clears a pending flash');
+  }
+
+  /* The number arsenal.js actually asks for, at zero range, must still be a
+     POP and not a white-out: uFlash is added to the frame in the final pass,
+     and 1.0 is an unreadable screen at 40 m/s. */
+  ok(W.flashAmt > 0 && W.flashAmt <= 0.5,
+    `weapons.flashAmt (${W.flashAmt}) is a pop, not a white-out`);
+  ok(W.shakeD >= 30 && W.shakeD <= 120,
+    `weapons.shakeD (${W.shakeD} m) keeps a blast across the map off the camera`);
 }
 
 /* ---------------- verdict ---------------- */

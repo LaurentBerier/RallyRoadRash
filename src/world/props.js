@@ -55,7 +55,7 @@ import {
   waterfallMaterial,
 } from './props-recipes.js';
 import {
-  createDynamicPool, dynHit, stepDynamicPool, resetDynamicPool,
+  createDynamicPool, dynHit, stepDynamicPool, resetDynamicPool, knockAt,
 } from './props-dynamic.js';
 import {
   wastelandGeo, planWasteland, planHeroModels, flushWasteland,
@@ -1377,6 +1377,16 @@ export class Props {
    * argument that already clears the ruts and the tyre marks.
    */
   resetDynamic() { if (this._dyn) resetDynamicPool(this._dyn); }
+
+  /**
+   * Flatten everything dynamic-capable inside a blast. arsenal.js calls this
+   * on a rocket detonation, guarded, so the two systems stay independent — a
+   * build with no dynamic props just never knocks anything down.
+   * @returns {number} props claimed
+   */
+  knockAt(x, y, z, r, speed) {
+    return this._dyn ? knockAt(this._dyn, x, y, z, r, speed) : 0;
+  }
 
   update(dt, t, camera) {
     if (dt <= 0) return;

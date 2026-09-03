@@ -27,6 +27,37 @@
      flame   {x,y,z} body-space home for the pipe flare, or null to keep the
              procedural one
      strip   {r} multiplier on the strip radius (default STRIP_R)
+     lamps   {head:{dx,dy,dz}, brake:{dx,dy,dz}} — DELTAS, like `flame` is not:
+             a carcass has its own lamp surfaces, so the procedural discs are
+             hidden and only the bloom sprites survive, moved by this much so
+             the light lands on the painted lamp instead of in mid-air
+     launcher {dx,dy,dz} delta on the arsenal rig, for the very common case
+             that the carcass's roof or deck is not where the procedural one
+             was and the tubes end up buried in it
+     keepLamps  true = this machine's lamps stay exactly where the procedural
+             body put them, discs and all. The escape hatch for a carcass
+             whose lamp positions could not be MEASURED (see below): a wrong
+             number moves a headlight onto a mudguard, and that is worse than
+             a carcass wearing the procedural lamps it was always wearing.
+
+   HOW THE LAMP DELTAS WERE DERIVED. Not by eye — there is no eye in a Node
+   check, and the browser is the lead's. dev/tmp/lamp-probe.mjs parses the GLB
+   the way dev/model-check.mjs does, runs the same carcassFit + wheelZones,
+   and reports, for the front and rear tenth of the STRIPPED body: the z of
+   the frontmost/rearmost surviving skin, and a triangle-count histogram of
+   its height in the outer lateral band. `dz` puts the bloom 4 cm proud of
+   that face. `dy` is the histogram's modal band — the broadest surface at
+   that end of the car, which is usually the lit fascia rather than a cage
+   tube or a splitter lip. Twice it is not, and both are argued at the entry:
+   the REDLINE nose, whose mode is the splitter lip, takes the band midpoint;
+   the HOPPER tail, whose histogram is a sill and a roll cage with a metre of
+   fresh air between them, takes no correction in y at all.
+   `dx` is zero everywhere: one delta serves both sides of a
+   symmetric pair, so a lateral term would break the symmetry it was meant to
+   fix. The launcher `dy` is the top of the carcass's own deck in a ±0.28 ×
+   ±0.32 m window under the mount.
+   Every one of these still wants eyeballing in
+   dev/garage.html?veh=<id>&model=1&ang=0|90|180|270.
 
    Units in the fit result are metres, body space: origin at the centre of
    mass, +Z forward, right is −X, ground at y = −comHeight.
@@ -50,6 +81,20 @@ export const MODEL_FIT = {
     yaw: Math.PI / 2,
     axles: { front: -0.710, rear: 0.620 }, lat: [0.400, 0.612], wheelR: 0.245,
     dy: 0, dz: 0, tint: [], flame: null,
+    /* Nose skin ends at z 1.805 (the procedural bloom floated 11 cm past it)
+       and its broadest band sits at y 0.19–0.22, which is 0.70 m over the
+       ground — within a centimetre of where buildBuggy puts the LED brows.
+       The tail is the odd one: the outer corners carry a thin sill at
+       y −0.07..0.07 and then nothing at all until the cage at 0.85+, so
+       there is no band that says "tail light". The procedural height already
+       lands on the sill, so it stays and only z moves in to the tailgate. */
+    lamps: {
+      head: { dx: 0, dy: 0.13, dz: -0.07 },
+      brake: { dx: 0, dy: 0, dz: 0.04 },
+    },
+    // the cage roof is 23 cm above the procedural one; without this the
+    // launcher's tubes come out of the middle of the roof panel
+    launcher: { dx: 0, dy: 0.23, dz: 0 },
   },
   /* bbox 1.895 × 0.714 × 0.820, 6,754 tris, nose at −X, the cab mid-front and
      the bed behind. Wheels at x −0.588 / +0.507, z ±0.25..0.40 — a narrower
@@ -60,6 +105,19 @@ export const MODEL_FIT = {
     dy: 0, dz: 0, tint: [],
     // the bed runs 0.24 m past the procedural tail, so the flare moves back
     flame: { x: 0, y: -0.08, z: -2.85 },
+    /* The longest carcass of the four: the nose reaches z 2.550 against the
+       procedural 2.024 and the tailgate −2.724 against −2.254, so both blooms
+       were half a metre INSIDE the bodywork. Heights are the modal bands —
+       0.37–0.43 at the nose (0.98 m over the ground, a truck headlamp) and
+       0.30–0.36 at the tail (0.88 m, the bed side). The same head delta also
+       carries the roof-bar bloom to (0, 1.38, 1.72), which is 4 cm under this
+       carcass's own roofline at 1.417 — checked, because one delta moves
+       every head glow on the machine. */
+    lamps: {
+      head: { dx: 0, dy: 0.24, dz: 0.52 },
+      brake: { dx: 0, dy: 0.17, dz: -0.46 },
+    },
+    launcher: { dx: 0, dy: 0.36, dz: 0 },       // cab roof, 1.416
   },
   /* bbox 1.895 × 0.562 × 0.841, 7,229 tris, nose at −X with the wing at +X.
      Wheels at x −0.507 / +0.570, z ±0.22..0.41, and bigger than the spec's
@@ -70,6 +128,19 @@ export const MODEL_FIT = {
     dy: 0, dz: 0, tint: [],
     // the tail sits 7 cm behind the procedural one; the flare clears it
     flame: { x: 0, y: -0.14, z: -2.55 },
+    /* Nose z 2.558 against the procedural 2.111. The nose histogram is the
+       one that argues with itself — its biggest single band is the splitter
+       lip at y −0.17, which is 0.27 m over the ground and would put the
+       headlights under the bumper, so the head height is the band MIDPOINT
+       (0.556 m over the ground) rather than its mode. The tail takes its
+       mode, 0.08–0.15, which is 0.55 m up on the panel under the wing. */
+    lamps: {
+      head: { dx: 0, dy: 0.12, dz: 0.49 },
+      brake: { dx: 0, dy: 0.12, dz: -0.24 },
+    },
+    // rear deck at 0.60, not the 0.85 the raw window maximum reports — that
+    // is two triangles of wing edge, and the deck under it is the mount
+    launcher: { dx: 0, dy: 0.26, dz: 0 },
   },
   /* bbox 1.895 × 1.669 × 0.808, 5,592 tris, and this one faces +X: the bars
      and the rider's lean are at +X. Wheels at x +0.618 / −0.641 on the
@@ -78,6 +149,14 @@ export const MODEL_FIT = {
     yaw: -Math.PI / 2,
     axles: { front: 0.618, rear: -0.641 }, lat: [0.0, 0.062], wheelR: 0.330,
     dy: 0, dz: 0, tint: [], flame: null, strip: { r: 1.06 },
+    /* THE HONEST FALLBACK. Strip a bike's wheels and almost nothing is left
+       at either end: 13 triangles at the nose and 8 at the tail, and they are
+       the mudguard tips, 0.93 m over the ground where the headlight belongs
+       at 1.22. Take the measurement and the light moves onto the front
+       fender. There is no deck under the side rack either — the ±0.28 m
+       window round the mount is 1000 triangles of rider from the peg to the
+       helmet, so the launcher stays where the spec bolted it. */
+    keepLamps: true,
   },
 };
 

@@ -260,8 +260,21 @@ export function makeDustAtlas(T = 128, seed = 7) {
    pressure ring of a hit, the smear behind a projectile. Same rules — white
    on alpha, tinted per particle in the shader, one sheet, one draw call. */
 
-/** Tile indices in the VFX atlas. Same (k%2, k/2) layout as DUST_TILE. */
-export const VFX_TILE = { SPARK: 0, CONFETTI: 1, RING: 2, STREAK: 3 };
+/**
+ * Tile indices in the VFX atlas. The sheet is 3x3, so a tile id maps to a cell
+ * as (k % 3, floor(k / 3)) — both this file's drawing loop and world/vfx.js's
+ * vertex shader index it arithmetically from the id, which is why growing the
+ * sheet from 2x2 to 3x3 for GLOW moved every cell without touching a single
+ * call site. THE IDS ARE THE CONTRACT, not the cells: 0–3 still mean exactly
+ * what they meant and still carry exactly the same artwork.
+ *
+ * One thing does depend on the number rather than the name: vfx.js decides
+ * whether a particle stretches along its travel with `aParam.y == STREAK`, so
+ * an id added here must not be mistaken for 3. It is matched exactly there
+ * for that reason — the old `step(2.5, tile)` would have read GLOW as a
+ * streak and smeared the fireball down its own velocity.
+ */
+export const VFX_TILE = { SPARK: 0, CONFETTI: 1, RING: 2, STREAK: 3, GLOW: 4 };
 
 function drawVfx(d, sheet, T, tx, ty, kind, seed) {
   const inv = 1 / T;
@@ -294,7 +307,7 @@ function drawVfx(d, sheet, T, tx, ty, kind, seed) {
         a = a * a;
         lum = 0.85 + 0.5 * sstep(0.70, 0.90, r);
         a *= 1 - sstep(0.94, 1.0, r);
-      } else {
+      } else if (kind === 3) {
         // STREAK: a long soft smear along X, for anything moving fast enough
         // that a round sprite would look like a bead
         const stretch = Math.abs(u) * 0.42;
@@ -302,6 +315,17 @@ function drawVfx(d, sheet, T, tx, ty, kind, seed) {
         a *= 1 - sstep(0.90, 1.0, Math.max(Math.abs(u), Math.abs(v)));
         const n = erode(i * inv * 6.0 + 3, j * inv * 6.0 - 2, seed + 71);
         lum = 0.80 + 0.40 * n;
+      } else {
+        // GLOW: a wide, soft ball of light and nothing else. SPARK's core is
+        // deliberately a pinpoint so it survives the bloom without turning
+        // into a blob; a fireball wants the exact opposite — it is a VOLUME
+        // of light, and a hard core inside it reads as a hot dot painted in
+        // the middle of the fire. So: one broad gaussian, no core, faded to
+        // nothing well inside the tile so that a two-metre sprite never shows
+        // a square edge against the sky.
+        a = Math.exp(-r * r * 2.6) * 0.92;
+        a *= 1 - sstep(0.52, 1.0, r);
+        lum = 0.88 + 0.34 * Math.exp(-r * r * 5.0);
       }
       a *= sstep(0, 0.05, Math.min(Math.min(i, T - 1 - i), Math.min(j, T - 1 - j)) * inv * 2);
       const o = ((ty * T + j) * sheet + (tx * T + i)) * 4;
@@ -313,20 +337,32 @@ function drawVfx(d, sheet, T, tx, ty, kind, seed) {
 }
 
 /**
- * 2x2 sheet: spark | confetti
- *            ring  | streak
+ * 3x3 sheet: spark | confetti | ring
+ *            streak | glow    | ·
+ *            ·      | ·       | ·
  * Authored white-on-alpha exactly like the dust sheet, so world/vfx.js tints
  * every one of them per particle and the whole impact layer is one material.
+ *
+ * WHY 3x3 FOR FIVE TILES. The sheet has to be square (the shader divides one
+ * scalar by one grid size for both axes) and the fifth tile is GLOW, which
+ * would not fit in four cells. The four spare cells cost a third of a
+ * 384-pixel canvas at build time and nothing at all at run time — they are
+ * never sampled, because `vTile` is computed from the tile id and no id
+ * reaches them. Growing it again for a sixth and seventh tile is free.
  */
 export function makeVfxAtlas(T = 128, seed = 23) {
-  const S = T * 2;
+  const GRID = 3;
+  const S = T * GRID;
   const c = canvas2d(S, S);
   const g = c.getContext('2d');
   const img = g.createImageData(S, S);
-  drawVfx(img.data, S, T, 0, 0, 0, seed);
-  drawVfx(img.data, S, T, 1, 0, 1, seed + 113);
-  drawVfx(img.data, S, T, 0, 1, 2, seed + 227);
-  drawVfx(img.data, S, T, 1, 1, 3, seed + 331);
+  /* Cell from id, the same arithmetic the vertex shader does, so the two can
+     never disagree about where a tile lives. The seed offsets are per KIND and
+     unchanged from the 2x2 sheet: STREAK's noise is the same noise it had. */
+  const SEEDS = [seed, seed + 113, seed + 227, seed + 331, seed + 439];
+  for (let k = 0; k < SEEDS.length; k++) {
+    drawVfx(img.data, S, T, k % GRID, Math.floor(k / GRID), k, SEEDS[k]);
+  }
   g.putImageData(img, 0, 0);
   return toTexture(c, { mipmaps: false, flipY: false });
 }

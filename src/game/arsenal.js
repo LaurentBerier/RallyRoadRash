@@ -9,8 +9,8 @@
    read-only view the AI gets are all the same machinery with a smaller
    roster in front of it.
 
-   SIX DECISIONS WORTH KNOWING BEFORE CHANGING ANYTHING HERE
-   ---------------------------------------------------------
+   SEVEN DECISIONS WORTH KNOWING BEFORE CHANGING ANYTHING HERE
+   -----------------------------------------------------------
 
    1. NO NEW SPATIAL STRUCTURE. Forty pickups and eight rockets against six
       cars is at most 300 squared-distance tests a frame. resolveVehiclePair
@@ -50,6 +50,15 @@
       `_hideAll` leaves the pads alone, and the pad meshes live in their
       own group so hiding the weapon group cannot take them with it.
 
+   7. THE PICKUP LAYER COSTS SIX DRAW CALLS, AND THAT IS NOT vfx.js's THREE.
+      Crate, can, halo, beacon, and one billboard mesh per glyph — six, up
+      from three, all InstancedMeshes on the arsenal's own group. world/vfx.js
+      has a separate and much harder budget of exactly three (one Points pool,
+      one ribbon mesh, one ring InstancedMesh) and NOTHING here is charged
+      against it: the explosion added to that file adds no fourth call, and
+      these six add nothing to that file. Do not conflate the two ledgers.
+      A seventh here would want a real argument; a fourth there is refused.
+
    THE NITRO CAN IS NOT INVENTORY. It fires the instant a car drives
    through it. There is no `fire()` path for it, no HUD slot, no AI
    decision — the only decision is the line you take, and the can sits
@@ -59,7 +68,14 @@ import * as THREE from 'three';
 import { G, TUNE } from './config.js';
 import { DUST_KIND } from '../world/dust.js';
 import { boostPadGeo, kitPalette } from '../world/kit.js';
-import { rocketCrateGeo, nitroCanGeo, rocketGeo } from '../world/kit-arsenal.js';
+import { rocketCrateGeo, nitroCanGeo, rocketGeo, beaconGeo } from '../world/kit-arsenal.js';
+/* The HUD's own glyphs, rasterised ONCE at load into two textures (see
+   _iconTex). Reaching from game/ into ui/ for artwork is a layering
+   compromise and it is a deliberate one: the alternative is a second
+   hand-drawn rocket and a second hand-drawn can that drift out of step with
+   the HUD's, and the whole point of the marker is that it means the same
+   thing as the icon on the HUD chip. */
+import { iconCanvas } from '../ui/icons.js';
 import {
   PICKUP, PICKUPS, makeArsenal, resetArsenal, addAmmo, canFire, spend,
   giveNitro, giveSlow, hitSpin, tick, effectMuls,
@@ -78,9 +94,52 @@ const CAN_SPIN = 2.2;
 const BOB = 0.12;                // m of hover travel
 const POP_T = 0.2;               // s to shrink away when collected
 const IN_T = 0.4;                // s to scale back in on respawn
-const HALO_R = 1.5;              // m — the flat additive disc under each pickup
+const HALO_R = 2.2;              // m — the flat additive disc under each pickup
+const HALO_A = 0.5;              // …and its opacity
 const EMIT_LO = 0.30, EMIT_HI = 0.85;   // crate emissive pulse
 const CAN_EMIT_LO = 0.9, CAN_EMIT_HI = 1.7;   // the can pulses past the bloom threshold
+
+/* ---------------- reading a pickup from 150 m ----------------
+   A crate is 1.0 x 0.56 x 0.62 m and a can is Ø0.38 x 0.78. At 150 m and
+   40 m/s — which is where a player has to make the decision to go for one —
+   those are a few pixels each, and no emissive pulse turns a few pixels into
+   a landmark. Three things fix that, and only one of them is the model:
+
+     • SCALE, as an instance multiplier and NOT as a change to the geometry.
+       kit-check gates the crate at 0.8–1.3 m and the pickup trigger radius
+       PICK_R is 1.9 m; both of those are statements about the SIM, and the
+       moment the drawn size is the same number as the collected size, making
+       the marker bigger silently makes the pickup easier to take.
+     • A VERTICAL. A column reads at any range because the horizon it stands
+       against is horizontal (kit-arsenal.js beaconGeo).
+     • A SCREEN-SPACE ICON, which is the only one of the three whose size in
+       pixels does not depend on how far away it is at all. */
+const CRATE_SCALE = 1.5;
+const CAN_SCALE = 1.4;
+const BEACON_H = 6.0;            // m — kept in step with kit-arsenal.js
+/* The instance tint is pushed past 1 so the foot of the column clears the
+   bloom threshold, the same trick the can's emissive pulse uses. It is only
+   1.2 rather than the can's 1.7 because the material is DoubleSide and
+   additive: the far wall of a 5 cm tube adds through the near one, so the
+   core of the column is already twice whatever this says. */
+const BEACON_TINT = 1.2;
+/* The marker plane. `ICON_M` is its size in metres, which is what it draws at
+   up close; `ICON_PX_K` is the ANGULAR floor underneath that — metres of
+   height per metre of distance — and the larger of the two wins. A 60° vertical
+   FOV on a 1080-line buffer puts one metre at 150 m at about 6 px, so a fixed
+   1.1 m plane would be a smudge exactly where the marker matters most; 0.026
+   holds it at roughly 24 px from any distance and hands the near field back to
+   the metres. Inside ICON_FAR the plane starts shrinking and by ICON_NEAR it is
+   gone — a billboard in your face at the moment of collection is worse than no
+   billboard at all. */
+const ICON_M = 1.1;              // m
+const ICON_PX_K = 0.026;         // m of height per m of distance
+/* Derived from the column rather than typed, so the marker always caps it:
+   the baked gradient is down to a tenth of its brightness by about two thirds
+   of the way up, and that is where the eye stops following the beacon and
+   wants something to land on. */
+const ICON_Y = BEACON_H * 0.60;  // m above the pickup, before its own half-height
+const ICON_NEAR = 10, ICON_FAR = 15;   // m — the fade-out window
 
 /* ---------------- boost pads (contract 6.1 `pads[]`) ---------------- */
 const PAD_HW = 1.6, PAD_LEN = 4, PAD_MUL = 1.6, PAD_TOP = 1.10, PAD_TIME = 1.2;
@@ -118,6 +177,7 @@ const PROP_LOW = 2.2;
 const FLYBY_D = 7;               // m — a rival's rocket passing this close hisses
 const SMOKE_D = 160;             // m — beyond this the trail is a ribbon only
 const ROCKET_SPIN = 18;          // rad/s of visual roll in flight
+const SCORCH_Y = 3.0;            // m above the ground within which a blast marks it
 
 /* ---------------- module scratch — nothing below allocates ---------------- */
 const _dummy = new THREE.Object3D();
@@ -125,6 +185,8 @@ const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _mz = new THREE.Vector3();          // muzzle position
 const _dir = new THREE.Vector3();
+const _imp = new THREE.Vector3();         // blast impulse direction (unit)
+const _arm = new THREE.Vector3();         // …and the arm it acts at
 const _zAxis = new THREE.Vector3(0, 0, 1);
 const _col = new THREE.Color();
 const _pp = { x: 0, y: 0, z: 0 };
@@ -177,6 +239,7 @@ export class Arsenal {
     this.scene.add(this.padGroup);
     this._geo = [];
     this._mat = [];
+    this._tex = [];
 
     /* Contract 6.7 shape, kept — plain scalars, bumped by a sequence number
        so a reader can tell "a new one" from "the same one still". race.js
@@ -278,6 +341,7 @@ export class Arsenal {
 
     this.crateMesh = null; this.canMesh = null; this.halo = null;
     this.crateMat = null; this.canMat = null;
+    this.beacon = null; this.crateIcon = null; this.canIcon = null;
     if (!n) return;
 
     if (nC) {
@@ -313,7 +377,7 @@ export class Arsenal {
     const hgeo = this._keepGeo(new THREE.CircleGeometry(HALO_R, 18));
     hgeo.rotateX(-Math.PI / 2);
     const hmat = this._keepMat(new THREE.MeshBasicMaterial({
-      color: 0xffffff, transparent: true, opacity: 0.35,
+      color: 0xffffff, transparent: true, opacity: HALO_A,
       blending: THREE.AdditiveBlending, depthWrite: false,
     }));
     const halo = new THREE.InstancedMesh(hgeo, hmat, n);
@@ -325,6 +389,65 @@ export class Arsenal {
     if (halo.instanceColor) halo.instanceColor.needsUpdate = true;
     this.group.add(halo);
     this.halo = halo;
+
+    /* The beacon. ONE InstancedMesh over both kinds, exactly as the halo is:
+       the white-to-black gradient is baked into the geometry's vertex colours
+       and the per-instance tint multiplies against it, so the crate's yellow
+       and the can's orange come out of the same draw call and each fades to
+       nothing at the top on its own. Additive and depthWrite off, because a
+       column of light that occludes the road behind it is a post. */
+    const bgeo = this._keepGeo(beaconGeo(P, 163));
+    const bmat = this._keepMat(new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      toneMapped: false, fog: false,
+    }));
+    const bm = new THREE.InstancedMesh(bgeo, bmat, n);
+    bm.frustumCulled = false; bm.renderOrder = 3; bm.castShadow = false;
+    for (let i = 0; i < n; i++) {
+      const c = PICKUPS[S.kind[i]].col;
+      _col.setRGB(((c >> 16) & 255) / 255 * BEACON_TINT,
+        ((c >> 8) & 255) / 255 * BEACON_TINT, (c & 255) / 255 * BEACON_TINT);
+      bm.setColorAt(i, _col);
+    }
+    if (bm.instanceColor) bm.instanceColor.needsUpdate = true;
+    this.group.add(bm);
+    this.beacon = bm;
+
+    /* The screen-space markers. Two meshes because they are two textures, and
+       two textures because they are two glyphs — a shared atlas would buy one
+       draw call at the price of a uv attribute per instance, which is not a
+       trade worth making for a pair. Null on any build without a DOM: the
+       glyphs are rasterised on a 2D canvas and every use of them below is
+       guarded, so a headless Arsenal simply has no markers. */
+    const igeo = this._keepGeo(new THREE.PlaneGeometry(1, 1));
+    if (nC) this.crateIcon = this._iconMesh(igeo, 'rocket', PICKUPS[PICKUP.ROCKET].col, nC);
+    if (nN) this.canIcon = this._iconMesh(igeo, 'nitro', PICKUPS[PICKUP.NITRO].col, nN);
+  }
+
+  /**
+   * One billboard marker mesh, or null when the glyph cannot be drawn. The
+   * canvas is rasterised ONCE here and never again — icons.js paints into a
+   * 2D context, which is far too expensive to do per frame and completely
+   * free to do at load.
+   */
+  _iconMesh(geo, name, col, count) {
+    if (typeof document === 'undefined') return null;
+    let cv = null;
+    try { cv = iconCanvas(name, 64, '#' + (col & 0xffffff).toString(16).padStart(6, '0')); }
+    catch (e) { void e; return null; }
+    if (!cv) return null;
+    const tex = this._keepTex(new THREE.CanvasTexture(cv));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    const mat = this._keepMat(new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, depthWrite: false, toneMapped: false, fog: false,
+    }));
+    const im = new THREE.InstancedMesh(geo, mat, count);
+    im.frustumCulled = false; im.renderOrder = 4; im.castShadow = false;
+    im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.group.add(im);
+    return im;
   }
 
   /* ============================================================
@@ -435,6 +558,7 @@ export class Arsenal {
 
   _keepGeo(g) { this._geo.push(g); return g; }
   _keepMat(m) { this._mat.push(m); return m; }
+  _keepTex(t) { this._tex.push(t); return t; }
 
   /* ============================================================
      3.  THE FRAME
@@ -781,15 +905,40 @@ export class Arsenal {
 
     /* The ring reads at any distance and the sparks read close up, which
        is the same split racefx uses for a heavy contact; the dark puff is
-       what makes it an impact rather than a firework. */
+       what makes it an impact rather than a firework. `fireball` is the body
+       of the thing — three staggered layers plus its own front — and it lives
+       in vfx.js so it stays inside that file's three-draw-call budget. */
     if (this.vfx) {
       this.vfx.shock(x, y, z, splash, 1.0, 0.62, 0.22);
-      this.vfx.sparks(26, x, y + 0.3, z, 0, 1, 0, 11, 1.3, 1.0, 0.72, 0.30, 0.55);
+      if (this.vfx.fireball) this.vfx.fireball(x, y, z, splash);
+      /* 14, down from 26. `fireball` throws sixteen of its own and the pool
+         is 400 particles at the LOW tier, shared with every tyre on the grid
+         — past the cap a spark is silently dropped, so an over-ask does not
+         cost a frame, it costs somebody else's effect. */
+      this.vfx.sparks(14, x, y + 0.3, z, 0, 1, 0, 11, 1.3, 1.0, 0.72, 0.30, 0.55);
     }
+    const gy = this.terrain.heightAt(x, z);
     if (this.dust) {
-      const gy = this.terrain.heightAt(x, z);
       this.dust.burst(x, gy, z, Math.atan2(vx, vz), 1.8, ROCKET_POP);
       this.dust.spawn(8, x, y + 0.2, z, 2.6, 1.2, 0, 0, 0.18, 0.16, 0.14, DUST_KIND.PUFF);
+    }
+    /* A scorch mark, for free. terrain.addTrack is the tyre-mark stamp — a
+       quad into an additive top-down buffer, capped at 128 a frame and shared
+       with six cars laying rubber — so a short wide segment at the blast point
+       is a black smear on the road that outlives the fire and costs one of
+       those quads. Only when the blast was actually NEAR the ground: a rocket
+       that caught a car mid-jump did not scorch anything, and a burn mark
+       under thin air is the kind of detail that reads as a bug the first time
+       somebody notices it. */
+    if (this.terrain.addTrack && y - gy < SCORCH_Y) {
+      this.terrain.addTrack(x - 0.45, z, x + 0.45, z, splash * 0.85, 0.70);
+    }
+    /* Lane A's dynamic props. Guarded rather than imported: if props.js has
+       grown a blast door by the time this runs, vegetation and light debris
+       inside the splash go over; if it has not, nothing happens and nothing
+       breaks. See the report for the signature this wants. */
+    if (this.props && typeof this.props.knockAt === 'function') {
+      this.props.knockAt(x, y, z, splash * 1.4, W.launchV);
     }
     const A = this.audio;
     if (this._hear(x, y, z, W.hitHearD)) {
@@ -797,6 +946,7 @@ export class Arsenal {
       if (A.rocketHit) A.rocketHit(_gain, _pan, near);
       else if (A.crash) A.crash(clamp(_gain * 1.6, 0.3, 2.2), _pan);
     }
+    this._blastFeel(x, y, z);
 
     for (let ri = 0; ri < this.racers.length; ri++) {
       const r = this.racers[ri], v = r.vehicle;
@@ -812,9 +962,107 @@ export class Arsenal {
       let sx = vx, sz = vz;
       if (!direct) { sx = v.pos.x - x; sz = v.pos.z - z; }
       giveSlow(this.st[ri].ars, direct);
+      /* BOTH, and in this order. `_spin` is the handbrake lock: it is what
+         makes the LANDING read as a spin-out rather than as a car that simply
+         fell over, and it is deferred by Vehicle.step while the car is in the
+         air, so it waits for the touchdown the impulse below is about to
+         cause. `_launch` is the blast itself. */
       this._spin(ri, hitSpin(direct), sx, sz, owner);
+      this._launch(ri, sx, sz, direct);
     }
     this._killProj(i);
+  }
+
+  /**
+   * The screen's answer to a blast, scaled by how far the PLAYER is from it.
+   * Falls off as (1 − d/shakeD)² — squared, so a rocket at half the falloff is
+   * a quarter of the response and one going off across the map is nothing at
+   * all, which is the difference between a weapon layer that punctuates a race
+   * and one that makes the camera feel broken.
+   *
+   * All three channels come through Feel, which is the single owner of every
+   * juice transient (feel.js's own header says so): a shake, a directional
+   * kick, and the white pop that `flash` exists for.
+   */
+  _blastFeel(x, y, z) {
+    if (!this.feel || this.playerIdx < 0) return;
+    const p = this.racers[this.playerIdx].vehicle;
+    const dx = p.pos.x - x, dy = p.pos.y - y, dz = p.pos.z - z;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(d < W.shakeD)) return;
+    const k = 1 - d / W.shakeD, kk = k * k;
+    if (this.feel.flash) this.feel.flash(W.flashAmt * kk);
+    this.feel.addShake(0.35 * kk);
+    // the direction the blast threw the camera: away from it, with the
+    // vertical taken down because a pure lift kicks the pitch further than a
+    // player can read at 40 m/s
+    _v1.set(dx, dy * 0.4, dz);
+    if (_v1.lengthSq() > 1e-6) _v1.normalize(); else _v1.set(0, 1, 0);
+    this.feel.collision(10 * kk, _v1);
+  }
+
+  /**
+   * THE BLAST, as a real impulse.
+   *
+   * Until wave 9 a rocket wrote `spinT` and `omega.y += side * 3.2` and
+   * NOTHING ELSE — no vertical, no roll, nothing that made a hit read as an
+   * explosion rather than as a slippery patch. This goes through
+   * Vehicle.applyImpulse, the one impulse in the codebase that carries the
+   * body-frame inertia tensor, which is the entire reason it can do what the
+   * yaw kick could not: a car shoved from the FLANK gets a torque about its
+   * own long axis and rolls, one shoved from BEHIND gets it about the lateral
+   * axis and pitches. That asymmetry is not decoration, it is the information
+   * — you can see where you were hit from.
+   *
+   * TWO CLAMPS, AND THEY ARE INDEPENDENT. applyImpulse's linear term is j/mass
+   * and its angular term is I⁻¹(r × n)j, so the arm scales one and not the
+   * other:
+   *   • Δv is clamped by TUNE.collide.maxDeltaV, the same ceiling a car-on-car
+   *     impulse gets, so a point-blank hit cannot fire anyone into orbit.
+   *   • Δω is clamped by TUNE.weapons.flipW, by shrinking the arm. Mass
+   *     cancels out of the angular response entirely (I ∝ m·k², j ∝ m), so
+   *     without this the 245 kg moto would spin four times as fast as the
+   *     1680 kg truck off the same shove — not because it is light but because
+   *     it is SMALL.
+   *
+   * @param dirX,dirZ the shove direction in the ground plane: the rocket's own
+   *                  heading for the car it struck, outward from the blast for
+   *                  a neighbour. Need not be normalised.
+   * @param direct    true for the car the rocket actually hit
+   */
+  _launch(ri, dirX, dirZ, direct) {
+    const v = this.racers[ri].vehicle;
+    if (!v || typeof v.applyImpulse !== 'function') return;
+    const L = Math.hypot(dirX, dirZ);
+    const hx = L > 1e-5 ? dirX / L : 0, hz = L > 1e-5 ? dirZ / L : 1;
+
+    // the shove, biased upward: a blast lifts more than it pushes
+    _imp.set(hx, W.launchUp, hz).normalize();
+
+    const mass = v.mass > 0 ? v.mass : 1000;
+    let dv = W.launchV * (direct ? 1 : W.splashMul);
+    if (dv > TUNE.collide.maxDeltaV) dv = TUNE.collide.maxDeltaV;
+    const j = mass * dv;
+
+    /* The arm points back toward the blast — the panel that took it. r × n is
+       then horizontal and perpendicular to the shove, which is what turns a
+       flank hit into roll and a rear hit into pitch. Its length is the sine of
+       the shove's elevation, because the horizontal parts of r and n are
+       parallel and cancel. */
+    const sinUp = _imp.y;
+    let arm = W.flipArm;
+    const spin = arm * sinUp * j;                 // torque impulse, N·m·s
+    /* Worst case over the two horizontal principal axes: whichever of pitch
+       and roll this hit happens to load, the answer is at most flipW. */
+    const Ib = v.Ibody;
+    if (Ib && spin > 1e-6) {
+      const Imin = Math.min(Ib.x, Ib.z);
+      const w = spin / Imin;
+      if (w > W.flipW) arm *= W.flipW / w;
+    }
+    _arm.set(-hx * arm, 0, -hz * arm);
+
+    v.applyImpulse(_imp, j, _arm);
   }
 
   _killProj(i) {
@@ -1029,7 +1277,9 @@ export class Arsenal {
         _dummy.position.set(this.pickX[i],
           this.pickY[i] + (live ? Math.sin(t * 1.8 + i * 1.7) * BOB : 0), this.pickZ[i]);
         _dummy.rotation.set(0, t * (crate ? CRATE_SPIN : CAN_SPIN) + i * 0.9, 0);
-        _dummy.scale.setScalar(k);
+        // the collect/respawn envelope TIMES the read-at-range multiplier: the
+        // geometry is untouched, so PICK_R and kit-check's gates are untouched
+        _dummy.scale.setScalar(k * (crate ? CRATE_SCALE : CAN_SCALE));
         _dummy.updateMatrix();
         (crate ? this.crateMesh : this.canMesh).setMatrixAt(this.pickInst[i], _dummy.matrix);
 
@@ -1041,10 +1291,50 @@ export class Arsenal {
           _dummy.updateMatrix();
           this.halo.setMatrixAt(i, _dummy.matrix);
         }
+
+        /* The beacon rides the same collect/respawn envelope as the pickup —
+           it is the pickup's advertisement and it must not outlive it — but
+           it does NOT bob, because a column that bobs reads as a mistake
+           rather than as a hover. It stands on the road, under the hover. */
+        if (this.beacon) {
+          _dummy.position.set(this.pickX[i], this.pickY[i] - hover, this.pickZ[i]);
+          _dummy.rotation.set(0, 0, 0);
+          _dummy.scale.set(k, k, k);
+          _dummy.updateMatrix();
+          this.beacon.setMatrixAt(i, _dummy.matrix);
+        }
+
+        /* The marker. Camera-facing, and sized so it holds ~24 px however far
+           away it is — the angular floor is the whole reason it exists, and
+           the metres are only what stops it being enormous in the near field.
+           It rides up on its own half-height so a bigger marker never sits
+           ON the crate, and it is gone by the time you reach one. */
+        const im = crate ? this.crateIcon : this.canIcon;
+        if (im && camera) {
+          const dx = camera.position.x - this.pickX[i];
+          const dy = camera.position.y - this.pickY[i];
+          const dz = camera.position.z - this.pickZ[i];
+          const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          let sz = ICON_M;
+          const need = ICON_PX_K * d;
+          if (need > sz) sz = need;
+          let fade = (d - ICON_NEAR) / (ICON_FAR - ICON_NEAR);
+          fade = fade < 0 ? 0 : (fade > 1 ? 1 : fade);
+          sz *= fade * (live ? 1 : k);
+          if (sz < 0.0001) sz = 0.0001;
+          _dummy.position.set(this.pickX[i], this.pickY[i] + ICON_Y + sz * 0.5, this.pickZ[i]);
+          _dummy.quaternion.copy(camera.quaternion);
+          _dummy.scale.set(sz, sz, sz);
+          _dummy.updateMatrix();
+          im.setMatrixAt(this.pickInst[i], _dummy.matrix);
+        }
       }
       if (this.crateMesh) this.crateMesh.instanceMatrix.needsUpdate = true;
       if (this.canMesh) this.canMesh.instanceMatrix.needsUpdate = true;
       if (this.halo) this.halo.instanceMatrix.needsUpdate = true;
+      if (this.beacon) this.beacon.instanceMatrix.needsUpdate = true;
+      if (this.crateIcon) this.crateIcon.instanceMatrix.needsUpdate = true;
+      if (this.canIcon) this.canIcon.instanceMatrix.needsUpdate = true;
     }
 
     /* Rockets point down their velocity and roll about it. The instance is
@@ -1064,7 +1354,6 @@ export class Arsenal {
       this.projMesh.setMatrixAt(i, _dummy.matrix);
     }
     this.projMesh.instanceMatrix.needsUpdate = true;
-    void camera;
   }
 
   /* ============================================================
@@ -1245,7 +1534,8 @@ export class Arsenal {
     this.padGroup.traverse(o => { if (o.isInstancedMesh) o.dispose(); });
     for (const g of this._geo) g.dispose();
     for (const m of this._mat) m.dispose();
-    this._geo.length = 0; this._mat.length = 0;
+    for (const t of this._tex) t.dispose();
+    this._geo.length = 0; this._mat.length = 0; this._tex.length = 0;
     this.racers = null; this.st.length = 0;
   }
 }

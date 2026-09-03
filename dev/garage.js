@@ -138,7 +138,7 @@ if (ammo != null) veh.ammo = ammo;
    else changes after the build: the model is merged per material and the
    only thing that moves is a transform. Grouped BY MATERIAL rather than by
    mesh, because that is the axis a budget is actually spent along — "the
-   tyres are 2136" is an answer you can act on, "mesh 14 is 534" is not.
+   tyres are 3096" is an answer you can act on, "mesh 14 is 774" is not.
    Hidden meshes (the procedural panels under a carcass) are not counted:
    they are not drawn. */
 function takeCensus() {
@@ -228,7 +228,11 @@ function frame(now) {
     (veh.leanRoot ? `   bank ${(veh.leanRoot.rotation.z * 180 / Math.PI).toFixed(1)}°` : '') + '\n' +
     `${carcassLine}\n${muzzleLine}\n` +
     `${census.meshes} meshes + ${census.sprites} sprites   ${Math.round(census.total)} tris` +
-    `   (tyres ${Math.round(census.tyreSet)}/set, budget 2200)\n` +
+    /* 3200, up from 2200: the tyre carcass went from three open shells (144)
+       to one closed lathe (384), which is what stops you seeing through the
+       rubber. 774 a wheel, 3096 a set — the budget is the next round number
+       above the measurement, not a wish. */
+    `   (tyres ${Math.round(census.tyreSet)}/set, budget 3200)\n` +
     `${census.lines.join('\n')}`;
 
   requestAnimationFrame(frame);

@@ -30,7 +30,7 @@ import { VFX } from './world/vfx.js';
 import { setGroundTexture } from './world/terrain-shader.js';
 import { TRACKS, getTrack } from './world/tracks/index.js';
 import { VEHICLES, VEHICLE_BY_ID, statBars } from './game/vehicles.js';
-import { setCarcassSource } from './game/vehicle-art.js';
+import { setCarcassSource, setCarcassRenderer } from './game/vehicle-art.js';
 import { CameraRig } from './game/camera.js';
 import { Feel } from './game/feel.js';
 import { Race } from './game/race.js';
@@ -162,6 +162,8 @@ async function boot() {
        The lookup is lazy, so it is correct to install it before the manifest
        exists; it simply answers null until then. */
     setCarcassSource((id) => App.assets.url('models/' + id + '-carcass'));
+    // …and the one capability a carcass's textures need: max anisotropy.
+    setCarcassRenderer(App.engine.renderer);
     // Same rule for the stages' hero landmarks (8.9): manifest or nothing.
     setHeroSource((key) => App.assets.url(key));
     /* The menu scene built its machine at boot, when that lookup still said
@@ -293,7 +295,14 @@ function showScreen(name) {
 
     case 'garage':
       App.state = AS.GARAGE;
-      App.ui.show('garage', { vehicles: vehicleList(), trackId: App.trackId });
+      App.ui.show('garage', {
+        vehicles: vehicleList(), trackId: App.trackId,
+        /* The machine the player actually last raced. Without it the garage
+           opens on the first unlocked card while the 3D inset shows the saved
+           one — a contradiction that was merely odd when the car sat cropped
+           behind the plate, and is obvious now the hero fills the screen. */
+        vehicleId: App.vehicleId,
+      });
       menuScene('garage');
       break;
 

@@ -276,8 +276,8 @@ canvas.logo.big{max-width:640px}
    min(A%, Bpx) below is split instead into "A% up to the crossover, a flat
    Bpx above it" (crossover = B / (A/100)) — the same computed width at every
    viewport, just reached without the function Chromium chokes on. */
-#scr-tracks,#scr-garage{--plate-w:62%}
-@media (min-width:1420px){ #scr-tracks,#scr-garage{--plate-w:880px} }
+#scr-tracks{--plate-w:62%}
+@media (min-width:1420px){ #scr-tracks{--plate-w:880px} }
 #scr-playbook,#scr-settings{--plate-w:76%}
 @media (min-width:1474px){ #scr-playbook,#scr-settings{--plate-w:1120px} }
 /* Over a live race: dim everything, no plate edge, no feathered mask —
@@ -285,6 +285,16 @@ canvas.logo.big{max-width:640px}
 #scr-pause,#scr-results{--plate-w:100%}
 #scr-pause::after,#scr-results::after{display:none}
 #scr-pause::before,#scr-results::before{-webkit-mask-image:none;mask-image:none}
+/* The garage opts out of the plate ENTIRELY, the way pause and results do,
+   and for the opposite reason: not because it wants the whole frame dimmed
+   but because its backdrop is a PAINTING of the selected machine and a .93
+   alpha gradient over the left 62 % was covering the thing the screen exists
+   to show. `.garage-hero` takes the plate's job — the art, and the left-third
+   darkening the overlay text needs — so the plate has nothing left to do.
+   Every responsive block below leaves #scr-garage alone for the same reason;
+   an id selector in a later media query would otherwise win over this. */
+#scr-garage{--plate-w:100%}
+#scr-garage::before,#scr-garage::after{display:none}
 
 .scr-head,.scr-body,.scr-foot{max-width:var(--plate-w)}
 /* The medal and the best trick stack rather than fighting for one line. */
@@ -417,8 +427,9 @@ canvas.logo.big{max-width:640px}
 /* ============================================================
    CARD GRIDS — tracks + garage
    ============================================================ */
+/* Stage select only now — the garage is a hero and a strip (see GARAGE
+   below), so the `.cars` variant this used to carry has no cards left. */
 .card-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(272px,1fr));align-content:start}
-.card-grid.cars{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
 
 /* Same chamfer and the same inset-ring rule as .btn — see the note there. */
 .pick{
@@ -501,8 +512,6 @@ canvas.logo.big{max-width:640px}
   border-top:1px solid var(--line);padding-top:9px;margin-top:auto}
 .pick-times em{font-style:normal;color:var(--fg-3);letter-spacing:.12em;margin-right:6px;font-size:9.5px}
 
-/* ---- garage extras ---- */
-.car-art{width:100%;height:auto;display:block;aspect-ratio:2.6/1;background:rgba(0,0,0,.28);border-radius:2px}
 /* Stage preview: the lap, drawn from the track's own control points. 1.75:1
    because most of these laps are roughly round — at 2.2:1 the fit was height
    limited and half the card was empty either side of the loop. */
@@ -514,6 +523,154 @@ canvas.logo.big{max-width:640px}
 .stat .bar{height:7px;background:rgba(255,255,255,.09);border-radius:2px;overflow:hidden}
 .stat .bar i{display:block;height:100%;background:var(--acc);transform-origin:left;border-radius:2px}
 .stat.neutral .bar i{background:var(--fg-3)}
+
+/* ============================================================
+   GARAGE — full-bleed hero + machine strip
+   ------------------------------------------------------------
+   The garage used to be four identical boxes each carrying a pictogram, a
+   name, a paragraph and four bars: the same six things said four times, so
+   nothing was said loudly. It is now ONE machine, full-bleed, with its
+   numbers in the dark left third the paintings are composed to leave free,
+   and a strip of four thumbnails along the bottom to change it.
+
+   THREE LAYERS, AND EVERY ONE OF THEM DEGRADES ON ITS OWN
+   (rename assets/ aside and all three still draw, with no console errors):
+     hero        key art -> the deliberate gradient in `:not(.has-art)` below
+     thumbnails  key art -> ui/cards.js's procedural silhouette
+     3D inset    the generated carcass -> the procedural Vehicle, and with the
+                 3D off entirely (LOW tier, MENU MOTION off, no WebGL) the
+                 window is not cut at all and the hero is uninterrupted.
+   ============================================================ */
+.garage-hero{
+  position:absolute;z-index:-1;pointer-events:none;overflow:hidden;
+  /* Full BLEED, so the safe-area padding on .screen is cancelled rather than
+     inherited — a 44 px band of --ink down the side of a painting reads as a
+     letterbox. env() is 0 everywhere it does not apply. */
+  top:calc(-1 * env(safe-area-inset-top));right:calc(-1 * env(safe-area-inset-right));
+  bottom:calc(-1 * env(safe-area-inset-bottom));left:calc(-1 * env(safe-area-inset-left));
+  background-position:center;background-size:cover;background-repeat:no-repeat;
+  background-color:#07070a;
+}
+/* The darkening every piece of type on this screen lives in. The four
+   paintings each keep a dark left third free for exactly this, but
+   GUARANTEEING the contrast beats trusting four JPEGs to keep agreeing about
+   it — and with the plate gone there is nothing else holding the type off the
+   art. One scrim per thing that has to stay readable:
+     top    the GARAGE heading, the roster line and STAGE · <track>, which
+            runs to the RIGHT edge where the paintings are brightest
+     bottom the strip
+     left   the machine's name, description and bars
+   None of the three reaches 22 % .. 58 % down the right-hand side, which is
+   where the live window is cut. */
+.garage-hero::after{
+  content:"";position:absolute;inset:0;
+  background:
+    linear-gradient(180deg,rgba(6,6,9,.88) 0%,rgba(6,6,9,.46) 9%,transparent 18%),
+    linear-gradient(0deg,rgba(6,6,9,.90) 0%,rgba(6,6,9,.34) 24%,transparent 46%),
+    linear-gradient(90deg,rgba(6,6,9,.94) 0%,rgba(6,6,9,.88) 20%,rgba(6,6,9,.46) 44%,
+                          rgba(6,6,9,.08) 72%,rgba(6,6,9,.24) 100%);
+}
+/* No key art — the normal install. Two stage lights and a scan, the same
+   graphic language as .hero-art's fallback, so an assets-less garage looks
+   composed rather than broken. */
+.garage-hero:not(.has-art){
+  background-image:
+    radial-gradient(58% 66% at 76% 32%, rgba(255,122,26,.22), transparent 64%),
+    radial-gradient(46% 52% at 96% 86%, rgba(79,216,232,.10), transparent 66%),
+    repeating-linear-gradient(115deg, rgba(255,255,255,.022) 0 2px, transparent 2px 9px),
+    linear-gradient(160deg,#12141a 0%,#0a0a0d 56%,#070709 100%);
+}
+
+#scr-garage .scr-body{display:flex;flex-direction:column;gap:clamp(10px,2.2vh,22px)}
+/* The detail block takes the spare room and centres itself in it, which is
+   what pins the strip to the bottom without a second layout mode.
+   `1 0 auto` and not `1 1 auto`: on a short screen it must push past the box
+   and let .scr-body's existing overflow scroll, rather than squash four stat
+   bars into three pixels. */
+.garage-detail{
+  flex:1 0 auto;display:flex;flex-direction:column;justify-content:center;
+  align-items:flex-start;gap:clamp(8px,1.6vh,16px);
+  width:min(44%,540px);min-width:0;
+}
+.garage-detail .pick-top{flex-direction:column;align-items:flex-start;gap:10px}
+.garage-detail .pick-name{
+  font-size:clamp(30px,4.4vw,56px);line-height:.94;letter-spacing:-.01em;
+  text-shadow:0 3px 0 rgba(0,0,0,.5),0 0 34px rgba(0,0,0,.65);
+}
+.garage-detail .pick-tag{font-size:13px;line-height:1.55;color:var(--fg-2);max-width:44ch}
+.garage-detail .chip{font-size:11px;padding:6px 11px}
+.garage-detail .stats{width:100%;max-width:420px;gap:9px}
+.garage-detail .stat{grid-template-columns:66px 1fr;gap:12px}
+.garage-detail .stat em{font-size:10px}
+.garage-detail .stat .bar{height:10px;background:rgba(0,0,0,.55);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.10)}
+/* The bars re-fill on every selection change. The width is written inline by
+   ui.js so a transition would have nothing to start from — an animation on
+   the transform does, and it is the one thing that makes swapping machines
+   feel like a comparison rather than a redraw. */
+.garage-detail .stat .bar i{animation:bar-fill .42s cubic-bezier(.2,1.1,.3,1) both}
+@keyframes bar-fill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+.garage-detail.locked .pick-name{color:var(--fg-2)}
+
+/* ---- the strip ----
+   Four compact cards in a row. Same `.pick` markup as every other card in the
+   game — a focusable button carrying data-focus and data-id — because the
+   focus manager in ui.js walks [data-focus] by class and geometry and knows
+   nothing about layout. Capped in width rather than stretched to the viewport
+   so the thumbnails stay thumbnails: at 1280 four cards across a full-width
+   sheet are 290 px tall and collide with the 3D window above them. */
+.garage-strip{
+  flex:0 0 auto;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);
+  gap:12px;width:min(100%,880px);align-items:stretch;
+}
+.garage-strip .pick{
+  gap:0;padding:0 0 12px;min-height:0;
+  background:linear-gradient(180deg,rgba(14,15,20,.52),rgba(8,9,12,.90));
+}
+.garage-strip .pick.sel{background:linear-gradient(180deg,rgba(255,122,26,.16),rgba(8,9,12,.92))}
+.garage-strip .car-art{
+  width:100%;height:auto;display:block;aspect-ratio:16/9;
+  background:rgba(0,0,0,.34);border-bottom:1px solid var(--line);
+}
+.garage-strip .pick-top{align-items:center;padding:9px 12px 0;gap:8px}
+.garage-strip .pick-name{font-size:13px;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.garage-strip .chip{font-size:9px;padding:3px 6px}
+.garage-strip .lock{font-size:9px;letter-spacing:.1em}
+
+/* ---- the live turntable's window ----
+   ONE EffectComposer renders every screen, so the machine cannot be given a
+   viewport of its own. ui/menuscene.js `_frameGarage` aims the camera so it
+   lands in this rectangle instead, and the hero is clipped away over it. The
+   polygon below IS `GARAGE_WIN` in that file — x 58%..100%, y 22%..58% — and
+   the two have to be edited together.
+
+   LITERAL PERCENTAGES, NOT A CUSTOM PROPERTY. See the --plate-w note above:
+   Chromium has already bitten this file once over a computed width on a
+   clipped/masked element, and a clip-path is not worth a second round of it.
+
+   Only under body.menu3d, which ui/menuscene.js sets when the 3D is actually
+   built. With it off there is nothing behind the hole but the menu hero, and
+   a rectangle of a DIFFERENT picture punched into this one reads as a bug. */
+body.menu3d #scr-garage .garage-hero{
+  clip-path:polygon(0 0,100% 0,100% 22%,58% 22%,58% 58%,100% 58%,100% 100%,0 100%);
+}
+.garage-inset{
+  position:absolute;left:58%;right:0;top:22%;bottom:42%;
+  display:none;pointer-events:none;
+  border-left:1px solid rgba(255,255,255,.14);
+  border-top:1px solid rgba(255,255,255,.10);
+  border-bottom:1px solid rgba(255,255,255,.10);
+}
+body.menu3d #scr-garage .garage-inset{display:block}
+.garage-inset::before{
+  content:"LIVE";position:absolute;left:12px;top:10px;
+  font-family:var(--mono);font-size:9px;letter-spacing:.24em;font-weight:700;
+  color:var(--fg-3);text-shadow:0 1px 3px rgba(0,0,0,.8);
+}
+.garage-inset::after{
+  content:"";position:absolute;left:0;top:0;width:2px;height:26px;background:var(--acc);
+}
 
 /* ============================================================
    SETTINGS
@@ -1147,8 +1304,12 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   .hud{--u:.94px}
   /* The hero has less room to be worth looking at; the plate takes more. */
   .screen{--plate-w:58%}
-  #scr-tracks,#scr-garage{--plate-w:72%}
+  #scr-tracks{--plate-w:72%}
   #scr-playbook,#scr-settings{--plate-w:88%}
+  /* The hero has less width to give away, so the text column takes more of
+     it and the strip follows the column rather than the viewport. */
+  .garage-detail{width:min(50%,480px)}
+  .garage-strip{width:min(100%,760px)}
   .settings-cols{grid-template-columns:1fr}
   .results-grid{grid-template-columns:1fr}
   .podium{min-height:170px}
@@ -1159,21 +1320,53 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   .hud{--u:.90px}
   /* Below here the plate is the whole screen: a 46 % column on a phone is a
      column of hyphens. The hero stays, dimmed, as a backdrop under it. */
-  .screen,#scr-tracks,#scr-garage,#scr-playbook,#scr-settings{--plate-w:100%}
+  .screen,#scr-tracks,#scr-playbook,#scr-settings{--plate-w:100%}
   .screen::after{display:none}
   .screen::before{-webkit-mask-image:none;mask-image:none}
   .hero{opacity:.30}
   .card-grid{grid-template-columns:1fr 1fr}
-  .card-grid.cars{grid-template-columns:1fr}
   .class-head,.class-row{grid-template-columns:38px minmax(0,1fr) 80px 80px 54px;font-size:11px}
   .pb-items{grid-template-columns:1fr}
   .pb-ctl{grid-template-columns:1fr}
+
+  /* ---- garage: no room for a text column beside a picture ----
+     The hero goes full-bleed behind everything, the overlay spans the width
+     with a heavier scrim under it, and the 3D window is dropped: a 42 % hole
+     in a 780 px sheet is bigger than the sheet has to spare, and the tier
+     that runs a tablet this narrow is usually not running the 3D anyway. */
+  .garage-detail{width:100%;gap:10px}
+  .garage-detail .pick-name{font-size:clamp(26px,6vw,40px)}
+  .garage-detail .stats{max-width:none}
+  .garage-strip{width:100%}
+  .garage-hero::after{
+    background:
+      linear-gradient(90deg,rgba(6,6,9,.86) 0%,rgba(6,6,9,.60) 52%,rgba(6,6,9,.52) 100%),
+      linear-gradient(0deg,rgba(6,6,9,.92) 0%,rgba(6,6,9,.52) 34%,rgba(6,6,9,.30) 100%);
+  }
+  body.menu3d #scr-garage .garage-hero{clip-path:none}
+  body.menu3d #scr-garage .garage-inset{display:none}
 }
 
 /* ---- phone-ish width ---- */
 @media (max-width:620px){
-  .card-grid,.card-grid.cars{grid-template-columns:1fr}
+  .card-grid{grid-template-columns:1fr}
   .scr-head{flex-direction:column;align-items:flex-start;gap:6px}
+  /* ---- garage on a phone: the strip becomes a scroller ----
+     Four cards side by side on a 390 px screen are 88 px wide, which is a
+     row of stamps. A flex row that overflows keeps them legible and keeps
+     the SAME `.pick` markup, so the focus manager's geometry walk still
+     works — left/right along a scroller is the one direction it already
+     handles by nearest-centre.
+     `touch-action` because body sets `none` for the race; the intersection
+     that decides a gesture stops at the element that would scroll, so
+     naming pan-x on the scroller itself is what makes a thumb work here. */
+  .garage-strip{
+    display:flex;overflow-x:auto;overflow-y:hidden;gap:10px;
+    touch-action:pan-x;scroll-snap-type:x proximity;padding-bottom:4px;
+  }
+  .garage-strip .pick{flex:0 0 clamp(148px,42vw,190px);scroll-snap-align:center}
+  .garage-detail .pick-tag{font-size:12px}
+  .garage-detail .stat{grid-template-columns:58px 1fr;gap:9px}
   .scr-head-right{text-align:left;align-items:flex-start}
   .btn{min-height:52px;font-size:12px;padding:12px 16px}
   .main-actions{max-width:none}
@@ -1231,6 +1424,17 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   canvas.logo.big{max-width:min(360px,52vw)}
   .podium{min-height:132px}
   .riser.p1 .block{height:80px}.riser.p2 .block{height:58px}.riser.p3 .block{height:42px}
+  /* Garage: 390 px of height cannot stack a hero block on top of a strip, so
+     the two sit side by side instead — the same left-text / right-machines
+     reading as the desktop layout, folded into a landscape phone. The
+     paragraph goes: it is the one line here that is flavour, not fact. */
+  #scr-garage .scr-body{flex-direction:row;align-items:stretch;gap:14px}
+  .garage-detail{flex:0 0 auto;width:min(48%,400px);gap:8px}
+  .garage-detail .pick-tag{display:none}
+  .garage-detail .pick-name{font-size:clamp(22px,4.6vh,32px)}
+  .garage-detail .stat .bar{height:8px}
+  .garage-strip{flex:1 1 auto;width:auto;align-content:center;
+    grid-auto-flow:row;grid-template-columns:1fr 1fr;grid-auto-columns:auto}
   /* Vertical room is the scarce thing here; the tip card would sit on top of
      the wrong-way flag, and the flag is the one that stops you losing a lap. */
   .tip-slot{top:6%;max-width:min(70vw,calc(340 * var(--s)))}
@@ -1323,10 +1527,19 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
      `.screen`, so without it the main menu itself is the empty panel at
      1920×1080, not just settings/playbook. */
   .screen{--plate-w:42%}
-  #scr-tracks,#scr-garage{--plate-w:56%}
+  #scr-tracks{--plate-w:56%}
   #scr-playbook,#scr-settings{--plate-w:66%}
   .main-wrap{max-width:min(var(--plate-w),760px)}
+  /* The garage keeps its full-width sheet — it has a painting behind it, not
+     a text column — but the two things ON that sheet are capped, or at 1920
+     the name is a billboard and the four thumbnails are 440 px posters that
+     grow up into the live window above them. */
+  .garage-detail{width:min(40%,620px)}
+  .garage-detail .pick-name{font-size:clamp(48px,3.6vw,66px)}
+  .garage-detail .pick-tag{font-size:14px}
+  .garage-detail .stats{max-width:480px}
+  .garage-strip{width:min(100%,1180px);gap:16px}
 }
-@media (min-width:1786px){ #scr-tracks,#scr-garage{--plate-w:1000px} }
+@media (min-width:1786px){ #scr-tracks{--plate-w:1000px} }
 @media (min-width:1810px){ .screen{--plate-w:760px} }
 @media (min-width:1940px){ #scr-playbook,#scr-settings{--plate-w:1280px} }

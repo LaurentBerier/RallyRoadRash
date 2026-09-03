@@ -1,17 +1,24 @@
 /* ============================================================
    ARSENAL KIT — the rockets, what they come in, and what fires them
    ------------------------------------------------------------
-   Four shapes under exactly the rule kit.js lives by: position + normal +
+   Five shapes under exactly the rule kit.js lives by: position + normal +
    color, NO uv, standing on y = 0, +Z forward. They go through kit.js's own
    builder so they merge with everything else on a stage and so a crate can
    sit in an InstancedMesh next to a boost pad under the same vertex-coloured
    material.
 
-   WHO READS THESE. arsenal.js instances the crate and the can as pickups and
-   the rocket as the projectile; vehicle-art.js mounts launcherGeo on the roof
-   and racks rocketGeo as the visible ammo count; dev/kit-check.mjs gates all
-   four beside kit.js's own factories. The four signatures below are therefore
-   a contract (ARCHITECTURE §8.8) — add a shape, never change one of these.
+   WHO READS THESE. arsenal.js instances the crate and the can as pickups, the
+   beacon as the column that makes them findable, and the rocket as the
+   projectile; vehicle-art.js mounts launcherGeo on the roof and racks
+   rocketGeo as the visible ammo count; dev/kit-check.mjs gates all five beside
+   kit.js's own factories. The five signatures below are therefore a contract
+   (ARCHITECTURE §8.8) — add a shape, never change one of these.
+
+   THE BEACON IS THE ONE THAT IS NOT LIT. Everything else here goes under a
+   MeshStandardMaterial and takes the sun; the beacon goes under an additive
+   MeshBasicMaterial and IS the light, which is why its vertex colours are a
+   baked white-to-black gradient rather than a description of what it is
+   painted. Read its own comment before changing a number in it.
 
    THE COLOURS ARE NOT THE THEME'S. A pickup has to be the one thing on the
    stage that is obviously not scenery, and it has to look the same on all
@@ -120,6 +127,62 @@ export function rocketGeo(P, seed) {
     const a = Math.PI / 4 + i * Math.PI / 2;
     const rad = R + FIN * 0.5;
     b.box(ROCKET_FIN, 0.02, FIN, 0.16, -Math.sin(a) * rad, A + Math.cos(a) * rad, -0.30, 0, 0, a);
+  }
+  void P;
+  return b.done();
+}
+
+/* ---------------- the beacon ----------------
+   A crate is a metre wide. At 150 m that is a handful of pixels and no amount
+   of emissive pulse makes a handful of pixels into a landmark — what makes a
+   pickup readable at range is something with a screen-space size that does not
+   collapse, and the cheapest one of those is a VERTICAL: a column reads at any
+   distance because the horizon it stands against is horizontal.
+
+   These three numbers are the whole shape. Nine bands, not one tapered
+   cylinder, because the colour lives in the VERTICES (this file's contract is
+   position + normal + colour and NO uv, so there is nowhere else to put a
+   gradient) and a gradient needs somewhere to be sampled. */
+const BEACON_H = 6.0;            // m — clears a crest and a car in front of you
+const BEACON_R = 0.055;          // m at the foot; it tapers to about half that
+const BEACON_BANDS = 9;
+
+/**
+ * The column of light over a pickup. Drawn white at the base and fading to
+ * black at the top, so that whatever tint arsenal.js multiplies in — the
+ * crate's yellow, the can's orange — fades out with height for free, on one
+ * additive InstancedMesh shared by both kinds and one draw call for the lot.
+ *
+ * BAKED SRGB, DECODED BY THE MATERIAL. kit.js's tint() puts a hex through
+ * THREE.Color.set, which converts sRGB to linear, so the authored ramp is
+ * raised to about 2.2 on its way into the buffer. The exponent below is
+ * therefore deliberately SHALLOW — a linear-looking ramp authored here would
+ * arrive as a stub of light on the ground with six metres of nothing above it.
+ *
+ * Open-ended cylinders: nobody sees the inside of a 5 cm tube, the material
+ * draws both sides so the far wall adds through the near one, and dropping the
+ * caps halves the triangle count of a shape that is instanced forty times.
+ */
+export function beaconGeo(P, seed) {
+  const rng = makeRNG((seed * 0x7B19D) | 1);
+  const b = builder();
+  const h = BEACON_H / BEACON_BANDS;
+  for (let i = 0; i < BEACON_BANDS; i++) {
+    const t0 = i / BEACON_BANDS, t1 = (i + 1) / BEACON_BANDS;
+    const f = Math.pow(1 - (t0 + t1) * 0.5, 0.85);
+    const g = clamp(Math.round(f * 255), 0, 255);
+    /* A flare at the foot so the column is planted rather than hovering, and
+       a per-band wobble of a couple of percent off the seed — a perfectly
+       parallel tube reads as a cylinder, which is the one thing it must not
+       read as. Neither is a millimetre a player could measure; both are here
+       because kit.js's "same seed, same object, forever" rule applies to
+       every factory in this file and a factory that ignores its seed is a
+       factory nobody notices has stopped being deterministic. */
+    const flare = i === 0 ? 1.7 : 1.0;
+    const wob = 0.96 + rng() * 0.08;
+    const rb = BEACON_R * (1 - t0 * 0.50) * flare * wob;
+    const rt = BEACON_R * (1 - t1 * 0.50) * wob;
+    b.cyl((g << 16) | (g << 8) | g, rt, rb, h, 7, 0, (i + 0.5) * h, 0, 0, 0, 0, true);
   }
   void P;
   return b.done();

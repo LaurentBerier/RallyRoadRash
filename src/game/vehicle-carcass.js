@@ -76,6 +76,18 @@ const RACK_DEFAULT = 6, RACK_MAX = 12;
 let _source = null;
 export function setCarcassSource(fn) { _source = typeof fn === 'function' ? fn : null; }
 
+/* The renderer, for one number: the maximum anisotropy this GPU will sample
+   with. It is a capability, not a scene object, and there is no other way to
+   ask for it — three keeps it on the renderer. Optional on purpose: the Node
+   harnesses and dev/garage both build vehicles, only one of them has a
+   renderer to hand, and a missing one costs a carcass its sharpest grazing
+   angles and nothing else. */
+let _renderer = null;
+export function setCarcassRenderer(r) { _renderer = (r && r.capabilities) ? r : null; }
+function maxAniso() {
+  return _renderer ? _renderer.capabilities.getMaxAnisotropy() : 0;
+}
+
 /* core/models.js pulls GLTFLoader, which the Node harnesses must never see,
    so it is imported on first use and only when there is a window to load
    into. One job, shared by every vehicle. */
@@ -150,6 +162,7 @@ function fitCarcass(v, spec, M, group, url) {
   const tint = v.livery > 0 ? new THREE.Color(v.paintColor).lerp(_white, 0.45) : null;
 
   let tris = 0, kept = 0;
+  const aniso = maxAniso();
   const kbox = new THREE.Box3();
   group.traverse((o) => {
     if (!o.isMesh || !o.geometry) return;
@@ -170,6 +183,27 @@ function fitCarcass(v, spec, M, group, url) {
       mat.envMapIntensity = 1;
       if (!mat.name) mat.name = 'carcass';
       if (tint && (tintAll || F.tint.indexOf(mat.name) >= 0)) mat.color.multiply(tint);
+      sharpen(mat, aniso);
+      /* Both of the branches below are FOR THE FILE WE HAVE NOT BEEN SENT
+         YET, and neither of them fires on the four carcasses in assets/
+         today: every one of those ships a metallicRoughness map and a normal
+         map of its own, and a map is the generator's answer where a constant
+         is only ever our guess. What they cover is the plainer export —
+         albedo and nothing else — because glTF's default for a material with
+         no metallicRoughness is roughness 1, metalness 1, which draws a
+         painted car as a sheet of black chrome, and because a scan's relief
+         is painted into its colour with flat geometry underneath, so the
+         panel gaps and the rivets read at 40 m and vanish at 4.
+         Half strength on the derived normal: luminance is right about WHERE
+         the detail is and always guessing how deep. */
+      if (mat.isMeshStandardMaterial) {
+        if (!mat.roughnessMap) mat.roughness = 0.78;
+        if (!mat.metalnessMap) mat.metalness = 0.25;
+        if (!mat.normalMap && mat.map && _models.normalFromAlbedo) {
+          const nm = _models.normalFromAlbedo(mat.map);
+          if (nm) { mat.normalMap = nm; mat.normalScale.set(0.6, 0.6); }
+        }
+      }
       mudify(mat, v._uMud, row);
       v._ghost.mats.push(mat);
       if (v._ghost.k > 0) { mat.transparent = true; mat.opacity = 1 - 0.58 * v._ghost.k; }
@@ -185,15 +219,79 @@ function fitCarcass(v, spec, M, group, url) {
   v.carcass = group;
   v._carcassInfo = { url, tris, kept, box: kbox, fit };
 
-  /* The frame the GLB resolves: the merged body panels go, the lamps stay
-     (they carry the bloom sprites and the brake state), and the flare may
-     move to wherever this carcass's pipes are. */
+  /* The frame the GLB resolves: the merged body panels go, and the lamp and
+     brake panels go with them — a painted carcass draws its own headlights,
+     and a procedural disc left floating at the PROCEDURAL body's coordinates
+     inside one is exactly the "primitive penetrating the model" the eye
+     catches first. `keepLamps` opts a machine back out (MODEL_FIT).
+     What has to survive either way is the light: the blooms are Sprites under
+     `_glowRig`, which the shadow pass skips and which no carcass can draw
+     for itself, so they are moved by the measured delta instead of hidden. */
   for (const mesh of v._bodyMeshes) {
-    if (mesh.material !== M.lamp && mesh.material !== M.brake) mesh.visible = false;
+    if (F.keepLamps && (mesh.material === M.lamp || mesh.material === M.brake)) continue;
+    mesh.visible = false;
+  }
+  if (!F.keepLamps && F.lamps && v._glowRig) {
+    /* buildGlowRig parks every bloom as a SIBLING of the flare with its offset
+       from the flare baked into the local position — so a body-space delta is
+       a plain add here, and the flare's own halo (under `_flameRig`) is
+       untouched by it. Every head glow moves, including a roof light bar: one
+       delta per kind is the contract, and the fit table records what that does
+       to the pod on the machines that have one. */
+    for (const s of v._glowRig.children) {
+      const d = s.material === M.headGlow ? F.lamps.head
+        : s.material === M.brakeGlow ? F.lamps.brake : null;
+      if (!d) continue;
+      s.position.set(s.position.x + (d.dx || 0),
+        s.position.y + (d.dy || 0), s.position.z + (d.dz || 0));
+    }
+  }
+  /* The launcher is bolted to a roof or a deck, and a carcass's roof is not
+     the procedural one's — on all three cars it is 23–36 cm higher, which
+     puts the tubes inside the bodywork. The whole rig moves, so `_muzzle`
+     (a child) moves with it and Vehicle.muzzleWorld stays correct. */
+  if (F.launcher && v._arsenalRig) {
+    const p = v._arsenalRig.position, L = F.launcher;
+    p.set(p.x + (L.dx || 0), p.y + (L.dy || 0), p.z + (L.dz || 0));
   }
   if (F.flame && v.exhaust) {
     v.exhaust.position.set(F.flame.x, F.flame.y, F.flame.z);
     if (v._flameRig) v._flameRig.position.copy(v.exhaust.position);
+  }
+}
+
+/* ---------------- texture filtering ----------------
+   Every sampled map on a carcass material, in the order three reads them.
+   `aoMap` is here for completeness; these files do not ship one. */
+const SAMPLED = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap'];
+/** Textures already given the treatment. */
+const _sharpened = new WeakSet();
+
+/**
+ * Make a carcass's textures survive a grazing angle.
+ *
+ * A generated body is a 1–2 k albedo wrapped round a car that is looked at
+ * almost edge-on from a chase camera at 30 m/s — the exact case where
+ * trilinear alone crawls with aliasing and anisotropic sampling does not. 8×
+ * is the knee: past it the cost keeps climbing and nothing on screen changes.
+ *
+ * Once per TEXTURE, not once per material. The template's textures are shared
+ * by every instance of that file (two rivals on one machine) and often by
+ * several materials inside one file, and each `needsUpdate` is a re-upload of
+ * a couple of megabytes — so the WeakSet is what keeps this a load-time cost
+ * instead of a per-car one.
+ */
+function sharpen(mat, aniso) {
+  for (let i = 0; i < SAMPLED.length; i++) {
+    const t = mat[SAMPLED[i]];
+    if (!t || !t.image || t.isCompressedTexture || _sharpened.has(t)) continue;
+    _sharpened.add(t);
+    t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    // no renderer, no capability query, and no way to know what is safe — so
+    // the mips still happen and the anisotropy silently does not
+    if (aniso > 1) t.anisotropy = Math.min(8, aniso);
+    t.needsUpdate = true;
   }
 }
 

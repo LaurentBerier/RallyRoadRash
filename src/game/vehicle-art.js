@@ -35,9 +35,10 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clamp, makeRNG } from '../core/rng.js';
 import { G } from './config.js';
 import { liveryTexture, LAYOUTS } from './vehicle-livery.js';
+import { noiseCanvas } from '../world/textures.js';
 import { attachCarcass, detachCarcass, buildArsenalRig, updateArsenalRig, mudify }
   from './vehicle-carcass.js';
-export { setCarcassSource } from './vehicle-carcass.js';
+export { setCarcassSource, setCarcassRenderer } from './vehicle-carcass.js';
 
 const RACE_NUMBERS = [7, 12, 23, 41, 68, 95, 3, 55];
 /* Peak visual bank on a two-wheeler, radians. 0.62 = 35.5°, which is what a
@@ -68,8 +69,14 @@ const RIM_W = 0.40;
 const LAMP_R = 1.600, LAMP_G = 1.447, LAMP_B = 1.157;
 
 /* Body panels that take mud. The cage, the rims and the glass do not: mud
-   sticks to flat painted surfaces and washes off everything that spins. */
-const MUD_MATS = ['paint', 'paint2', 'livery', 'dark'];
+   sticks to flat painted surfaces and slides off anything polished.
+   The tyre is the exception, and it is the surface that puts the mud THERE:
+   a knobbly does not shed it, it packs it between the lugs, and filthy sills
+   over spotless rubber reads as the effect being wired to the wrong list.
+   Note what the mask does on something that turns — see mudify(): its height
+   ramp is in the MESH's own space, so the packed side spins with the wheel
+   rather than staying under the car. Which is what packed mud does. */
+const MUD_MATS = ['paint', 'paint2', 'livery', 'dark', 'tyre'];
 /* Everything solid enough to need fading when a car is ghosted. Fading only
    the painted panels leaves a set of solid wheels floating inside a
    translucent body, which reads as a bug rather than as a respawn. */
@@ -178,6 +185,7 @@ export function buildVehicleVisuals(v, scene, spec) {
 function buildMaterials(v, paint, paint2, helmet) {
   const uMud = v._uMud = { value: 0 };
   const glow = glowTexture();
+  const dirt = tyreTextures();
   const spriteMat = (color) => new THREE.SpriteMaterial({
     map: glow, color, transparent: true, opacity: 0,
     blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
@@ -208,7 +216,16 @@ function buildMaterials(v, paint, paint2, helmet) {
     rim: new THREE.MeshStandardMaterial({
       color: 0xb9c0c9, metalness: 0.92, roughness: 0.28, envMapIntensity: 1.35,
     }),
-    tyre: new THREE.MeshStandardMaterial({ color: 0x121215, metalness: 0.02, roughness: 0.95 }),
+    /* The one flat black on the car, and four of them per machine. Bare, it
+       is a silhouette with no surface in it at any distance; `dirt` gives it
+       a mottle and a matching roughness break-up so the light has something
+       to catch. The albedo carries the rubber, so the colour goes white to
+       let it through — and goes back to being the rubber itself if the
+       texture could not be built, because white × nothing is a white tyre. */
+    tyre: new THREE.MeshStandardMaterial({
+      map: dirt.map, roughnessMap: dirt.rough,
+      color: dirt.map ? 0xffffff : 0x121215, metalness: 0.02, roughness: 0.95,
+    }),
     spring: new THREE.MeshStandardMaterial({
       map: springTexture(), color: 0xe8eaee, metalness: 0.55, roughness: 0.48,
     }),
@@ -657,15 +674,85 @@ function lugGeometry(sx, sy, sz, taper = 0.72) {
 }
 
 /**
- * Knobbly off-road tyre. 24-gon carcass, two sidewalls, and thirteen rows of
- * blocky lugs: a shoulder pair staggered either side of the crown plus one
+ * The tyre's carcass, as ONE closed surface revolved from a section.
+ *
+ * It used to be three open-ended cylinders — a tread band and two cones —
+ * with nothing at all closing the bead, so any grazing angle that got past
+ * the rim looked straight through the rubber and out at the inside of the far
+ * sidewall. DoubleSide would have hidden that; it would also have doubled the
+ * shading cost of the biggest black surface on the car and made every lug's
+ * (deliberately) missing bottom face visible from underneath. So the fix is
+ * geometry, and the material stays FrontSide. dev/vehicle-check gates it: the
+ * tube alone, every edge shared by exactly two triangles.
+ *
+ * The section, once round and back to where it started — radii as fractions
+ * of R, half-widths as fractions of W:
+ *
+ *      crown  0.90  ├─────────────┤        the tread, under the lugs
+ *   shoulder  0.886 ╱               ╲      ±0.60 W: the widest thing here
+ *   sidewall  0.775 │               │
+ *       bead  0.62  ╲_____________╱        ±0.40 W = RIM_W, the flange
+ *        toe  0.60   ┌───────────┐         under the flange, so the rim
+ * inner wall  0.80   └───────────┘         caps the hole down the axle
+ *
+ * Sixteen radial segments where the old shells used twenty-four: the lugs
+ * carry the silhouette, and the tread's facets are underneath them.
+ *
+ * `RIM_W` is the same 0.40 the rim builder uses — move one and move both, or
+ * the flange ends up outside the rubber.
+ *
+ * @param {number} R    rolling radius
+ * @param {number} W    nominal tyre width (the section runs 1.2× that)
+ * @param {number} seg  radial segments
+ */
+export function tyreTubeGeometry(R, W, seg = 16) {
+  const TR = R * 0.90, BEAD = R * 0.62;
+  const SH = W * 0.60, BW = W * RIM_W, CW = SH * 0.78;
+  /* LatheGeometry revolves about +Y and derives its normals from the
+     profile's own direction: y increasing gives an outward-facing skin, y
+     decreasing an inward-facing one. So the list runs up the outside and back
+     down the inside, and the loop CLOSES at the bead — the lathe does not
+     weld its first point to its last, and the shading seam that leaves is one
+     the rim's flange sits over. */
+  const V = (x, y) => new THREE.Vector2(x, y);
+  const P = [
+    V(BEAD, -BW),                 // bead heel, side A
+    V(R * 0.775, -SH * 0.985),    // sidewall A, bulging out toward full width
+    V(TR * 0.985, -SH),           // shoulder A — the widest point on the wheel
+    V(TR, -CW),                   // crown, side A
+    V(TR, CW),                    // crown, side B
+    V(TR * 0.985, SH),            // shoulder B
+    V(R * 0.775, SH * 0.985),     // sidewall B
+    V(BEAD, BW),                  // bead heel, side B
+    V(R * 0.600, BW * 0.90),      // bead toe B — inside the rim barrel (0.615)
+    V(R * 0.800, SH * 0.52),      // cavity wall B
+    V(R * 0.800, -SH * 0.52),     // cavity roof, under the tread
+    V(R * 0.600, -BW * 0.90),     // bead toe A
+  ];
+  P.push(P[0].clone());
+  const g = new THREE.LatheGeometry(P, seg);
+  // rotateZ(π/2) sends +Y to −X: the lathe's axis becomes the axle, the way
+  // every other part of this wheel is built
+  g.rotateZ(Math.PI / 2);
+  return g;
+}
+
+/**
+ * Knobbly off-road tyre. A closed lathe carcass and thirteen rows of blocky
+ * lugs: a shoulder pair staggered either side of the crown plus one
  * centre-rib block half a row along.
  *
  * The old tyre wore 32 thin chevrons and 544 triangles and read as fuzz —
  * at speed the eye integrates anything finer than a few degrees of arc into
  * noise, and noise is what a black doughnut looks like. Thirteen big blocks
- * cost the same and actually hold a silhouette. Budget: 534 tris per wheel,
- * 2136 for a set of four.
+ * cost the same and actually hold a silhouette.
+ *
+ * Budget: 774 tris per wheel, 3096 for a set of four. That is up from
+ * 534 / 2136, and all of the rise is the carcass — 384 for the closed tube
+ * against 144 for the three open shells it replaces. It buys a tyre you
+ * cannot see through, which the old one could not claim from any angle below
+ * the axle line. dev/garage.js prints the measured set; dev/vehicle-check
+ * holds the six-car grid to its ceiling.
  *
  * The sidewalls cone INBOARD as they drop to the bead, so the tread shoulder
  * is the widest thing on the wheel and the rim sits in a dish behind it.
@@ -673,25 +760,8 @@ function lugGeometry(sx, sy, sz, taper = 0.72) {
  * permanently inside the rubber, which is why the rims never read.
  */
 function buildWheelGeometry(R, W, rows = 13, lugH = 0.115) {
-  const parts = [];
+  const parts = [tyreTubeGeometry(R, W)];
   const TR = R * 0.90;                     // carcass radius, under the lugs
-  const BEAD = R * 0.62;                   // where rubber meets rim flange
-  /* The section is 1.2× the nominal width: an off-road tyre bulges well past
-     its rim and the shoulder is the widest thing on the car. RIM_W below is
-     the same 0.40 the rim builder uses — move one and move both, or the
-     flange ends up outside the rubber. */
-  const SH = W * 0.60, BW = W * RIM_W;     // tread-shoulder / bead half-widths
-
-  const carcass = new THREE.CylinderGeometry(TR, TR, SH * 2, 24, 1, true);
-  carcass.rotateZ(Math.PI / 2); parts.push(carcass);
-  for (const s of [-1, 1]) {
-    // rotateZ(π/2) sends +Y to −X, so radiusTop ends up on the −X side
-    const wall = new THREE.CylinderGeometry(s < 0 ? TR : BEAD, s < 0 ? BEAD : TR,
-      SH - BW, 24, 1, true);
-    wall.rotateZ(Math.PI / 2);
-    wall.translate(s * (SH + BW) * 0.5, 0, 0);
-    parts.push(wall);
-  }
 
   const step = Math.PI * 2 / rows, LR = TR - R * 0.015;
   for (let i = 0; i < rows; i++) {
@@ -852,6 +922,94 @@ function glowTexture() {
   _glowTex = new THREE.CanvasTexture(c);
   _glowTex.colorSpace = THREE.SRGBColorSpace;
   return _glowTex;
+}
+
+/* How many times the dirt tile wraps: three times round the circumference,
+   once across the section. */
+const TYRE_UV = [3, 1];
+
+/* One shared dirt set for every tyre in the game — a mottled rubber albedo
+   and the roughness break-up that goes with it. Module state like the spring
+   stripe and the glow, so disposeVehicleVisuals must not touch it.
+
+   Authored against the LATHE's uvs, which run u once around the circumference
+   and v once across the section. The lugs share this material and carry the
+   dummy (0,0)–(1,1) quad uv lugGeometry gives everything, so a lug face shows
+   the whole tile at 5 cm and mips down to its mean — which is why the field
+   is isotropic mottle and not a crown-to-sidewall gradient. A gradient would
+   be right on the tube and meaningless on thirty-nine blocks a wheel.
+
+   Everything here is guarded: no canvas, or a canvas that will not give its
+   pixels back, leaves both maps null and the tyre exactly the flat black it
+   was. Same terms as every other image in the game. */
+let _tyreTex = null;
+function tyreTextures() {
+  if (_tyreTex) return _tyreTex;
+  _tyreTex = { map: null, rough: null };
+  try { buildTyreTextures(_tyreTex, 128); }
+  catch (err) { void err; }
+  return _tyreTex;
+}
+
+function buildTyreTextures(out, N) {
+  /* Two tiling fields. `blot` is where dust cakes — big and clumpy; `grit` is
+     the fine break-up over it. Both must wrap: the tread repeats three times
+     a revolution and a seam would come round three times a wheel. */
+  const blot = greyOf(noiseCanvas(N, { tile: true, scale: 3.5, octaves: 4, seed: 61, contrast: 1.45 }), N);
+  const grit = greyOf(noiseCanvas(N, { tile: true, scale: 13, octaves: 2, seed: 137 }), N);
+  const cm = tyreCanvas(N), cr = tyreCanvas(N);
+  const gm = cm.getContext('2d'), gr = cr.getContext('2d');
+  const im = gm.createImageData(N, N), ir = gr.createImageData(N, N);
+  const dm = im.data, dr = ir.data;
+  const RUB = [0x14, 0x15, 0x19], DUST = [0x8c, 0x76, 0x57];
+  for (let i = 0; i < N * N; i++) {
+    const b = blot[i], f = grit[i];
+    /* Dust only where both fields agree, then squared. A straight lerp lays a
+       grey film over the whole tyre and turns it into a grey tyre; this puts
+       pale caked patches in clumps and leaves the rest black. */
+    let k = clamp((b * 0.78 + f * 0.42 - 0.46) * 2.1, 0, 1);
+    k *= k;
+    const shade = 0.80 + 0.38 * f;            // grain in the rubber itself
+    const o = i * 4;
+    for (let c = 0; c < 3; c++) {
+      const rub = RUB[c] * shade;
+      dm[o + c] = clamp(rub + (DUST[c] - rub) * k, 0, 255);
+    }
+    dm[o + 3] = 255;
+    /* Correlated with the albedo on purpose: three multiplies `roughness` by
+       this map's GREEN channel, so caked dust comes out rougher than the
+       rubber under it and the two maps can never disagree about where the
+       dirt is. Band kept narrow — rubber is already 0.95. */
+    const g8 = clamp((0.92 + 0.08 * k - 0.05 * (1 - f)) * 255, 0, 255);
+    dr[o] = g8; dr[o + 1] = g8; dr[o + 2] = g8; dr[o + 3] = 255;
+  }
+  gm.putImageData(im, 0, 0);
+  gr.putImageData(ir, 0, 0);
+  out.map = tyreTexOf(cm, THREE.SRGBColorSpace);
+  out.rough = tyreTexOf(cr, THREE.NoColorSpace);
+}
+
+function tyreCanvas(n) {
+  const c = document.createElement('canvas');
+  c.width = c.height = n;
+  return c;
+}
+/** noiseCanvas writes its value into all three channels; one is enough. */
+function greyOf(canvas, n) {
+  const d = canvas.getContext('2d').getImageData(0, 0, n, n).data;
+  const out = new Float32Array(n * n);
+  for (let i = 0; i < out.length; i++) out[i] = d[i * 4] * (1 / 255);
+  return out;
+}
+function tyreTexOf(c, space) {
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = space;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(TYRE_UV[0], TYRE_UV[1]);
+  // three clamps this to the device maximum at upload, so 4 is safe with no
+  // renderer to ask — and a tyre is only ever seen at a grazing angle
+  t.anisotropy = 4;
+  return t;
 }
 
 /** Collects build-time geometry into one merged mesh per material. */

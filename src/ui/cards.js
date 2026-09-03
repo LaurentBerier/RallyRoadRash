@@ -20,10 +20,13 @@
    on top either way, so the card carries exactly the same information with
    the assets directory renamed aside.
 
-   PROCEDURAL CAR ART
-   A side profile per bodyStyle, drawn once per card. No images anywhere in
-   this project, and a photo of a car we do not have would be a lie anyway —
-   these read as sponsor-plate pictograms, which is the house style.
+   MACHINE ART
+   Key art per machine when assets/ has it — the garage is selling four
+   vehicles and a pictogram was never going to do that — and a procedural
+   side profile per bodyStyle when it does not. The silhouette is the
+   FALLBACK, not dead code: it is what the strip draws with the assets
+   directory renamed aside, and it reads as a sponsor-plate pictogram, which
+   is the house style for a card with no photograph behind it.
    ============================================================ */
 
 /* One skin per theme. `thunder` is P6's entry in the theme tables that wave 6
@@ -394,13 +397,46 @@ export function stageChips(def) {
 }
 
 /* ============================================================
-   PROCEDURAL CAR ART
+   MACHINE ART
+   ------------------------------------------------------------
+   Two layers, exactly like drawStage: key art when assets/ has a painting of
+   this machine, and the procedural silhouette when it does not — which is
+   still the normal case (ARCHITECTURE §6.11), and is the whole reason the
+   silhouette below is not deleted.
    ============================================================ */
-export function drawCar(canvas, spec) {
+/**
+ * @param canvas  the card's <canvas class="car-art">
+ * @param spec    the vehicle spec (color, bodyStyle, id)
+ * @param opts    { art: THREE.Texture|null } — optional and usually absent
+ */
+export function drawCar(canvas, spec, opts) {
   const g = canvas.getContext('2d');
   if (!g) return;
+  const o = opts || 0;
   const W = canvas.width, H = canvas.height;
   g.clearRect(0, 0, W, H);
+
+  /* ---- key art. The paintings are composed with a dark left third left
+     free for text, and the veil below guarantees that rather than trusting
+     four JPEGs to keep agreeing about it — the garage strip reads as one set
+     with the hero because both carry the same wash.
+
+     And then STOP. The silhouette is a STAND-IN for a picture of the machine;
+     drawing the pictogram on top of the painting would be two cars in one
+     box, and the number plate is part of that same stand-in treatment. ---- */
+  const img = artImage(o.art);
+  if (img) {
+    // cover-fit: never letterbox, never distort
+    const s = Math.max(W / img.width, H / img.height);
+    const dw = img.width * s, dh = img.height * s;
+    g.drawImage(img, (W - dw) * 0.5, (H - dh) * 0.5, dw, dh);
+    const veil = g.createLinearGradient(0, 0, W, 0);
+    veil.addColorStop(0, 'rgba(6,6,9,.80)');
+    veil.addColorStop(0.36, 'rgba(6,6,9,.24)');
+    veil.addColorStop(1, 'rgba(6,6,9,.06)');
+    g.fillStyle = veil; g.fillRect(0, 0, W, H);
+    return;
+  }
 
   const body = toCss(spec && spec.color, '#ff7a1a');
   const style = (spec && spec.bodyStyle) || 'buggy';

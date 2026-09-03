@@ -35,5 +35,10 @@
   "art/forest": { "url": "art/forest.jpg", "kind": "color" },
   "art/volcano": { "url": "art/volcano.jpg", "kind": "color" },
   "art/thunder": { "url": "art/thunder.jpg", "kind": "color" },
-  "art/title": { "url": "art/title.jpg", "kind": "color" }
+  "art/title": { "url": "art/title.jpg", "kind": "color" },
+
+  "art/veh-hopper": { "url": "art/veh-hopper.jpg", "kind": "color" },
+  "art/veh-ridgeback": { "url": "art/veh-ridgeback.jpg", "kind": "color" },
+  "art/veh-redline": { "url": "art/veh-redline.jpg", "kind": "color" },
+  "art/veh-moto": { "url": "art/veh-moto.jpg", "kind": "color" }
 }

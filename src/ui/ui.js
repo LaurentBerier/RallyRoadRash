@@ -159,6 +159,7 @@ export class UI {
     this._pending = new Map();        // coalesced range emits
     this._flushT = 0;
     this._artSrc = '';                // last loading-screen art, so we set it once
+    this._vehArtSrc = '';             // and the same for the garage hero
 
     this.el = {
       boot: $('boot'), bootBar: $('bootBar'), bootMsg: $('bootMsg'), bootArt: $('bootArt'),
@@ -172,6 +173,7 @@ export class UI {
       tracksChampion: $('tracksChampion'), tracksSub: $('tracksSub'),
       garageGrid: $('garageGrid'), garageNote: $('garageNote'), garageStart: $('garageStart'),
       garageTrack: $('garageTrack'),
+      garageHero: $('garageHero'), garageDetail: $('garageDetail'),
       settingsBody: $('settingsBody'), controlsBody: $('controlsBody'),
       pauseCtx: $('pauseCtx'),
       resultsTitle: $('resultsTitle'), resultsSub: $('resultsSub'), resultsMedal: $('resultsMedal'),
@@ -270,11 +272,23 @@ export class UI {
   setAssets(assets) {
     this.assets = assets && typeof assets.get === 'function' ? assets : null;
     if (this._cur === 'tracks') this._renderTracks(this._data.tracks || {});
+    /* The garage too, and for a sharper reason than the stage cards: the
+       manifest resolves AFTER boot, so a player who walks straight into the
+       garage would otherwise sit looking at the no-art gradient with four
+       perfectly good paintings already in memory. */
+    else if (this._cur === 'garage') this._renderGarage(this._data.garage || {});
   }
 
   /** The texture for a stage's key art, or null. */
   _stageArt(trackId) {
     return this.assets && trackId ? this.assets.get('art/' + trackId) : null;
+  }
+
+  /** The texture for a machine's key art, or null. Same story as _stageArt:
+      `assets.get()` answers null on a normal install and every caller here is
+      written for that. */
+  _vehArt(vehicleId) {
+    return this.assets && vehicleId ? this.assets.get('art/veh-' + vehicleId) : null;
   }
 
   /**
@@ -586,6 +600,15 @@ export class UI {
        the pick from the final {type:'race'} action. The UI's own selection is
        the authority; the payload only seeds it when we have none at all. */
     if (d.trackId && !this._sel.trackId) this._sel.trackId = d.trackId;
+    /* Same rule for the machine, and for the same reason: seed from the
+       payload when we have no pick of our own, so the garage opens on what the
+       player last raced instead of on whatever happens to be first in the
+       roster. The 3D inset follows main.js's id, so without this the hero and
+       the live car disagree the moment you walk in. */
+    if (d.vehicleId && !this._sel.vehicleId &&
+      list.some(v => v.spec.id === d.vehicleId && !v.locked)) {
+      this._sel.vehicleId = d.vehicleId;
+    }
     if (!this._sel.vehicleId || !list.some(v => v.spec.id === this._sel.vehicleId && !v.locked)) {
       const first = list.find(v => !v.locked) || list[0];
       this._sel.vehicleId = first ? first.spec.id : null;
@@ -604,6 +627,18 @@ export class UI {
         `${n[0].toUpperCase()}${n.slice(1)} machines, ${open} unlocked. ` +
         'No wrong answers, only different mistakes.';
     }
+    this._renderGarageHero(list);
+
+    /* The strip. Same `.pick` markup contract as the stage cards and as the
+       grid this replaced — a focusable <button class="pick" data-focus
+       data-id> — because the focus manager below walks [data-focus] purely by
+       class name and getBoundingClientRect() geometry. Four cards in a row
+       instead of a column is a layout change and nothing else; keyboard,
+       d-pad and the pointerdown re-homing all keep working untouched.
+
+       The name, the description and the bars are NOT here any more. They are
+       one block over the hero, because saying them four times in four boxes
+       is what made this screen a spreadsheet. */
     const g = this.el.garageGrid;
     if (!g) return;
     g.innerHTML = '';
@@ -615,32 +650,65 @@ export class UI {
       b.setAttribute('data-focus', '');
       b.dataset.id = s.id || '';
       const cv = document.createElement('canvas');
-      cv.className = 'car-art'; cv.width = 416; cv.height = 160;
+      cv.className = 'car-art'; cv.width = 480; cv.height = 270;
       const top = document.createElement('div');
       top.className = 'pick-top';
       top.innerHTML = `<span class="pick-name">${esc(s.name || s.id)}</span>` +
         (v.locked ? `<span class="lock"><b>&#128274;</b>LOCKED</span>`
           : `<span class="chip info">${Math.round((s.topSpeed || 0) * 3.6)} KM/H</span>`);
-      const tag = document.createElement('div');
-      tag.className = 'pick-tag'; tag.textContent = s.desc || '';
-      const stats = document.createElement('div');
-      stats.className = 'stats';
-      const st = v.stats || {};
-      stats.innerHTML =
-        this._statRow('SPEED', st.speed) + this._statRow('ACCEL', st.accel) +
-        this._statRow('GRIP', st.grip) + this._statRow('WEIGHT', st.weight, true);
-      b.appendChild(top); b.appendChild(cv); b.appendChild(tag); b.appendChild(stats);
-      if (v.locked && v.lockHint) {
-        const lh = document.createElement('div');
-        lh.className = 'pick-meta';
-        lh.innerHTML = `<span class="chip info">${esc(v.lockHint)}</span>`;
-        b.appendChild(lh);
-      }
+      b.appendChild(cv); b.appendChild(top);
       b.addEventListener('click', () => this._pickCar(v));
       g.appendChild(b);
-      drawCar(cv, s);
+      drawCar(cv, s, { art: this._vehArt(s.id) });
     }
     this._syncGarageFoot(list);
+  }
+
+  /**
+   * The hero: the selected machine's key art full-bleed, with its name, its
+   * numbers and the lock state overlaid on the dark left third.
+   *
+   * Two layers and both degrade on their own. The BACKDROP is a CSS
+   * background-image set idempotently — the src is only written when it
+   * actually changes, exactly as setLoadingArt does it, so re-rendering the
+   * screen does not make the browser re-decode a 200 KB JPEG. With no art the
+   * `has-art` class stays off and styles.css draws a deliberate gradient
+   * instead. The OVERLAY is the same DOM the cards used to carry, built once
+   * for the selection rather than four times.
+   */
+  _renderGarageHero(list) {
+    const cur = list.find(v => v.spec.id === this._sel.vehicleId) || list[0] || null;
+    const s = (cur && cur.spec) || {};
+
+    const el = this.el.garageHero;
+    if (el) {
+      const img = artImage(this._vehArt(s.id));
+      const src = img && img.nodeName === 'IMG' ? img.src : '';
+      if (src !== this._vehArtSrc) {
+        this._vehArtSrc = src;
+        el.style.backgroundImage = src ? `url("${src}")` : '';
+        el.classList.toggle('has-art', !!src);
+      }
+    }
+
+    const host = this.el.garageDetail;
+    if (!host) return;
+    if (!cur) { host.innerHTML = ''; return; }
+    const st = cur.stats || {};
+    host.classList.toggle('locked', !!cur.locked);
+    host.innerHTML =
+      `<div class="pick-top">
+         <span class="pick-name">${esc(s.name || s.id || '')}</span>
+         ${cur.locked ? `<span class="lock"><b>&#128274;</b>LOCKED</span>`
+        : `<span class="chip info">${Math.round((s.topSpeed || 0) * 3.6)} KM/H</span>`}
+       </div>
+       <div class="pick-tag">${esc(s.desc || '')}</div>
+       <div class="stats">` +
+      this._statRow('SPEED', st.speed) + this._statRow('ACCEL', st.accel) +
+      this._statRow('GRIP', st.grip) + this._statRow('WEIGHT', st.weight, true) +
+      `</div>` +
+      (cur.locked && cur.lockHint
+        ? `<div class="pick-meta"><span class="chip info">${esc(cur.lockHint)}</span></div>` : '');
   }
 
   _statRow(label, v, neutral) {
@@ -659,7 +727,12 @@ export class UI {
     this._sfx('tick');
     const g = this.el.garageGrid;
     if (g) for (const c of g.children) c.classList.toggle('sel', c.dataset.id === v.spec.id);
-    this._syncGarageFoot(this._vehicleList(this._data.garage || {}));
+    /* The hero IS the selection now, so it has to follow it. Only the hero:
+       re-rendering the strip would rebuild the four buttons under the focus
+       ring and throw away the ring's element identity mid-press. */
+    const list = this._vehicleList(this._data.garage || {});
+    this._renderGarageHero(list);
+    this._syncGarageFoot(list);
     // ARCHITECTURE §6.8: the machine on the menu pad swaps from this.
     this._emit({ type: 'preview', vehicleId: v.spec.id });
   }

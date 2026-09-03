@@ -56,8 +56,36 @@ const NO_CTL = { throttle: 0, steer: 0, brake: 0, handbrake: 0, roll: 0 };
 
 const PAD_R = 13;                 // metres — big enough that the disc edge is
                                   // off screen at every camera angle we use
+
+/* ------------------------------------------------------------------
+   THE GARAGE WINDOW
+   ------------------------------------------------------------------
+   The garage screen is full-bleed key art with a rectangle CLIPPED OUT of it
+   (styles.css `.garage-hero`, under `body.menu3d`), and the live turntable
+   shows through that rectangle. These four numbers ARE that clip-path,
+   expressed as fractions of the viewport — x/y from the top-left corner.
+   MOVE ONE AND YOU MUST MOVE THE OTHER; there is nothing at runtime that can
+   notice they have drifted apart.
+
+   Why a camera aim and not a viewport: the engine owns ONE EffectComposer and
+   every screen renders through it, so there is no second pass to give the
+   machine and no scissor rect to render it into. The only lever is where the
+   camera looks, which is what _frameGarage does.
+   ------------------------------------------------------------------ */
+const GARAGE_WIN = { x0: 0.58, x1: 1.00, y0: 0.22, y1: 0.58 };
+const GARAGE_Y = 0.78;            // the machine's visual centre, metres up
+const DEG = Math.PI / 180;
+
 const _v = new THREE.Vector3();
 const _dummy = new THREE.Object3D();
+/* Scratch for _frameGarage. Module scope because this runs every frame and a
+   fresh Vector3 sixty times a second is still an allocation in a loop. */
+const _fwd = new THREE.Vector3();
+const _rgt = new THREE.Vector3();
+const _upv = new THREE.Vector3();
+const _rel = new THREE.Vector3();
+const _tgt = new THREE.Vector3();
+const _WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 export class MenuScene {
   /**
@@ -212,15 +240,20 @@ export class MenuScene {
       this.vehicle.updateVisuals(d);
     }
 
-    /* The dolly. A slow arc rather than a full orbit: the plate owns the left
-       46 % of the screen, so the machine has to stay in the right half or it
-       spends half its life behind the text. */
-    const a = -0.62 + Math.sin(this._t * 0.085) * 0.34;
-    const R = 8.4 + Math.sin(this._t * 0.055) * 0.9;
-    const h = 2.35 + Math.sin(this._t * 0.11) * 0.28;
-    cam.position.set(Math.sin(a) * R, h, Math.cos(a) * R);
-    // aim off-centre so the car sits right-of-frame, clear of the plate
-    cam.lookAt(-1.05, 0.85, 0);
+    /* The dolly, and the garage is the odd one out — see _frameGarage. MAIN
+       and TRACKS are unchanged: a slow arc rather than a full orbit, because
+       the plate owns the left 46 % of the screen and the machine has to stay
+       in the right half or it spends half its life behind the text. */
+    if (this.kind === 'garage') {
+      this._frameGarage(cam);
+    } else {
+      const a = -0.62 + Math.sin(this._t * 0.085) * 0.34;
+      const R = 8.4 + Math.sin(this._t * 0.055) * 0.9;
+      const h = 2.35 + Math.sin(this._t * 0.11) * 0.28;
+      cam.position.set(Math.sin(a) * R, h, Math.cos(a) * R);
+      // aim off-centre so the car sits right-of-frame, clear of the plate
+      cam.lookAt(-1.05, 0.85, 0);
+    }
 
     if (this.sky) this.sky.update(d, cam, elapsed || this._t);
     if (this.engine.aimShadow && this.sky) {
@@ -243,6 +276,74 @@ export class MenuScene {
 
     if (this.art) this.art.rotation.y = Math.atan2(cam.position.x - this.art.position.x,
       cam.position.z - this.art.position.z);
+  }
+
+  /**
+   * GARAGE FRAMING — put the machine inside the CSS window.
+   *
+   * Two jobs. First, pull back and raise a little, until the whole machine
+   * fits inside a rectangle 42 % of the frame wide: at the main menu's 8.4 m
+   * the car is a bumper, because the window is a fifth of the area the plate
+   * framing was composed for.
+   *
+   * Second, aim OFF-AXIS by exactly the window's offset from screen centre.
+   * That offset is a nonlinear function of the aim point — moving the target
+   * changes the view direction, which changes the machine's depth along it,
+   * which changes how far a metre of offset is worth in screen space — so
+   * rather than approximate it with a half-frustum width at the orbit radius
+   * (which lands the machine about 4 % of the screen too far out, enough to
+   * clip a wheel against the window edge at 1280 wide) this takes three
+   * Newton steps. Each one measures where the machine actually projects and
+   * pushes the aim point the other way; it converges to well under a pixel by
+   * the third, and every vector it uses is module scope, so a frame of this
+   * allocates nothing.
+   *
+   * No projection state is touched — no setViewOffset, no scissor, no second
+   * pass — so there is nothing here for the race to inherit if this file's
+   * teardown is ever wrong. The camera is re-aimed by main.js the moment a
+   * race starts.
+   */
+  _frameGarage(cam) {
+    // half-frustum tangents, read from the camera so the FIELD OF VIEW
+    // setting and the window's aspect are both accounted for
+    const tv = Math.tan((cam.fov || 58) * 0.5 * DEG);
+    const th = tv * (cam.aspect || 1.7778);
+    /* The menu shares the race camera and does NOT own its fov: game/camera.js
+       leaves behind whatever the last frame of the last race had, which is the
+       player's FIELD OF VIEW setting (42..82) plus a speed kick. Hold the
+       framing against that by scaling the orbit radius with the tangent ratio,
+       so the machine is the same size in the window on 42 as on 82. Clamped
+       both ways: past ~12.5 m the camera walks out of PAD_R and the tyre wall
+       gets between it and the machine. */
+    const k = Math.min(1.16, Math.max(0.66, Math.tan(29 * DEG) / Math.max(0.12, tv)));
+    // a slow, narrow arc: a full orbit would swing the machine out of a
+    // window that is only 42 % x 36 % of the frame
+    const a = -0.55 + Math.sin(this._t * 0.075) * 0.20;
+    const R = 10.6 * k + Math.sin(this._t * 0.05) * 0.55;
+    const h = 2.70 * k + Math.sin(this._t * 0.09) * 0.22;
+    cam.position.set(Math.sin(a) * R, h, Math.cos(a) * R);
+
+    // where the window's centre is, in normalised device coords (+x right,
+    // +y UP — CSS y runs the other way, hence the 1 - 2*cy)
+    const wantX = GARAGE_WIN.x0 + GARAGE_WIN.x1 - 1;
+    const wantY = 1 - (GARAGE_WIN.y0 + GARAGE_WIN.y1);
+
+    _tgt.set(0, GARAGE_Y, 0);                      // start by aiming at it
+    for (let i = 0; i < 3; i++) {
+      _fwd.copy(_tgt).sub(cam.position).normalize();
+      // the basis three.js's lookAt will build from this direction
+      _rgt.crossVectors(_fwd, _WORLD_UP).normalize();
+      _upv.crossVectors(_rgt, _fwd);
+      _rel.set(0, GARAGE_Y, 0).sub(cam.position);
+      const depth = _rel.dot(_fwd);
+      if (!(depth > 0.1)) break;                   // behind us: give up, aim straight
+      const ex = wantX - _rel.dot(_rgt) / (depth * th);
+      const ey = wantY - _rel.dot(_upv) / (depth * tv);
+      if (Math.abs(ex) < 0.002 && Math.abs(ey) < 0.002) break;
+      _tgt.addScaledVector(_rgt, -ex * depth * th);
+      _tgt.addScaledVector(_upv, -ey * depth * tv);
+    }
+    cam.lookAt(_tgt);
   }
 
   /**

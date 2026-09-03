@@ -94,13 +94,28 @@
     </footer>
   </section>
 
-  <!-- ---- garage ---- -->
+  <!-- ---- garage ----
+       Hero + strip, not a grid of cards. The selected machine's key art fills
+       the screen, its name and numbers sit in the dark left third the
+       paintings are composed to leave free, and the four compact cards along
+       the bottom switch machines.
+
+       #garageHero MUST be the first child: it is the screen's backdrop at
+       z-index:-1 (see .garage-hero in styles.css) and it replaces the plate
+       #scr-garage opts out of. #garageInset is the hairline frame around the
+       window that the hero is clipped away from, where the live turntable
+       shows through — it draws nothing when the 3D is off. -->
   <section id="scr-garage" class="screen sheet hidden">
+    <div class="garage-hero" id="garageHero" aria-hidden="true"></div>
+    <div class="garage-inset" id="garageInset" aria-hidden="true"></div>
     <header class="scr-head">
       <div><h2>GARAGE</h2><p class="scr-sub" id="garageSub"></p></div>
       <div class="scr-head-right" id="garageTrack"></div>
     </header>
-    <div class="scr-body"><div class="card-grid cars" id="garageGrid"></div></div>
+    <div class="scr-body">
+      <div class="garage-detail" id="garageDetail"></div>
+      <div class="garage-strip" id="garageGrid"></div>
+    </div>
     <footer class="scr-foot">
       <button class="btn ghost" data-focus data-act="garage-back">BACK</button>
       <span class="foot-spacer"></span>

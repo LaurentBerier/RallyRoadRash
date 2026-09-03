@@ -233,6 +233,57 @@ export function dynHit(pool, c, v, nx, nz, closing) {
   return true;
 }
 
+/* A blast is not a car, but it wants everything a car's contact wants: the
+   mass rule, the pool claim, the seeding, the impact particles. So it borrows
+   the actor rather than the code — one scratch object, reused, never escaping
+   this module. `mass: Infinity` makes `pm <= massRatio * mass` true for every
+   WEIGHED prop and still false for an unlisted one (Infinity <= Infinity is
+   true, but PROP_MASS_KG returns Infinity for those, and Infinity <= Infinity
+   would pass — so the guard below excludes them explicitly). No `applyImpulse`
+   and no `quat`, so dynHit takes its plain fallback and pushes this scratch
+   velocity instead of a car's. */
+const _blast = { mass: Infinity, collideR: 0.5, pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } };
+
+/**
+ * Knock over everything dynamic-capable within `r` of a point — the rocket
+ * blast's door into the same physics a wheel gets.
+ *
+ * @param {object} pool
+ * @param {number} x,y,z  blast centre, world space
+ * @param {number} r      radius in metres
+ * @param {number} speed  reference shove at the centre, falling to 0 at `r`
+ * @returns {number} props actually claimed. A hard no-op — never a throw —
+ *                   when there is no pool, which is the headless case.
+ */
+export function knockAt(pool, x, y, z, r, speed) {
+  if (!pool || !pool.props || !(r > 0)) return 0;
+  const cols = pool.props.colliders;
+  if (!cols) return 0;
+  const r2 = r * r;
+  let hit = 0;
+  for (let i = 0; i < cols.length; i++) {
+    const c = cols[i];
+    if (c.awake) continue;
+    // Unlisted kinds are Infinity and must stay standing even for a blast:
+    // a rocket does not move a boulder.
+    if (!Number.isFinite(PROP_MASS_KG(c.kind))) continue;
+    const dx = c.x - x, dz = c.z - z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 > r2) continue;
+    const d = Math.sqrt(d2);
+    // n points from the prop toward the blast, because dynHit sends the prop
+    // along -n — away from whatever hit it.
+    const nx = d > 1e-4 ? -dx / d : 1, nz = d > 1e-4 ? -dz / d : 0;
+    _blast.pos.x = x; _blast.pos.z = z;
+    _blast.vel.x = 0; _blast.vel.y = 0; _blast.vel.z = 0;
+    // Linear falloff, and it must clear KNOCK_MIN or dynHit refuses — so the
+    // edge of a blast rustles nothing, which is correct.
+    const closing = speed * (1 - d / r);
+    if (dynHit(pool, c, _blast, nx, nz, closing)) hit++;
+  }
+  return hit;
+}
+
 /**
  * Advance every live body. Returns immediately when nothing is moving, which
  * is the state the stage is in for all but a second or two of a race.

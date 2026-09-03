@@ -10,6 +10,7 @@
    ============================================================ */
 import * as THREE from 'three';
 import { Vehicle, resolveVehiclePair } from '../src/game/vehicle.js';
+import { tyreTubeGeometry } from '../src/game/vehicle-art.js';
 import { VEHICLES, VEHICLE_BY_ID, statBars } from '../src/game/vehicles.js';
 import { G, TUNE } from '../src/game/config.js';
 import { SURF } from '../src/world/surfaces.js';
@@ -503,12 +504,22 @@ head('(i) FEEL PROBES');
 head('(j) VISUALS — procedural build + dispose (DOM stubbed)');
 {
   const noop = () => { };
+  /* createImageData / getImageData hand back a REAL buffer rather than a
+     noop's undefined. The procedural texture makers (the tyre dirt, the noise
+     fields under it) read their own pixels back, and a stub that cannot do
+     that turns "the material builds" into "the material is caught by its own
+     guard" — which is a pass that proves nothing. Everything else stays a
+     noop: fills and gradients only ever write, and nothing here reads a
+     canvas anybody else drew. */
+  const imageData = (w, h) => ({ width: w | 0, height: h | 0, data: new Uint8ClampedArray(Math.max(0, (w | 0) * (h | 0) * 4)) });
   const ctx2d = new Proxy({}, {
     get: (_, k) => {
       if (k === 'createLinearGradient' || k === 'createRadialGradient') {
         return () => ({ addColorStop: noop });
       }
       if (k === 'measureText') return () => ({ width: 10 });
+      if (k === 'createImageData') return (w, h) => imageData(w, h);
+      if (k === 'getImageData') return (x, y, w, h) => imageData(w, h);
       return noop;
     },
   });
@@ -800,6 +811,67 @@ head('(l) ARSENAL — placeAt wipes the publications; muzzleWorld never fails');
     v.muzzleWorld(out);
   } catch (e) { threw = true; void e; }
   ok('muzzleWorld never throws on a bad _muzzle', !threw && Number.isFinite(out.x));
+}
+
+/* ============================================================
+   (m) THE TYRE IS SOLID
+   ------------------------------------------------------------
+   The regression this exists for: the tyre carcass used to be three
+   open-ended cylinders — a tread band and two coning sidewalls — and nothing
+   at all closed the bead. From anywhere below the axle line you looked
+   straight through the near sidewall, past the rim, and out at the INSIDE of
+   the far one. It reads as a hole in the wheel, because it is one.
+
+   The gate is that the tube is a closed surface: every undirected edge shared
+   by exactly two triangles. Run on the TUBE ALONE, deliberately — the lugs
+   are documented as having no bottom face (they are buried in the tread and
+   ten triangles beat twelve, thirty-nine times a wheel), so merging them in
+   would report 39 × 4 false boundaries and the gate would have to be turned
+   off to pass.
+
+   Runs after (j) because it needs NO document: LatheGeometry is arithmetic.
+   ============================================================ */
+head('(m) TYRE — the carcass is a closed surface');
+{
+  for (const S of VEHICLES) {
+    const g = tyreTubeGeometry(S.wheelR, S.wheelW);
+    const idx = g.index, pos = g.attributes.position;
+    /* Weld by position first. A lathe duplicates vertices at both of its
+       seams — the last radial column onto the first, and the profile's
+       closing point onto its start — because the two need different uvs. A
+       seam is a second INDEX for one point, not a hole, and testing raw
+       indices would call every closed lathe in three broken. Quantised to
+       1e-5 m so float error in the revolve cannot split a welded corner. */
+    const canon = new Int32Array(pos.count);
+    const seen = new Map();
+    for (let i = 0; i < pos.count; i++) {
+      const key = Math.round(pos.getX(i) * 1e5) + ',' +
+        Math.round(pos.getY(i) * 1e5) + ',' + Math.round(pos.getZ(i) * 1e5);
+      const hit = seen.get(key);
+      if (hit === undefined) { seen.set(key, i); canon[i] = i; } else canon[i] = hit;
+    }
+    const edges = new Map();
+    const tris = idx.count / 3;
+    let degenerate = 0;
+    for (let t = 0; t < tris; t++) {
+      const a = canon[idx.getX(t * 3)], b = canon[idx.getX(t * 3 + 1)], c = canon[idx.getX(t * 3 + 2)];
+      if (a === b || b === c || c === a) { degenerate++; continue; }
+      for (const [p, q] of [[a, b], [b, c], [c, a]]) {
+        const key = p < q ? p + ':' + q : q + ':' + p;
+        edges.set(key, (edges.get(key) || 0) + 1);
+      }
+    }
+    let open = 0, nonManifold = 0;
+    for (const n of edges.values()) {
+      if (n === 1) open++; else if (n !== 2) nonManifold++;
+    }
+    info(`${S.id.padEnd(10)} tube ${tris} tris, ${pos.count} verts → ${seen.size} welded, ${edges.size} edges`);
+    ok(`${S.id}: the tyre tube has no open edges`, open === 0, `${open} boundary edge(s)`);
+    ok(`${S.id}: …and no edge shared by more than two faces`, nonManifold === 0,
+      `${nonManifold} over-shared`);
+    ok(`${S.id}: no degenerate triangles in the revolve`, degenerate === 0, `${degenerate}`);
+    g.dispose();
+  }
 }
 
 /* ---------------- verdict ---------------- */

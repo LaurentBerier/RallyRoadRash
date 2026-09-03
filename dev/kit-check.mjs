@@ -58,7 +58,7 @@ import {
   totemGeo, ruinedBillboardGeo,
 } from '../src/world/kit-wasteland.js';
 import {
-  rocketCrateGeo, nitroCanGeo, rocketGeo, launcherGeo,
+  rocketCrateGeo, nitroCanGeo, rocketGeo, launcherGeo, beaconGeo,
 } from '../src/world/kit-arsenal.js';
 import {
   RECIPES, DRESSING, KIT_KINDS, UPRIGHT_KINDS, BOUNCE_FOR, WASTE_FACING,
@@ -176,6 +176,21 @@ const FACTORIES = [
   ['rocket', () => rocketGeo(P, 283), [0.7, 1.2, 0.15, 0.45]],
   ['launcher2', () => launcherGeo(P, 293, 2), [0.5, 1.1, 0.15, 0.45]],
   ['launcher4', () => launcherGeo(P, 307, 4), [0.6, 1.2, 0.15, 0.45]],
+  /* The beacon over a pickup — the one arsenal shape that is not LIT. It goes
+     under an additive MeshBasicMaterial and its vertex colours are a baked
+     white-to-black gradient rather than a description of paint, which makes
+     the "linear colours in 0..1" gate below the assertion that matters most
+     here: the ramp is authored as sRGB greys and decoded by tint(), and a
+     value that fell out of range would be a column that either vanishes or
+     blows the bloom out on every stage at once.
+
+     The envelope is a THIN, TALL one and both ends of it are load-bearing.
+     Width is the flare at the foot; if it grows past a hand's width the thing
+     has stopped being a beam and started being a bollard on the racing line.
+     Height is what makes it visible over a crest, and it is read by
+     arsenal.js (ICON_Y is derived from the same 6 m), so a beacon that
+     shrank would take the marker down with it. */
+  ['beacon', () => beaconGeo(P, 311), [0.05, 0.30, 5.5, 6.5]],
 ];
 
 const box = new THREE.Box3();
@@ -243,7 +258,13 @@ head('2. DETERMINISM — the same seed is the same object, forever');
   ['barricade', () => barricadeGeo(P, 257, 5.0)], ['firedrum', () => fireDrumGeo(P, 263)],
   ['totem', () => totemGeo(P, 269)], ['ruinboard', () => ruinedBillboardGeo(P, 271)],
   ['rocketCrate', () => rocketCrateGeo(P, 277)], ['nitroCan', () => nitroCanGeo(P, 281)],
-  ['rocket', () => rocketGeo(P, 283)], ['launcher', () => launcherGeo(P, 293, 2)]]) {
+  ['rocket', () => rocketGeo(P, 283)], ['launcher', () => launcherGeo(P, 293, 2)],
+    /* The beacon draws one rng() per band for its wobble, so it is exactly
+       the shape of factory that stops being a pure function of its seed the
+       moment somebody reorders the loop. Forty of them are instanced off ONE
+       geometry, so a re-roll is not a moving collider — it is every pickup on
+       the stage changing shape at once. */
+  ['beacon', () => beaconGeo(P, 311)]]) {
     const a = make(), b2 = make();
     let same = a.attributes.position.count === b2.attributes.position.count;
     if (same) {

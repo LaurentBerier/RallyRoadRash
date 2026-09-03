@@ -37,9 +37,15 @@ const W = TUNE.weapons;
 /* A pickup has to be readable from 150 m at 40 m/s. The kit shapes stand on
    the ground (contract 8.8); a small hover keeps the crate off the ruts and
    the can's valve turning where the low sun can find it. Exported because
-   arsenal.js places the halo under the hover. */
-export const CRATE_HOVER = 0.30;        // m above the road
-export const CAN_HOVER = 0.25;
+   arsenal.js places the halo under the hover.
+
+   Raised in wave 9 alongside the instance scale arsenal.js now draws them at
+   (CRATE_SCALE / CAN_SCALE): the geometry is unchanged — kit-check's size
+   gates and the PICK_R trigger radius stay decoupled from how big the thing
+   LOOKS — so a 1.5x crate on the old 0.30 m hover had its straps in the road
+   surface on any camber at all. */
+export const CRATE_HOVER = 0.45;        // m above the road
+export const CAN_HOVER = 0.35;
 
 /* Crate rows are laid out in packs across the road. `lapLength / 420`
    gives seven rows on the 900 m tutorial and nine on the 2 km caldera —
