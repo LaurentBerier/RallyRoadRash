@@ -334,6 +334,20 @@ export class Race {
     }
 
     this.state = RS.GRID; this.stateT = 0;
+    /* Stand the scenery back up, for the same reason the watchdog baselines
+       above are cleared: anything the LAST race left lying down is state this
+       one did not earn. It belongs here rather than in restart() because a
+       fresh Race on a stage whose props are already flattened — which is every
+       run after the first in a qa-drive sweep — is not the track the first run
+       measured, and lap times compared across builds are the whole point. */
+    this.props.resetDynamic();
+    /* And the ground itself. restart() already did these two; a FRESH Race did
+       not, so a second race on a stage inherited the first one's ruts — and a
+       rut is not decoration, it is subtracted from terrain.heightAt and the
+       wheels feel it. That is a lap-time difference with no cause in the
+       build, which is exactly what qa-drive exists to detect. */
+    this.terrain.clearDent();
+    this.terrain.clearTrails();
     this.arsenal.resetAll();
     this.weaponsFlag = false;
     this.raceTime = 0; this.countdownN = -1; this._beat = -1;
@@ -419,9 +433,7 @@ export class Race {
     this.terrain.clearDent();
     this.terrain.clearTrails();
     this.dust.clear();
-    // Trees a lap-one pile-up flattened are scenery; scenery that stays down
-    // across a restart is a different track than the last run started on.
-    this.props.resetDynamic();
+    // (the felled scenery is stood back up by _enterGrid, below)
     this.arsenal.resetAll();
     this.tracker.resetAll();
     this._enterGrid(false);
