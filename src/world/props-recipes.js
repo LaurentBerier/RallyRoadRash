@@ -6,11 +6,14 @@
    when a stage is being art-directed. Everything here is data plus the
    canvas signage that carries a stage's accent colour.
 
-   Three tables:
+   Four tables and the signage:
 
    • RECIPES   — the scatter. Texture for the middle distance: how much of
      each kind, how big, whether you can hit it, how steep a slope it will
-     tolerate. Much the same everywhere on a stage, by design.
+     tolerate. Much the same everywhere on a stage, by design. The shares
+     must sum to 1 per stage: buildScatter ceils MAX_SCATTER × share per
+     kind, so an over-unity table silently overspends the tier. kit-check
+     asserts it.
 
    • DRESSING  — the authored one-offs. A short list of structures that give
      a stage a place and a story, the utility lines that tie them together,
@@ -20,6 +23,9 @@
      enough to read at 130 km/h, far enough out never to be the reason you
      lost the race. `lat` is that band in metres from the centreline, `r` is
      the collision radius, `size` the random scale range.
+
+   • WASTE_FACING — which way each wasteland shape is BUILT, so a planner
+     knows how far to turn it. A fact about the geometry, not about a stage.
 
    • The signage — gantry, banners, sponsor boards, warning chevrons, the
      finish checker, the barrier rail. All canvas, all tinted by the
@@ -155,7 +161,8 @@ export const RECIPES = {
                 same scan the warning boards and the crowd use, so the sign,
                 the crowd and the thing you hit all agree where the corner is
      `ember: true` records the site's world position for props.update, which
-     is how a fire drum gets its sparks.
+     is how a fire drum gets its sparks. Which WAY a row ends up pointing is
+     not in the row at all — see WASTE_FACING below.
 
    • `heroModels` — ARCHITECTURE §8.9. A generated GLB per stage, with the kit
      shape it falls back to when the file is not there. See the note on the
@@ -186,8 +193,8 @@ export const DRESSING = {
       { id: 'jersey', n: 2, lat: [19, 30], r: 3.6, clear: 1.45, slope: 12 },
       { id: 'sandbags', n: 2, lat: [19, 34], r: 1.9, clear: 1.45, slope: 14 },
       { id: 'watchtower', n: 1, lat: [40, 80], r: 2.6, slope: 13 },
-      { id: 'totem', n: 1, lat: [20, 42], r: 0.7 },
-      { id: 'firedrum', n: 3, lat: [18, 28], r: 0.9, clear: 1.42, slope: 12, ember: true },
+      { id: 'totem', n: 1, lat: [20, 42], r: 0.42 },
+      { id: 'firedrum', n: 3, lat: [18, 28], r: 0.45, clear: 1.42, slope: 12, ember: true },
       { id: 'barricade', n: 3, r: 2.5, where: 'corner' },
     ],
     heroModels: [
@@ -223,8 +230,8 @@ export const DRESSING = {
       { id: 'windpump', n: 1, lat: [44, 85], r: 1.7, slope: 15 },
       { id: 'watchtower', n: 1, lat: [40, 80], r: 2.6, slope: 13 },
       { id: 'jersey', n: 1, lat: [15, 26], r: 3.6, clear: 1.55, slope: 12 },
-      { id: 'totem', n: 2, lat: [16, 40], r: 0.7 },
-      { id: 'firedrum', n: 3, lat: [13, 24], r: 0.9, clear: 1.5, slope: 12, ember: true },
+      { id: 'totem', n: 2, lat: [16, 40], r: 0.42 },
+      { id: 'firedrum', n: 3, lat: [13, 24], r: 0.45, clear: 1.5, slope: 12, ember: true },
       { id: 'barricade', n: 3, r: 2.5, where: 'corner' },
     ],
     heroModels: [
@@ -257,8 +264,8 @@ export const DRESSING = {
       { id: 'watchtower', n: 2, lat: [40, 78], r: 2.6, slope: 15 },
       { id: 'jersey', n: 3, lat: [13, 24], r: 3.6, clear: 1.6, slope: 12 },
       { id: 'sandbags', n: 2, lat: [13, 26], r: 1.9, clear: 1.6, slope: 15 },
-      { id: 'totem', n: 2, lat: [15, 36], r: 0.7, slope: 24 },
-      { id: 'firedrum', n: 3, lat: [12, 22], r: 0.9, clear: 1.55, slope: 12, ember: true },
+      { id: 'totem', n: 2, lat: [15, 36], r: 0.42, slope: 24 },
+      { id: 'firedrum', n: 3, lat: [12, 22], r: 0.45, clear: 1.55, slope: 12, ember: true },
       { id: 'barricade', n: 3, r: 2.5, where: 'corner' },
     ],
     heroModels: [
@@ -296,8 +303,8 @@ export const DRESSING = {
       { id: 'watchtower', n: 1, lat: [40, 80], r: 2.6, slope: 13 },
       { id: 'jersey', n: 2, lat: [15, 26], r: 3.6, clear: 1.55, slope: 12 },
       { id: 'sandbags', n: 3, lat: [15, 30], r: 1.9, clear: 1.55, slope: 15 },
-      { id: 'totem', n: 2, lat: [16, 38], r: 0.7 },
-      { id: 'firedrum', n: 4, lat: [13, 24], r: 0.9, clear: 1.5, slope: 12, ember: true },
+      { id: 'totem', n: 2, lat: [16, 38], r: 0.42 },
+      { id: 'firedrum', n: 4, lat: [13, 24], r: 0.45, clear: 1.5, slope: 12, ember: true },
       { id: 'barricade', n: 3, r: 2.5, where: 'corner' },
     ],
     heroModels: [
@@ -337,8 +344,8 @@ export const DRESSING = {
       { id: 'watchtower', n: 2, lat: [42, 80], r: 2.6, slope: 13 },
       { id: 'jersey', n: 4, lat: [17, 28], r: 3.6, clear: 1.5, slope: 12 },
       { id: 'sandbags', n: 2, lat: [17, 32], r: 1.9, clear: 1.5, slope: 14 },
-      { id: 'totem', n: 1, lat: [18, 40], r: 0.7 },
-      { id: 'firedrum', n: 4, lat: [16, 26], r: 0.9, clear: 1.45, slope: 12, ember: true },
+      { id: 'totem', n: 1, lat: [18, 40], r: 0.42 },
+      { id: 'firedrum', n: 4, lat: [16, 26], r: 0.45, clear: 1.45, slope: 12, ember: true },
       { id: 'barricade', n: 3, r: 2.5, where: 'corner' },
     ],
     heroModels: [
@@ -410,6 +417,42 @@ export const UPRIGHT_KINDS = new Set([
   'watchtower', 'jersey', 'sandbags', 'barricade', 'firedrum', 'totem',
   'ruinboard',
 ]);
+
+/**
+ * Which way a wasteland shape is BUILT, and therefore how a planner has to
+ * turn it to put it where it belongs. This is a fact about the geometry and
+ * not about any stage, so it lives here once instead of on forty-four rows.
+ *
+ *   face   'along'  lie along the road — the default, and what a carcass, a
+ *                   run of barriers and a jack-knifed tanker all want
+ *          'road'   front onto the centreline — anything with a FACE. A board
+ *                   nobody can read from the road is not a board.
+ *          'free'   any yaw: radially symmetric, or nobody can tell
+ *   turn   radians added after `face` resolves, and the whole reason this
+ *          table exists. kit.js builds along +Z; kit-wasteland.js builds the
+ *          tanker, the jersey run, the sandbag wall and the barricade along
+ *          +X, because a caller yawing a wall along an edge thinks in the
+ *          wall's length. Both are right and they cannot share a convention,
+ *          so the −π/2 is written down where it can be checked.
+ *
+ * A row in DRESSING may override either field; nothing currently needs to.
+ */
+export const WASTE_FACING = {
+  husk0: { face: 'along', turn: 0 },
+  husk1: { face: 'along', turn: 0 },
+  husk2: { face: 'along', turn: 0 },
+  scrap: { face: 'free', turn: 0 },
+  tanker: { face: 'along', turn: -Math.PI / 2 },
+  pumpjack: { face: 'along', turn: 0 },
+  windpump: { face: 'free', turn: 0 },
+  watchtower: { face: 'free', turn: 0 },
+  jersey: { face: 'along', turn: -Math.PI / 2 },
+  sandbags: { face: 'along', turn: -Math.PI / 2 },
+  barricade: { face: 'along', turn: -Math.PI / 2 },
+  firedrum: { face: 'free', turn: 0 },
+  totem: { face: 'road', turn: 0 },
+  ruinboard: { face: 'road', turn: 0 },
+};
 
 /* ============================================================
    3.  SIGNAGE

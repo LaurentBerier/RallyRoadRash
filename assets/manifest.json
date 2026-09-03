@@ -19,6 +19,12 @@
 
   "env/training": { "url": "env/training-env.jpg", "kind": "equirect" },
 
+  "models/heroes/training-hero": { "url": "models/heroes/training-hero.glb", "kind": "model" },
+  "models/heroes/canyon-hero": { "url": "models/heroes/canyon-hero.glb", "kind": "model" },
+  "models/heroes/forest-hero": { "url": "models/heroes/forest-hero.glb", "kind": "model" },
+  "models/heroes/volcano-hero": { "url": "models/heroes/volcano-hero.glb", "kind": "model" },
+  "models/heroes/thunder-hero": { "url": "models/heroes/thunder-hero.glb", "kind": "model" },
+
   "models/hopper-carcass": { "url": "models/hopper-carcass.glb", "kind": "model" },
   "models/ridgeback-carcass": { "url": "models/ridgeback-carcass.glb", "kind": "model" },
   "models/redline-carcass": { "url": "models/redline-carcass.glb", "kind": "model" },

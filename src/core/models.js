@@ -55,8 +55,8 @@ function loader() {
  */
 export function loadModel(url) {
   if (typeof url !== 'string' || !url) return Promise.resolve(null);
-  if (!isRelative(url)) {
-    warnOnce(url, 'absolute url — models must be served from our own origin');
+  if (!isOwnOrigin(url)) {
+    warnOnce(url, 'off-origin url — models must be served from our own origin');
     return Promise.resolve(null);
   }
   let job = _cache.get(url);
@@ -176,9 +176,21 @@ function instantiate(template) {
 /* ------------------------------------------------------------------
    small guards
    ------------------------------------------------------------------ */
-function isRelative(url) {
-  // A scheme ('http:', 'data:', 'blob:') or a protocol-relative '//host'.
-  return !/^[a-z][a-z0-9+.-]*:/i.test(url) && !url.startsWith('//');
+/**
+ * True if `url` will be served from the origin this game was served from.
+ *
+ * The rule being enforced is "our own origin", not "textually relative". A
+ * relative url is always ours, and so is an absolute one that resolves to the
+ * page's own origin — which is what a module gets when it resolves a path
+ * against its own `import.meta.url`, and that is the only way to write a url
+ * that does not silently depend on which PAGE is asking. props-wasteland does
+ * exactly that for the hero models, because the same authored path is loaded
+ * from the game at the root and from the harnesses in dev/.
+ */
+function isOwnOrigin(url) {
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(url) && !url.startsWith('//')) return true;
+  try { return new URL(url, location.href).origin === location.origin; }
+  catch { return false; }
 }
 
 const _warned = new Set();

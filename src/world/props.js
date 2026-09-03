@@ -20,14 +20,20 @@
      caldera, the arch and the bunting over Thunder Mesa. A landmark that
      lands somewhere different every build is not a landmark.
 
+   • THE WASTELAND — carcasses, dead machinery, barricades on the corners
+     people go off at, and one generated hero model per stage. Planned in
+     props-wasteland.js and merged into a single mesh, so the whole layer
+     costs the stage one draw call.
+
    Collision is a 24 m bucket grid over circles and segments. resolve()
    pushes the car out and returns the impact speed so race.js can route
    it to damage and audio with one call.
 
-   Two sibling files carry what used to be in here, because this one was
-   doing three jobs and had grown past the house line limit:
+   Three sibling files carry what used to be in here, because this one was
+   doing four jobs and had grown past the house line limit:
    props-recipes.js is WHAT a stage is made of (the tables and the
-   signage), props-shapes.js is the scatter geometry and the rock shader.
+   signage), props-shapes.js is the scatter geometry and the rock shader,
+   props-wasteland.js is the wave-8 layer's placement and the hero models.
    ============================================================ */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -48,6 +54,10 @@ import {
   gantryTex, bannerTex, sponsorTex, arrowTex, checkerTex, railTex,
   waterfallMaterial,
 } from './props-recipes.js';
+import {
+  wastelandGeo, planWasteland, planHeroModels, flushWasteland,
+  disposeHeroModels, runEmbers,
+} from './props-wasteland.js';
 import {
   hash2, boulderGeo, hoodooGeo, pineGeo, logGeo, basaltGeo, ventGeo,
   coneGeo, tyreStackGeo, railQuad, rockMaterial,
@@ -328,11 +338,19 @@ export class Props {
     this._dressSites = new Map();      // id -> [ {x,y,z,yaw,scale} ]
     this._dressGeoCache = this._dressGeoCache || {};
     this._oneOff = [];                 // geometry already in world space
+    /* The wasteland bucket. Same idea as _oneOff — world-space geometry
+       merged into a single mesh — but it CASTS A SHADOW, and _oneOff cannot:
+       that mesh carries the power-line wires, and a shadow-casting wire is a
+       stripe of acne. A ten-metre watchtower with no shadow is the same
+       mistake read the other way, so it gets its own draw call. */
+    this._oneOffSolid = [];
     this._crowdIds = new Set();        // ids the low tier drops
     this._claimed = [];                // {x,z,r} — landmark keep-out discs
 
     this._planHeroes(rng, accent);     // first: a hero owns its ground outright
+    planHeroModels(this);              // …and a hero MODEL owns the most of it
     this._planLandmarks(rng);
+    planWasteland(this, rng);
     this._planUtilityLines(rng);
     this._planPaddock(rng);
     this._planJumpFurniture(rng, accent);
@@ -387,7 +405,12 @@ export class Props {
       case 'person1': g = personGeo(P, s + 149); break;
       case 'person2': g = personGeo(P, s + 151); break;
       case 'pole': g = poleGeo(P, s + 157, this.plan.lines.poleH, this.plan.lines.arms); break;
-      default: g = crateGeo(P, s); break;
+      /* The wasteland layer dispatches its own fourteen ids next door, so
+         they do not need fourteen more lines in here. A crate is still the
+         answer for a genuine typo, and it is deliberately silent — a warn
+         per prop per stage is noise, and kit-check gates the tables against
+         both switches instead. */
+      default: g = wastelandGeo(P, s, id) || crateGeo(P, s); break;
     }
     C[id] = this._keepGeo(g);
     return g;
@@ -429,6 +452,7 @@ export class Props {
   _planHeroes(rng, accent) {
     this.geysers = [];                 // world positions the update timer fires
     this.waterfalls = [];              // { x, y, z } for the mist
+    this.fireDrums = [];               // { x, y, z } the ember emitter reads
     for (const h of this.plan.heroes || []) {
       if (h.kind === 'arch') this._buildRockArch(h.s, rng);
       else if (h.kind === 'waterfall') this._buildWaterfall(h, rng);
@@ -620,6 +644,30 @@ export class Props {
     }
   }
 
+  /**
+   * The `n` tightest corners on the lap, hardest first.
+   *
+   * One scan, three callers. Anything that wants to react to "the corner
+   * people go off at" has to agree with everything else that does, or the
+   * crowd stands at one hairpin and the barricade defends a different one.
+   */
+  _tightestCorners(n) {
+    const sp = this.data.spline, L = sp.length;
+    const corners = [];
+    let run = null;
+    for (let s = 0; s < L; s += 4) {
+      const k = sp.curvatureAt(s);
+      if (Math.abs(k) > 1 / 46) {
+        if (!run || Math.abs(k) > Math.abs(run.k)) run = { s, k };
+      } else if (run) { corners.push(run); run = null; }
+    }
+    // A corner still open when the scan reaches s = L is a corner that
+    // straddles the start line, and it used to be dropped on the floor.
+    if (run) corners.push(run);
+    corners.sort((a, b) => Math.abs(b.k) - Math.abs(a.k));
+    return corners.slice(0, n);
+  }
+
   /* ---------------- utility lines ----------------
      A pole line is the cheapest thing in this file and does more for scale
      than anything else: it gives the middle distance a rhythm, it crosses
@@ -807,17 +855,8 @@ export class Props {
      the lap. Same scan the warning boards use, so the crowd and the sign
      always agree about where the corner is. */
   _planCrowds(rng) {
-    const sp = this.data.spline, L = sp.length;
-    const corners = [];
-    let run = null;
-    for (let s = 0; s < L; s += 4) {
-      const k = sp.curvatureAt(s);
-      if (Math.abs(k) > 1 / 46) {
-        if (!run || Math.abs(k) > Math.abs(run.k)) run = { s, k };
-      } else if (run) { corners.push(run); run = null; }
-    }
-    corners.sort((a, b) => Math.abs(b.k) - Math.abs(a.k));
-    for (const c of corners.slice(0, 3)) {
+    const sp = this.data.spline;
+    for (const c of this._tightestCorners(3)) {
       const outside = c.k > 0 ? -1 : 1;
       for (let i = 0; i < 10; i++) {
         const s = sp.wrapS(c.s - 20 + rng() * 46);
@@ -898,6 +937,7 @@ export class Props {
         this.wireMesh = m;
       }
     }
+    flushWasteland(this);
     this._dressSites.clear();
   }
 
@@ -1268,6 +1308,7 @@ export class Props {
     this._bobCrowd(t, camera);
     this._runGeysers(dt, camera);
     this._runFalls(dt, camera);
+    runEmbers(this, dt, camera);
   }
 
   /* ---------------- the crowd ----------------
@@ -1368,12 +1409,19 @@ export class Props {
   }
 
   dispose() {
+    /* Set FIRST. A hero model's load can still be in flight, and its
+       continuation adds a Group to a scene this call is in the middle of
+       tearing down; the flag is how that continuation knows to throw its
+       instance away instead. */
+    this._disposed = true;
     this.scene.remove(this.group);
     this.group.traverse(o => { if (o.isInstancedMesh) o.dispose(); });
+    disposeHeroModels(this);
     for (const g of this._geo) g.dispose();
     for (const m of this._mat) m.dispose();
     for (const t of this._tex) t.dispose();
     this._geo.length = 0; this._mat.length = 0; this._tex.length = 0;
     this.colliders.length = 0; this.barriers.length = 0;
+    if (this.fireDrums) this.fireDrums.length = 0;
   }
 }

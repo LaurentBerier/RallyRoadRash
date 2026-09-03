@@ -241,7 +241,15 @@ named here is the one `meta.primary_output` points at — always the smaller; th
 | training | `8978d533a8a960516f06aac5a60b1bc2/training-hero-concept_d1f24341-49ca-4aa8-b20b-17301be33d9a.png` |
 | thunder | `482719573afcc83e2ac5dd7441afa5e1/thunder-hero-concept_75ae5bd7-08d9-4bfa-9bad-db86a99f1ecc.png` |
 
-**Hero models** (P4, 80 each — all five done, 400 coins):
+**Hero models** (P4, 80 each — all five done, 400 coins). **All five are now
+placed** at `assets/models/heroes/<theme>-hero.glb` and wired through
+`DRESSING[theme].heroModels`; the staging paths below are kept only as the
+record of what was paid for. A finding worth carrying forward: these meshes are
+**not in metres**. Every one arrives normalised into a ~1.9-unit box *centred on
+the origin*, so half the model is under the floor until it is lifted, and the
+`scale` column in the table is the metre conversion rather than a taste knob.
+The lift has to be measured from `Box3.setFromObject` after rotation and scale
+are both applied — it cannot be authored:
 
 | theme | file under `.sandscape/generated/…/generated_assets/assets/` |
 |---|---|
