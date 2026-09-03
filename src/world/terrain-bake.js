@@ -116,16 +116,40 @@ const THEME_BASE = {
     return h;
   },
 
-  /* Ridge-and-valley country. Big wavelengths so the track can climb one flank
-     for 400 m, plus a ridged overlay that gives the skyline its teeth. */
+  /* One mountainside, rising west, with the valley in the east.
+
+     This used to be ±43 m of low-frequency fbm and nothing else — "big
+     wavelengths so the track can climb one flank". The wavelengths were big
+     but they were NOISE, so they knew nothing about where the road actually
+     climbs, and where the road reached 58 m the ground happened to be low:
+     the carve then raised terrain to meet it and TIMBERLINE CLIMB came out as
+     a 63 m causeway with 290 m of unwalled shoulder. Measured over 300 road
+     samples, 68 % of the lap had ground falling away on BOTH sides.
+
+     The fix is to make the large scale deterministic and aligned with the
+     stage. The track is a ring at r≈290 whose height varies with ANGLE, and
+     its height correlates almost perfectly with x — valley at x≈+275 y≈2.5,
+     ridge at x≈−290 y≈50 — so a single westward rise carries the whole
+     profile, climb and descent both, and the road never has to be propped up:
+     worst raise over the lap is now 0.1 m against 63.1 m.
+
+     The noise that remains is deliberately small (16 m of fbm, 6 m of ridged
+     against 86 and 30) because it is now DETAIL on a hillside rather than the
+     landform itself. Amplitudes and the −8 m offset come from a 3600-shape
+     sweep in dev/tmp; the objective was worst-raise, because that is what
+     track-check gates.
+
+     This still leaves the road cut into a hill on both sides. Which side is
+     the mountain and which side is the drop is a design decision, not
+     something a noise field can know — see `shelves` and shelfAt(). */
   forest(x, z) {
     const r = Math.hypot(x, z);
-    let h = (fbm(x * 0.00125, z * 0.00125, 4, 2.1, 0.55, 31) - 0.5) * 86;
-    h += (ridged(x * 0.0033, z * 0.0033, 3, 2.1, 0.5, 47) - 0.35) * 30;
+    let h = (fbm(x * 0.00125, z * 0.00125, 4, 2.1, 0.55, 31) - 0.5) * 16;
+    h += 58 * sstep(250, -300, x);                                     // the mountainside
+    h += (ridged(x * 0.0033, z * 0.0033, 3, 2.1, 0.5, 47) - 0.35) * 6;
     h += (fbm(x * 0.021, z * 0.021, 2, 2, 0.5, 3) - 0.5) * 2.0;        // ground lumps
-    h += 26 * sstep(360, 620, r);
     h += vista(x, z, r, 83, 250, 600);
-    return h;
+    return h + 8;
   },
 
   /* Inside the caldera: a cinder cone in the middle, a broken rim wall right
@@ -406,6 +430,41 @@ function whoopAt(whoops, s, L) {
   return h;
 }
 
+/* --- shelf spans: a road cut into a mountainside --- */
+const SHELF_CUT = 0.85;     // 40 deg — the cut face standing above a shelf road
+const SHELF_FALL = 0.62;    // 32 deg — the ground falling away on the open side
+const SHELF_TAPER = 40;     // metres of blend in and out along the span
+
+/* Module scratch: shelfAt runs once per macro cell in the carve corridor, so
+   it must not allocate. Same reason the wheel/scatter code keeps its own. */
+const _shelf = { side: 1, rise: 26, fall: 18, k: 1 };
+
+/**
+ * The shelf span covering `s`, or null.
+ *
+ * A shelf road has a hillside on ONE side and open air on the other. Which
+ * side that is cannot be derived from a height field — it is the same sort of
+ * authored decision as a bank or a berm, so it takes the same {s0, s1, side}
+ * vocabulary. The theme base can supply a mountain; only the track can say
+ * which way the view opens.
+ *
+ * `k` tapers the span in and out so a bench never begins with a step.
+ */
+function shelfAt(shelves, s, L) {
+  for (let i = 0; i < shelves.length; i++) {
+    const sh = shelves[i];
+    let d0 = s - sh.s0; if (d0 < -L * 0.5) d0 += L; else if (d0 > L * 0.5) d0 -= L;
+    let span = sh.s1 - sh.s0; if (span <= 0) span += L;
+    if (d0 < 0 || d0 > span) continue;
+    _shelf.side = sh.side;
+    _shelf.rise = sh.rise != null ? sh.rise : 26;
+    _shelf.fall = sh.fall != null ? sh.fall : 18;
+    _shelf.k = clamp(Math.min(d0, span - d0) / SHELF_TAPER, 0, 1);
+    return _shelf;
+  }
+  return null;
+}
+
 /** Berm height on this side of the road at s, or 0 if the verge is normal. */
 function bermAt(berms, s, across, L) {
   for (let i = 0; i < berms.length; i++) {
@@ -605,6 +664,7 @@ export function* bakeTrack(trackDef, report = () => { }) {
   }
 
   /* resolve the carve into the height field + road mask */
+  const shelves = trackData.shelves || [];
   const roadS = new Float32Array(nx * nz);        // arc length, for the paint pass
   const roadLat = new Float32Array(nx * nz);
   for (let j = 0; j < nz; j++) {
@@ -631,6 +691,30 @@ export function* bakeTrack(trackDef, report = () => { }) {
       if (dd < CORRIDOR) {
         const lim = BANK_FREE + BANK_SLOPE * Math.max(0, dd);
         h = softClamp(h, roadH - lim, roadH + lim, 2.2);
+      }
+      /* A shelf, if one is authored here: hillside on `side`, open air on the
+         other. Deliberately applied AFTER the slope clamp, because the clamp
+         is symmetric — that symmetry is what lets a road be authored on top
+         of any noise at all — and a bench is the one place we want asymmetry.
+
+         Both sides fade out by the corridor edge so the theme base takes over
+         without a step; on forest the base is a real mountainside rising west,
+         so the cut face continues into it rather than ending in a wall. */
+      if (shelves.length && dd > 0) {
+        const sh = shelfAt(shelves, C.cS[c], L);
+        if (sh) {
+          const fade = sh.k * (1 - sstep(CORRIDOR * 0.6, CORRIDOR, dd));
+          if ((across < 0 ? -1 : 1) === sh.side) {
+            /* max(): this CUTS a bench into whatever hill is already there.
+               Ground higher than the cut face is left alone, so the mountain
+               keeps climbing behind the shelf instead of being shaved flat. */
+            h = Math.max(h, h + (roadH + Math.min(sh.rise, dd * SHELF_CUT) - h) * fade);
+          } else {
+            /* min(): nothing on the open side may stand above the road. This
+               is the line that turns a trench into a view. */
+            h = Math.min(h, h + (roadH - Math.min(sh.fall, dd * SHELF_FALL) - h) * fade);
+          }
+        }
       }
       macro[g] = h;
       roadMask[g] = Math.round(255 * (1 - sstep(MASK_IN, MASK_OUT, tw)));

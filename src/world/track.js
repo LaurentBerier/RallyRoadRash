@@ -512,6 +512,9 @@ export function buildTrackData(trackDef) {
     /* 64 road heights round the lap, for the stage cards' elevation strip. */
     elev: buildElev(spline),
     walls: trackDef.walls || [],
+    /* Shelf spans — which side of the road the mountain is on. Data only;
+       terrain-bake's shelfAt() is the only reader. */
+    shelves: trackDef.shelves || [],
     difficulty: Number.isFinite(trackDef.difficulty) ? trackDef.difficulty : 0.5,
     bonus: !!trackDef.bonus,
     def: trackDef,

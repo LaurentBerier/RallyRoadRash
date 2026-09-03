@@ -10,10 +10,11 @@
      s    0- 260  wet valley floor, MUD, third gear and patience —
                   with THE CORDUROY (whoops, 120-190) in the worst of
                   it, where the ruts have set hard
-     s  350- 750  the climb: 55 m over 400 m, a table cut into a
-                  switchback shelf and 60 m of 14 deg bank
-     s  750-1000  the ridge line, dry and fast: GULLY GAP at 815, then
-                  THE STEP — a 25 m deck you can sit on
+     s  350- 750  the climb: 55 m over 400 m on a SHELF cut into the
+                  mountainside — rock wall outboard, the valley falling
+                  away inboard — with a table and 60 m of 14 deg bank
+     s  750-1000  the ridge line, dry and fast, still on the shelf:
+                  GULLY GAP at 815, then THE STEP, a 25 m deck
      s 1020-1200  the hairpin on the shelf, mud, walls both sides and a
                   2 m berm round the outside of each half of it
      s 1200-1500  the descent — THE PLUNGE at 1280 and the ALTERNATE
@@ -94,6 +95,24 @@ export default {
   // A canted shelf on the climb. The corner is nearly straight here; the camber
   // is the mountain's, not a racing line's.
   banks: [{ s0: 640, s1: 700, deg: 14 }],
+  /* The climb and the ridge are CUT INTO the mountainside — rock wall on the
+     outside of the loop, the valley falling away on the inside — rather than
+     being propped up on an embankment. Before this the stage read as "a high
+     road sticking out of the ground", and it measured that way too: 63 m above
+     its own base terrain with ground falling away on BOTH sides for 68 % of the
+     lap, which is also where most of the falls came from.
+
+     The theme base now supplies a real mountain (see THEME_BASE.forest), and
+     these two spans say which side of the road it stands on — a height field
+     cannot know that, so it is authored, exactly like a bank or a berm.
+
+     `side: 1` is OUTBOARD: positive lateral is away from the centre of the
+     loop, which through the climb and along the ridge is also the uphill side.
+     The ridge gets the deeper `fall` because that is where the view is. */
+  shelves: [
+    { s0: 340, s1: 770, side: 1, rise: 26, fall: 20 },
+    { s0: 770, s1: 1015, side: 1, rise: 22, fall: 26 }
+  ],
   /* The hairpin berm, in two pieces because the corner reverses at s~1135: one
      wall on the outside of the right-hand sweeper, one on the outside of the
      left-hand hairpin. A single 1030-1180 span would have put 2 m of earth on

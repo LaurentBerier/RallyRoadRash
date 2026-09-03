@@ -51,10 +51,24 @@ const DROP_V = 25, G_ARCADE = 12.8;
    RAISE_RUN the longest embankment we will accept without walls on it.
    MAX_RAISE is 6 m rather than the ~3 m the wash floor actually sits at
    because canyon's gap slab (s 500-660) is a deliberate 5.8 m bench over a
-   natural hollow — the gap's runway has to be level. Only tracks listed in
-   RAISE_GATED fail; forest and volcano have intentional shelf roads. */
+   natural hollow — the gap's runway has to be level.
+
+   This gate used to exempt forest and volcano on the grounds that they "have
+   intentional shelf roads". They did not: the exemption was the assumption,
+   and behind it TIMBERLINE CLIMB sat 63 m above its own ground with 290 m of
+   unwalled shoulder. Forest now really is a shelf road — a deterministic
+   mountainside in THEME_BASE.forest plus authored `shelves` spans saying which
+   side the hill is on — so it is gated like any other track, at 1.1 m measured.
+
+   Volcano is the same fault, still unfixed: 56.8 m of raise and 410 m of
+   unwalled embankment at s 1370-1770. It stays exempt because it is a known
+   open item, not because the road is deliberate. Do not close this comment
+   without either fixing it or saying why not. */
 const RAISE_STEP = 10, RAISE_THRESH = 4, RAISE_RUN = 200;
-const RAISE_GATED = { canyon: { s0: 40, s1: 900, max: 6.0 } };
+const RAISE_GATED = {
+  canyon: { s0: 40, s1: 900, max: 6.0 },
+  forest: { s0: 0, s1: 1800, max: 4.0 }
+};
 
 let failures = 0;
 const _sc = { x: 0, y: 0, z: 0 }, _sc2 = { x: 0, y: 0, z: 0 };
