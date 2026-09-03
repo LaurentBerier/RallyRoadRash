@@ -549,6 +549,42 @@ export const TUNE = {
     fireHearD: 110,         // m — audio
     fireLogD: 80,           // m — the race log line
     hitHearD: 140,          // m — an explosion carries
+
+    /* THE BLAST ITSELF. Until wave 9 a rocket only ever wrote `spinT` and a
+       yaw kick, so a direct hit made a car pirouette on the road and nothing
+       else — no lift, no roll, nothing that read as an EXPLOSION. These four
+       drive Vehicle.applyImpulse, which is the one impulse in the codebase
+       that carries the body-frame inertia and therefore the only one that can
+       make a car roll when it is hit on the flank and pitch when it is hit
+       from behind. */
+    launchV: 7,             // m/s of Δv a DIRECT hit adds, along the shove
+                            //       direction biased upward by `launchUp`.
+                            //       Splash gets `splashMul` of it, and the
+                            //       whole thing is clamped by collide.maxDeltaV
+                            //       so a point-blank hit cannot fire a car into
+                            //       orbit.
+    launchUp: 1.2,          // the y of the shove direction before it is
+                            //       normalised: a blast lifts more than it
+                            //       shoves, and a car that only slides reads
+                            //       as a nudge.
+    flipArm: 1.1,           // m — how far off the centre of mass the impulse
+                            //       acts, toward the side the blast came from.
+                            //       About a car's half-width, which is where
+                            //       the pressure actually lands.
+    /* …and the ceiling on what that arm is allowed to produce. Δω ≈
+       flipArm·launchV·sin/k², where k is the radius of gyration — MASS
+       CANCELS. So the 245 kg moto, whose k² is a twentieth of the truck's,
+       would helicopter at 22 rad/s off the same shove that rolls the truck at
+       5. The arm is scaled down per car until the worst-case axis lands here,
+       which is a shade over one full rotation in the ~0.9 s of air `launchV`
+       buys — a flip, not a blur. */
+    flipW: 6.5,             // rad/s
+    flashAmt: 0.35,         // Feel.flash() at zero range — a rocket going off
+                            //       in your face whites the frame out.
+    shakeD: 60,             // m — falloff for the screen response. Squared
+                            //       inside that, so a blast at half the
+                            //       distance is a quarter of the shake and one
+                            //       across the map is nothing at all.
   },
 
   /* ---------------------------------------------------------------

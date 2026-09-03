@@ -419,6 +419,9 @@ export class Race {
     this.terrain.clearDent();
     this.terrain.clearTrails();
     this.dust.clear();
+    // Trees a lap-one pile-up flattened are scenery; scenery that stays down
+    // across a restart is a different track than the last run started on.
+    this.props.resetDynamic();
     this.arsenal.resetAll();
     this.tracker.resetAll();
     this._enterGrid(false);

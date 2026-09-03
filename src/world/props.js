@@ -50,10 +50,13 @@ import {
   waterfallSheetGeo, geyserVentGeo,
 } from './kit.js';
 import {
-  RECIPES, DRESSING, KIT_KINDS, UPRIGHT_KINDS, BOUNCE_FOR,
+  RECIPES, DRESSING, KIT_KINDS, UPRIGHT_KINDS, BOUNCE_FOR, DYNAMIC_KINDS,
   gantryTex, bannerTex, sponsorTex, arrowTex, checkerTex, railTex,
   waterfallMaterial,
 } from './props-recipes.js';
+import {
+  createDynamicPool, dynHit, stepDynamicPool, resetDynamicPool,
+} from './props-dynamic.js';
 import {
   wastelandGeo, planWasteland, planHeroModels, flushWasteland,
   disposeHeroModels, runEmbers,
@@ -72,6 +75,12 @@ import {
 const MAX_SCATTER = 2900;
 const GRID_CELL = 24, GRID_HALF = 640;
 const CAR_R = 1.15;              // fallback body radius if a vehicle has none
+
+/* Going through a pine is not a hard stop, but it is not silent either. A
+   knock still reports an impact so race.js can ring the audio and shake the
+   camera — scaled well down, because the whole point is that it did not stop
+   you and the feedback has to say so. */
+const KNOCK_IMPACT = 0.35;
 
 /* ---------------- module scratch (no per-frame allocation) ---------------- */
 const _dummy = new THREE.Object3D();
@@ -116,6 +125,10 @@ export class Props {
     this.buildScatter();
     this.buildFurniture();
     this.setScatterDensity(quality.boulders);
+    /* Last, because the pool holds references to the colliders the line above
+       just finished assembling. Fixed size, allocated once: from here on the
+       whole feature is free until something actually hits a tree. */
+    this._dyn = createDynamicPool(this);
   }
 
   _keepMat(m) { this._mat.push(m); return m; }
@@ -267,8 +280,16 @@ export class Props {
         _dummy.scale.set(sx, size * (0.85 + rng() * 0.3), sx);
         _dummy.updateMatrix();
         im.setMatrixAt(k, _dummy.matrix);
+        /* `vi`/`i` are the back-reference the dynamic pool needs to move
+           exactly one matrix out of two thousand: which InstancedMesh, and
+           which instance in it. They are stamped on the object itself, and
+           setScatterDensity pushes these same objects into this.colliders BY
+           REFERENCE, so the link survives every tier change for free. */
         solids.push(K.solid && size > K.min * 0.9
-          ? { x, z, r: (K.r || 0.7) * size, kind: K.id, bounce: BOUNCE_FOR(K.id) }
+          ? {
+            x, z, r: (K.r || 0.7) * size, kind: K.id, bounce: BOUNCE_FOR(K.id),
+            awake: 0, vi: ki, i: k, obj: null,
+          }
           : null);
         k++;
       }
@@ -284,6 +305,12 @@ export class Props {
       tier hides must not be solid, or you would be stopped by a rock that is
       not there. */
   setScatterDensity(N) {
+    /* Everything knocked over stands back up first. A tier change re-derives
+       this.colliders from scratch and can hide the very instance a body is
+       animating, which would leave an `awake` flag on a collider that is no
+       longer in the list. Guarded: the constructor gets here before the pool
+       exists. */
+    if (this._dyn) resetDynamicPool(this._dyn);
     this.colliders.length = 0;
     for (let vi = 0; vi < this.scatterMeshes.length; vi++) {
       const im = this.scatterMeshes[vi];
@@ -428,7 +455,14 @@ export class Props {
     let a = this._dressSites.get(id);
     if (!a) this._dressSites.set(id, a = []);
     a.push({ x, y, z, yaw, scale });
-    if (solid > 0) this._fixedColliders.push({ x, z, r: solid * scale, kind: id, bounce });
+    /* An instance's index is its site's index in its own list, because
+       _flushDressing writes the matrices in exactly that order. That is how a
+       dressing collider tells the dynamic pool which bale of eighty it is;
+       the mesh itself comes from _dressMeshById, keyed on this same id. */
+    if (solid > 0) this._fixedColliders.push({
+      x, z, r: solid * scale, kind: id, bounce,
+      awake: 0, vi: -1, i: a.length - 1, obj: null,
+    });
   }
 
   /** True if (x,z) is far enough from every landmark already placed. */
@@ -890,6 +924,10 @@ export class Props {
   _flushDressing() {
     this.dressMeshes = [];
     this.crowdMeshes = [];
+    /* A dressing collider knows the id it was made from and nothing else, so
+       this is how the dynamic pool gets from `kind: 'bale'` to the mesh those
+       bales live in. Built once; the dressing is never re-flushed. */
+    this._dressMeshById = new Map();
     this._billboardSites = this._dressSites.get('billboard') || null;
     for (const [id, sites] of this._dressSites) {
       if (!sites.length) continue;
@@ -909,6 +947,7 @@ export class Props {
       im.instanceMatrix.needsUpdate = true;
       this.group.add(im);
       this.dressMeshes.push(im);
+      this._dressMeshById.set(id, im);
       if (this._crowdIds.has(id)) {
         /* The crowd is the only dressing that MOVES, so it is the only one
            that has to keep its rest pose after the flush — the bob rebuilds
@@ -1157,7 +1196,13 @@ export class Props {
       g.rotation.y = Math.atan2(-d.x, -d.z);
       this.group.add(g);
       this.signs.push(g);
-      this._fixedColliders.push({ x: q.x, z: q.z, r: 0.3, kind: 'sign', bounce: 0.6 });
+      /* The one population that is not instanced: a sign is its own Group, so
+         the pool transforms the object directly rather than a matrix in a
+         buffer. `obj` is how it knows which of the three it is holding. */
+      this._fixedColliders.push({
+        x: q.x, z: q.z, r: 0.3, kind: 'sign', bounce: 0.6,
+        awake: 0, vi: -1, i: -1, obj: g,
+      });
     }
   }
 
@@ -1255,12 +1300,30 @@ export class Props {
       let nx, nz, pen, bounce;
       if (id >= 0) {
         const c = this.colliders[id];
+        /* A prop that has already been knocked over is debris, not an
+           obstacle — the pool owns it and it must not push anybody. One load
+           and one branch, ahead of the circle test, so what the feature costs
+           the cars that never hit anything is as close to nothing as it gets. */
+        if (c.awake) continue;
         const dx = v.pos.x - c.x, dz = v.pos.z - c.z;
         const d2 = dx * dx + dz * dz;
         const R = c.r + R0;
         if (d2 > R * R || d2 < 1e-8) continue;
         const d = Math.sqrt(d2);
         nx = dx / d; nz = dz / d; pen = R - d; bounce = c.bounce || 1.2;
+        /* Light enough for THIS machine to move? Then it moves, and the push-
+           out below never happens. dynHit answers false for anything too
+           heavy, anything with no mass on file, a prop the quality tier is
+           hiding, and a pool with no room — and every one of those falls
+           through to the hard stop this has always been. */
+        if (DYNAMIC_KINDS.has(c.kind)) {
+          const closing = -(v.vel.x * nx + v.vel.z * nz);
+          if (dynHit(this._dyn, c, v, nx, nz, closing)) {
+            const knock = closing * KNOCK_IMPACT;
+            if (knock > impact) impact = knock;
+            continue;
+          }
+        }
       } else {
         const b = this.barriers[-id - 1];
         const ex = b.bx - b.ax, ez = b.bz - b.az;
@@ -1307,8 +1370,23 @@ export class Props {
     return this;
   }
 
+  /**
+   * Stand everything back up. For a race restart: the trees a lap-one pile-up
+   * flattened are scenery, and scenery that stays flattened across a restart
+   * is a different track than the one the last run started on — the same
+   * argument that already clears the ruts and the tyre marks.
+   */
+  resetDynamic() { if (this._dyn) resetDynamicPool(this._dyn); }
+
   update(dt, t, camera) {
-    if (dt <= 0 || !camera) return;
+    if (dt <= 0) return;
+    /* Ahead of the camera guard, unlike everything below it: the rest of this
+       is decoration that only matters when somebody is looking, but a body in
+       flight has to LAND either way or a knocked pine hangs in the air for as
+       long as the camera is missing. Returns on its own the moment nothing is
+       moving, which is almost always. */
+    stepDynamicPool(this._dyn, dt, this.terrain);
+    if (!camera) return;
     this._bobCrowd(t, camera);
     this._runGeysers(dt, camera);
     this._runFalls(dt, camera);
@@ -1426,6 +1504,9 @@ export class Props {
     for (const t of this._tex) t.dispose();
     this._geo.length = 0; this._mat.length = 0; this._tex.length = 0;
     this.colliders.length = 0; this.barriers.length = 0;
+    // the pool's only outside references are the meshes and colliders being
+    // torn down here, so dropping it drops the lot together
+    this._dyn = null;
     if (this.fireDrums) this.fireDrums.length = 0;
   }
 }

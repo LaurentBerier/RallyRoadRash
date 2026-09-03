@@ -406,6 +406,70 @@ export const BOUNCE_FOR = (id) =>
                 id.startsWith('husk') || id === 'tanker' || id === 'totem' ? 1.15
                 : 1.35;
 
+/**
+ * Kinds that GIVE WAY rather than stop you.
+ *
+ * Membership here is a statement about the shape, not about the machine: a
+ * pine, a hay bale and a warning board are all things a vehicle could in
+ * principle move, so all three are listed. Whether any given machine actually
+ * moves one is decided per hit, against PROP_MASS_KG below — which is how one
+ * table gets to say both "a truck goes through a tree" and "a motocross does
+ * not" without either being a special case.
+ *
+ * What is deliberately NOT here, and stays a hard stop for everybody: rock in
+ * all its forms (boulders, hoodoos, basalt, shards), the barriers, the jersey
+ * runs, the towers and the buildings, the gantries and the arches, the hero
+ * landmarks, and the whole wasteland layer — those one-offs are merged into a
+ * single static mesh and physically cannot be moved one at a time.
+ *
+ * `cone` is absent on purpose. Every recipe places it `solid: false`, so it
+ * has no collider and you already drive through it; giving it a body would be
+ * simulating something nobody can hit.
+ */
+export const DYNAMIC_KINDS = new Set([
+  'pine0', 'pine1', 'pine2', 'broadleaf', 'snag',
+  'cactus0', 'cactus1', 'agave', 'bush0',
+  'drum', 'crate', 'bale', 'tyre', 'tyrewall',
+  'sign',
+]);
+
+/**
+ * WHAT A PROP WEIGHS, in kilograms.
+ *
+ * One reader, one question: props-dynamic.js asks whether this thing is light
+ * enough that the machine hitting it should carry on. The answer is
+ * `mass <= TUNE.props.massRatio * vehicleMass`, so these are less a physics
+ * claim than a statement about who wins — which is why they are graded against
+ * the four machines rather than looked up in a timber table.
+ *
+ * At massRatio 0.30 the caps are moto 73.5, redline 303, hopper 336,
+ * ridgeback 504 kg:
+ *
+ *   3–55 kg    everything up to a fuel drum. The 245 kg bike shoulders these
+ *              aside too, and it should: a rider bouncing off a hay bale is a
+ *              worse lie than a rider going through one.
+ *   90–260 kg  the snag, the three pines, the broadleaf, a tyre wall. Every
+ *              four-wheeler ploughs through — the tightest is the 1010 kg
+ *              redline at 303 kg, which still clears the 260 kg tyre wall —
+ *              and the bike stops dead, exactly as it does today. That row is
+ *              the whole feature.
+ *
+ * Nothing may reach 504 kg. A prop nobody on the grid can move is immovable,
+ * and immovable things belong in the set above this one where a reader can
+ * see them, not hiding at the bottom of a mass table. Unknown ids come back
+ * Infinity so a typo fails closed — an unlisted prop keeps today's hard stop
+ * rather than silently becoming furniture. dev/props-check.mjs gates both ends.
+ */
+const PROP_MASS = {
+  cone: 3, bush0: 8, agave: 10, sign: 12, tyre: 12, cactus1: 16, cactus0: 18,
+  bale: 20, crate: 35, drum: 55,
+  snag: 90, pine0: 110, pine1: 160, broadleaf: 190, pine2: 210, tyrewall: 260,
+};
+export const PROP_MASS_KG = (id) => {
+  const m = PROP_MASS[id];
+  return m === undefined ? Infinity : m;
+};
+
 /** Kinds that must stand upright — a leaning cactus reads as a mistake. */
 export const UPRIGHT_KINDS = new Set([
   'cone', 'tyre', 'vent', 'cactus0', 'cactus1', 'agave', 'snag', 'broadleaf',
