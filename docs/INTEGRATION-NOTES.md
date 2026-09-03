@@ -109,9 +109,14 @@ Race-flow obligations:
 - AI contract: output only ctl; throttle opposite travel >1.2 m/s = braking (not reverse);
   built-in countersteer assist catches slides if AI just aims at the line; yaw rate capped
   2.0 rad/s. Read spec.topSpeed as honest terminal speed.
-- Camera reads: pos, quat, speed, airborne, airTime, hardHit, contacts, `_accelLong`,
-  `_accelLat` (filtered). Body lean is visual-only on the `chassis` child — never add
-  camera lean from accel on top blindly.
+- Camera reads: pos, quat, vel, forward, up, speed, airborne, airTime, hardHit, contacts,
+  `omega`, `spinT`, `steerNorm`, `_accelLong`, `_accelLat` (filtered). Body lean is
+  visual-only on the `chassis` child — never add camera lean from accel on top blindly.
+  `omega` / `spinT` / `up` / `contacts` feed the crash-spin gate (CH.tumble\* in
+  camera.js): while the car is spinning or on its roof the boom yaw is HELD on its
+  pre-crash heading and the boom lengthens to 1.45×, released once `|omega| < 0.8` and
+  `contacts >= 3`. All four are read with a guard — a vehicle-like that publishes none of
+  them (menu prop, garage turntable, the check harness's mock) simply never tumbles.
 - Audio reads: `rpmNorm` (virtual 5-speed sawtooth 0.35→1, low-passed, blips on shift),
   `rpm`, slipLat/slipLong (getters), surfaceId, contacts, motorLoad.
 - HUD reads: speedKmh, gear, lap-relevant state comes from race core.

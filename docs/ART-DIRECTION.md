@@ -300,13 +300,38 @@ expression and the Preetham formula — at h = 0.02, averaged over 64 azimuths,
 and dividing. `dev/sky-check.mjs` re-measures it and fails outside ±15 %, so
 the calibration cannot silently rot when somebody retunes a turbidity.
 
-| theme | turbidity | rayleigh | mie | mieG | skyExposure | measured ratio | dome over the 1.30 bloom threshold | brightest pixel (old dome) |
+| theme | turbidity | rayleigh | mie | mieG | skyExposure | horizon ratio | peak, before → after | over 1.30, before → after |
 |---|---|---|---|---|---|---|---|---|
-| training | 2.2 | 1.6 | 0.005 | 0.80 | 0.2668 | 1.0000 | 0.00 % | 0.77 (0.66) |
-| canyon | 7.0 | 2.2 | 0.005 | 0.80 | 0.3048 | 1.0000 | 0.99 % | 1.73 (0.90) |
-| forest | 10.0 | 2.0 | 0.004 | 0.70 | 0.4480 | 0.9999 | 4.07 % | 1.80 (1.19) |
-| volcano | 20.0 | 3.0 | 0.020 | 0.85 | 0.0775 | 1.0004 | 0.40 % | 1.86 (0.49) |
-| thunder | 8.0 | 2.6 | 0.012 | 0.80 | 0.3704 | 1.0000 | 2.81 % | 3.51 (0.85) |
+| training | 2.2 | 1.6 | 0.005 | 0.80 | 0.2668 | 0.9999 | 0.980 → 0.980 | 0.00 % → 0.00 % |
+| canyon | 7.0 | 2.2 | 0.005 | 0.80 | 0.3048 | 1.0000 | 1.915 → 1.244 | 1.66 % → 0.00 % |
+| forest | 10.0 | 2.0 | 0.004 | 0.70 | 0.4480 | 0.9764 | 1.927 → 1.244 | 5.76 % → 0.00 % |
+| volcano | 20.0 | 3.0 | 0.020 | 0.85 | 0.0775 | 1.0004 | 2.009 → 1.246 | 0.78 % → 0.00 % |
+| thunder | 8.0 | 2.6 | 0.012 | 0.80 | 0.3704 | 0.9440 | 3.984 → 1.250 | 3.13 % → 0.00 % |
+
+**Wave 9 added the highlight knee, and the "before" column above is why.** The
+calibration in this section is horizon-only by construction, and nothing gated
+what the dome did anywhere else — so four of five themes shipped with a peak
+well over the 1.30 bloom threshold and thunder at nearly four times it. The
+stage that got reported as "over-exposed" was forest, but thunder and canyon
+were worse; forest simply had the largest *area* over the line.
+
+`skyKnee(v, 1.0, 0.25)` is applied per channel at the exposure point, in the JS
+model and the GLSL identically, hard-bounding every channel at **1.25 — under
+the 1.30 threshold by construction**, so no part of the sky can feed the bloom
+pass again. Note the numbers here are measured on a 64 × 16 grid spaced
+uniformly in **sin(elevation)**, so every row carries equal solid angle and the
+sample fraction IS the dome fraction; the wave-8 figures this table used to
+carry were spaced uniformly in elevation angle, which over-weights the zenith
+(forest reads 3.91 % that way against 5.76 % here — the same sky, weighted
+differently).
+
+Two horizon ratios moved, and the reason is worth keeping: the knee is per
+**channel per azimuth**, and at h = 0.02 forest has a channel over 1.0 on 11 of
+64 azimuths and thunder on 7 — all near the low sun. Both stay far inside the
+±15 % gate, so no `skyExposure` was re-derived. A per-channel knee is the only
+formulation that actually bounds bloom (a luminance knee lets a single channel
+through), so if a stage's fog reads cool after this — thunder's r:g fell 1.19 →
+1.07 — the fix is a stronger `grade`, not undoing the knee.
 
 Two mie values were pulled **below** the wave-8 brief's starting points, for
 one measured reason each. Forest at mie 0.012 put **8.2 %** of the whole dome

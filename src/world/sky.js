@@ -117,7 +117,13 @@ export const SKY_THEMES = {
     sunEl: 22, sunAz: 118,
     sunDir: { x: -0.435229, y: 0.374607, z: 0.818656 },
     sunColor: 0xffe0b4, sunIntensity: 2.25,
-    hemiSky: 0xb6d2e6, hemiGround: 0x4c5638, hemiIntensity: 0.75,
+    /* hemiIntensity was 0.75, the highest of the five and 0.10 clear of the
+       0.55–0.65 every other stage sits in — on the stage that ALSO carries the
+       highest turbidity and the highest skyExposure. The dome knee handles the
+       sky; this is the other half of the same over-exposure, and it is the
+       half that lands on the cars and the trees. ADVISORY: derived from the
+       table, not from a screenshot. Revert to 0.75 if Timberline goes flat. */
+    hemiSky: 0xb6d2e6, hemiGround: 0x4c5638, hemiIntensity: 0.62,
     zenith: 0x3d80bc, horizon: 0xe2ece6, hazeColor: 0xcedcd4,
     /* Thick and grey, and the mie kept deliberately small: at turbidity 10 a
        0.012 mie put 8 % of the whole dome over the 1.30 bloom threshold and
@@ -298,6 +304,49 @@ const RAYLEIGH_ZENITH_LENGTH = 8.4e3, MIE_ZENITH_LENGTH = 1.25e3;
 const THREE_OVER_SIXTEENPI = 0.05968310365946075, ONE_OVER_FOURPI = 0.07957747154594767;
 const SKY_AMBIENT = [0.0, 0.0003, 0.00075];
 
+/* ------------------------------------------------------------
+   THE HIGHLIGHT KNEE
+   ------------------------------------------------------------
+   The over-exposure report. Preetham's output is unbounded, and `skyExposure`
+   is calibrated against ONE number — the horizon band at h = 0.02, averaged
+   over 64 azimuths. Nothing in that calibration looks at the zenith, at the
+   aureole, or at how much of the dome clears the bloom threshold, and on the
+   thick stages a lot of it does: measured over a 64 x 16 hemisphere scan,
+   forest put 5.8 % of the dome and thunder 3.1 % over the 1.30 threshold of
+   UnrealBloomPass, peaking at 1.93 and 3.98. Bloom then smears that across the
+   frame, which is what "the light and sky are over-exposed" looks like.
+
+   Re-deriving skyExposure cannot fix it. Exposure scales the WHOLE dome, so
+   pulling the peak down drags the horizon down with it, and the horizon is the
+   one thing that is calibrated — dev/sky-check §3 allows it +-15 % and the
+   measured peak/legacy ratios run from 1.14 (training) to 4.13 (thunder).
+   Spending forest's entire 15 % takes its over-threshold fraction from 5.8 %
+   to 2.7 %, and it is out of budget after that.
+
+   So: a soft knee at the exposure point instead. Below T everything is
+   untouched — which is every theme's horizon, every theme's zenith, and the
+   overwhelming majority of every dome — and above it the curve rolls over to a
+   hard asymptote at T + K. With T = 1.0 and K = 0.25 that asymptote is 1.25,
+   strictly under the 1.30 bloom threshold, so no part of the sky can bloom at
+   all and the bloom budget goes back to what it is for: the sun billboard,
+   the embers, and specular on the cars.
+
+   It is a curve and not a clamp on purpose. A clamp at 1.25 flattens the
+   aureole into a disc with a visible edge; the exponential keeps a gradient
+   all the way out, so the sun still reads as brighter than the sky around it.
+
+   Applied in BOTH models — here and, identically, in the patched GLSL (see
+   patchSkyMaterial) — because the JS port is what the fog colour, the terrain
+   haze uniform and dev/sky-check are read off. Two curves that disagree is
+   exactly the drift §8.5 exists to close. */
+export const SKY_KNEE_THRESH = 1.0;
+export const SKY_KNEE_K = 0.25;
+
+/** The knee, scalar. Identical by construction to skyKnee() in the GLSL. */
+export function skyKnee(v, t, k) {
+  return v <= t ? v : t + k * (1 - Math.exp(-(v - t) / k));
+}
+
 /** Elevation the haze/horizon colours are sampled at: a hair above the line,
     where the air is thickest but the model is not yet clamped. */
 export const HAZE_H = 0.02;
@@ -356,7 +405,12 @@ export function skyRadiance(p, dx, dy, dz, out) {
     const frac = (bR * rPhase + bM * mPhase) / (bR + bM);
     const lin = Math.pow(p.sunE * frac * (1 - Fex), 1.5)
       * (1 + zf * (Math.sqrt(p.sunE * frac * Fex) - 1));
-    out[i] = Math.pow((lin + 0.1 * Fex) * 0.04 + SKY_AMBIENT[i], gamma) * p.exposure;
+    // Per channel, at the exposure point, exactly where the GLSL does it — a
+    // luminance-preserving knee would shift hue on the one part of the dome
+    // that is meant to be white-hot, and the shader has no cheap way to match
+    // it. See SKY_KNEE_THRESH.
+    out[i] = skyKnee(Math.pow((lin + 0.1 * Fex) * 0.04 + SKY_AMBIENT[i], gamma) * p.exposure,
+      SKY_KNEE_THRESH, SKY_KNEE_K);
   }
   return out;
 }
@@ -402,11 +456,33 @@ export function lum3(c) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; 
 const SKY_DISC_SRC = 'L0 += ( vSunE * 19000.0 * Fex ) * sundisk;';
 const SKY_OUT_SRC = 'gl_FragColor = vec4( retColor, 1.0 );';
 
+/* The knee, in GLSL. Branchless and identical to skyKnee() above: below t the
+   exp() term is exactly zero, so the bracket evaluates to t and min() hands
+   back the untouched channel; above it, the bracket is always the smaller of
+   the two. Written per channel on a vec3 so the hue of a blown-out aureole is
+   whatever the model said it was, only dimmer. */
+const SKY_KNEE_GLSL = /* glsl */`
+uniform float uSkyExposure;
+uniform float uSkyKneeThresh;
+uniform float uSkyKneeK;
+vec3 skyKnee(vec3 c, float t, float k){
+  return min(c, t + k * (1.0 - exp(-max(c - t, 0.0) / k)));
+}
+`;
+
 /**
  * Turn a vendored Sky into ours: the solar disc removed, an exposure
- * multiplier added, and — for the IBL copy only — a ground bounce under the
- * horizon, because the model just keeps showing sky down there and the
- * underside of a car is not lit by sky.
+ * multiplier added, that exposure passed through the highlight knee, and — for
+ * the IBL copy only — a ground bounce under the horizon, because the model
+ * just keeps showing sky down there and the underside of a car is not lit by
+ * sky.
+ *
+ * The ground bounce goes AFTER the knee, which is the right order: uEnvGround
+ * is groundHaze x 0.55 and can only ever pull a channel down, so nothing the
+ * knee bounded can climb back over it.
+ *
+ * `retColor * uSkyExposure` is kept as a literal substring in both branches —
+ * dev/sky-check.mjs asserts on exactly that text to prove the patch landed.
  */
 function patchSkyMaterial(mat, withGround) {
   let fs = mat.fragmentShader;
@@ -416,12 +492,12 @@ function patchSkyMaterial(mat, withGround) {
   }
   fs = fs.replace(SKY_DISC_SRC, '// solar disc removed: sky.js draws its own, per theme');
   fs = fs.replace(SKY_OUT_SRC, withGround
-    ? `vec3 envCol = retColor * uSkyExposure;
+    ? `vec3 envCol = skyKnee( retColor * uSkyExposure, uSkyKneeThresh, uSkyKneeK );
        // dim, warm, and the reason the underside of a car is not black
        envCol = mix(envCol, uEnvGround, smoothstep(0.0, -0.45, normalize(vWorldPosition - cameraPosition).y));
        gl_FragColor = vec4( envCol, 1.0 );`
-    : 'gl_FragColor = vec4( retColor * uSkyExposure, 1.0 );');
-  mat.fragmentShader = 'uniform float uSkyExposure;\n'
+    : 'gl_FragColor = vec4( skyKnee( retColor * uSkyExposure, uSkyKneeThresh, uSkyKneeK ), 1.0 );');
+  mat.fragmentShader = SKY_KNEE_GLSL
     + (withGround ? 'uniform vec3 uEnvGround;\n' : '') + fs;
   mat.needsUpdate = true;
 }
@@ -540,6 +616,13 @@ export class Sky {
     u.mieDirectionalG.value = this.skyModel.mieG;
     u.sunPosition.value.copy(this.sunDir);        // unit, exactly as the port assumes
     u.uSkyExposure = { value: this.skyModel.exposure };
+    /* Set here rather than in the patch, and BEFORE this.skyUniforms = u, so
+       the IBL dome — which shares this exact object by reference, see
+       _buildEnv — inherits the knee without a second edit. The reflection in a
+       wing mirror and the sky above it are the same sky, bounded the same way,
+       by construction. */
+    u.uSkyKneeThresh = { value: SKY_KNEE_THRESH };
+    u.uSkyKneeK = { value: SKY_KNEE_K };
     u.uEnvGround = { value: new THREE.Color(t.groundHaze).multiplyScalar(0.55) };
     mesh.material.depthWrite = false;
     mesh.material.depthTest = false;

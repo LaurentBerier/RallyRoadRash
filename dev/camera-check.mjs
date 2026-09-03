@@ -49,6 +49,12 @@ class MockVehicle {
     this.vel = new THREE.Vector3();
     this.airborne = false; this.airTime = 0; this.contacts = 4;
     this.hardHit = 0;
+    /* Body angular velocity and forced spin-out, the two fields the crash/spin
+       gate is keyed off. Zero here on purpose: every section written before §12
+       drives a car that never tumbles, and their envelopes are measured against
+       exactly that. §12 is the only place that writes them. */
+    this.omega = new THREE.Vector3();
+    this.spinT = 0;
     this.steerNorm = 0;
     this._accelLong = 0; this._accelLat = 0;
     this.spec = { topSpeed: 38 };
@@ -710,6 +716,163 @@ head('11. ALLOCATION — no objects built per frame, nothing retained');
     info(`retained heap after ${N / 1000} k frames: ${f(d / 1024, 1)} kB (a 1-object-per-frame leak would be > 25 MB)`);
     ok('nothing retained across 500 k frames', Math.abs(d) < 512 * 1024, `${f(d / 1024, 1)} kB`);
   }
+}
+
+/* ============================================================
+   12 — THE CRASH / SPIN CAMERA
+   ============================================================
+   The report was "when crashing and spinning the camera gets confusing". It
+   is not a bug in the spring: the spring is doing exactly what it is told,
+   which is to chase a heading that in a spin sweeps the whole circle twice a
+   second. Three things have to be true of the fix, and this is all three.
+
+     • the boom yaw HOLDS. Not "lags", not "damps" — holds, on the heading it
+       had before the car let go, because any weight at all on the live target
+       lets a 5 rad/s spin drag the frame round with it.
+     • the boom PULLS BACK, so the wall you are about to hit is in shot.
+     • and it LETS GO once the car is settled, promptly enough that the player
+       is not driving a frozen camera down the next straight.
+
+   Scripted the same way §1 is: the car is a kinematic prop, the rig is the
+   thing under test. No Feel here — the continuous shake translates the eye by
+   up to 4.5 cm and this section measures the boom to a couple of per cent.
+   ============================================================ */
+head('12. TUMBLE — a spin holds the boom yaw, pulls back, and lets go');
+{
+  const cam = makeCam();
+  const rig = new CameraRig(cam, flat);
+  const v = new MockVehicle();
+  // The sections above compare headings that are already inside one turn, so
+  // they can use the +3PI idiom. This one spins the car past 570°, which that
+  // idiom gets wrong by a full circle — so wrap properly.
+  const degErr = (a, b) => {
+    let d = (a - b) % (Math.PI * 2);
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    return Math.abs(d) * 180 / Math.PI;
+  };
+
+  // A second of ordinary driving, so the boom is at its cruising length and
+  // the yaw spring is at rest — the datum the hold is measured against.
+  v.heading = 0; v.vel.set(0, 0, 6);
+  v.step(DT, flat); rig.snapBehind(v);
+  for (let i = 0; i < 60; i++) { v.step(DT, flat); rig.update(DT, v, look()); }
+  const yaw0 = rig.yaw, dist0 = cam.position.distanceTo(v.pos);
+
+  /* 2.0 s of flat spin: 5 rad/s of body yaw (about 1.6 revolutions), one wheel
+     still touching, the car sliding at 3 m/s along a heading that is going
+     round with it. step() re-seats contacts at 4 on the ground, so the low
+     count has to be written back after it and before the rig sees the car. */
+  const SPIN = 5.0, SPIN_S = 2.0;
+  let worstHold = 0, maxDist = 0, engaged = false;
+  for (let i = 0; i < Math.round(SPIN_S / DT); i++) {
+    v.heading += SPIN * DT;
+    v.omega.set(0, SPIN, 0);
+    v.spinT = 0.4;
+    v.vel.set(Math.sin(v.heading) * 3, 0, Math.cos(v.heading) * 3);
+    v.step(DT, flat);
+    v.contacts = 1;
+    rig.update(DT, v, look());
+    const e = degErr(rig.yaw, yaw0);
+    if (e > worstHold) worstHold = e;
+    const d = cam.position.distanceTo(v.pos);
+    if (d > maxDist) maxDist = d;
+    if (rig._tumble > 0) engaged = true;
+    if (!finiteCam(cam)) ok('the spin produced a finite matrix', false);
+  }
+  const spunTo = v.heading;
+  info(`spun ${f(SPIN * SPIN_S * 180 / Math.PI, 0)}° at ${f(SPIN, 1)} rad/s: boom yaw moved ${f(worstHold, 3)}°`);
+  info(`boom ${f(dist0)} → ${f(maxDist)} m (${f(maxDist / dist0, 3)}×), tumble blend ${f(rig._tumble, 3)}`);
+  ok('the spin actually engaged the gate', engaged && rig._tumble > 0.5, `${f(rig._tumble, 3)}`);
+  ok('the boom yaw holds within 3° of its pre-spin heading', worstHold < 3, `${f(worstHold, 3)}°`);
+  ok('the boom pulls back at least 1.3x', maxDist >= dist0 * 1.3, `${f(maxDist / dist0, 3)}×`);
+  // and the pull-back respects the same ceiling the zoom does
+  ok('the pull-back never exceeds the 11 m zoom ceiling', rig.dist <= 11.0001 && maxDist < 13,
+    `${f(maxDist)} m`);
+
+  /* Everything back to normal: no rotation, all four wheels, driving straight
+     again along whatever heading the spin left the car on. */
+  v.omega.set(0, 0, 0); v.spinT = 0;
+  v.vel.set(Math.sin(spunTo) * 6, 0, Math.cos(spunTo) * 6);
+  let release = -1, recover = -1, t = 0;
+  for (let i = 0; i < Math.round(4.0 / DT); i++) {
+    v.step(DT, flat);
+    rig.update(DT, v, look());
+    t += DT;
+    if (release < 0 && rig._tumble === 0) release = t;
+    if (recover < 0 && cam.position.distanceTo(v.pos) <= dist0 * 1.02) recover = t;
+  }
+  const home = degErr(rig.yaw, spunTo);
+  info(`release: blend hit zero at ${f(release, 3)} s, boom back inside 2 % at ${f(recover, 3)} s`);
+  info(`and the boom came home: ${f(home, 2)}° off the car's new heading 2 s later`);
+  ok('the gate lets go within 1.5 s of the car settling', release > 0 && release < 1.5,
+    `${f(release, 3)} s`);
+  ok('the boom is back to its cruising length within 1.5 s', recover > 0 && recover < 1.5,
+    `${f(recover, 3)} s`);
+  ok('and it re-acquires the car it was ignoring', home < 3, `${f(home, 2)}°`);
+  ok('no NaN through the whole spin and recovery', finiteCam(cam));
+
+  /* The other two ways in, both of which must engage without any omega.y at
+     all: a car on its roof, and a car race.js has flagged as spun out. */
+  const rollCam = makeCam();
+  const rig2 = new CameraRig(rollCam, flat);
+  const v2 = new MockVehicle();
+  v2.vel.set(0, 0, 10); v2.step(DT, flat); rig2.snapBehind(v2);
+  for (let i = 0; i < 30; i++) { v2.step(DT, flat); rig2.update(DT, v2, look()); }
+  v2.rollAng = 2.6;                       // 149° — on its roof
+  for (let i = 0; i < 30; i++) { v2.step(DT, flat); rig2.update(DT, v2, look()); }
+  ok('a car on its roof engages the gate too', rig2._tumble > 0,
+    `up.y ${f(v2.up.y, 3)}, blend ${f(rig2._tumble, 3)}`);
+
+  const spinCam = makeCam();
+  const rig3 = new CameraRig(spinCam, flat);
+  const v3 = new MockVehicle();
+  v3.vel.set(0, 0, 10); v3.step(DT, flat); rig3.snapBehind(v3);
+  for (let i = 0; i < 30; i++) { v3.step(DT, flat); rig3.update(DT, v3, look()); }
+  v3.spinT = 0.9;
+  for (let i = 0; i < 30; i++) { v3.step(DT, flat); rig3.update(DT, v3, look()); }
+  ok('a forced spin-out (spinT) engages the gate too', rig3._tumble > 0, `${f(rig3._tumble, 3)}`);
+
+  /* And the negative: ordinary hard cornering must NOT trip it, or the fix is
+     worse than the bug. 2.0 rad/s is the AI's own yaw-rate cap. */
+  const cornCam = makeCam();
+  const rig4 = new CameraRig(cornCam, flat);
+  const v4 = new MockVehicle();
+  v4.vel.set(0, 0, 28); v4.step(DT, flat); rig4.snapBehind(v4);
+  let tripped = false;
+  for (let i = 0; i < 180; i++) {
+    v4.heading += 2.0 * DT;
+    v4.omega.set(0, 2.0, 0);
+    v4.rollAng = -0.12;
+    v4.vel.set(Math.sin(v4.heading) * 28, 0, Math.cos(v4.heading) * 28);
+    v4.step(DT, flat);
+    rig4.update(DT, v4, look());
+    if (rig4._tumble > 0) tripped = true;
+  }
+  const corner = degErr(rig4.yaw, v4.heading);
+  /* The lag is the SPRING's, not the gate's, and it is the whole reason a
+     corner reads as a corner. A critically damped second-order chasing a ramp
+     settles 2r/w behind it: 2 x 2.0 / (2pi x 1.91) = 0.33 rad = 19°. (The note
+     in _chase() says 9.6° for this case — that is r/w, one factor of two out.
+     The number here is the measured one.) It is asserted only as an envelope,
+     so a future retune of yawHz has to be deliberate. */
+  info(`3 s at the AI's 2.0 rad/s yaw cap: gate ${tripped ? 'TRIPPED' : 'stayed out'}, boom ${f(corner, 2)}° off the nose`);
+  ok('a hard corner at 2.0 rad/s does not trip the gate', !tripped);
+  ok('and the boom still tracks the car through it (spring lag only)', corner < 25,
+    `${f(corner, 2)}°`);
+
+  /* Finally: a vehicle-like with none of these fields is a car that cannot
+     tumble, which is what every section above this one relies on. */
+  const bareCam = makeCam();
+  const rig5 = new CameraRig(bareCam, flat);
+  const bare = {
+    pos: new THREE.Vector3(0, 0.55, 0), quat: new THREE.Quaternion(),
+    vel: new THREE.Vector3(0, 0, 12), forward: new THREE.Vector3(0, 0, 1),
+    airborne: false, speed: 12
+  };
+  for (let i = 0; i < 120; i++) rig5.update(DT, bare, look());
+  ok('a vehicle-like with no omega/spinT/up/contacts never tumbles',
+    rig5._tumble === 0 && finiteCam(bareCam));
 }
 
 /* ============================================================ */

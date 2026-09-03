@@ -23,9 +23,11 @@
    array literals and closures are all forbidden inside update().
 
    Vehicle reads (as-built contract, docs/INTEGRATION-NOTES.md): pos, quat, vel,
-   speed, forward, up, airborne, airTime, contacts. `steerNorm` is read
-   defensively for the lateral look-ahead and falls back to filtered lateral
-   acceleration if a caller's vehicle-like object does not carry it.
+   speed, forward, up, airborne, airTime, contacts, omega, spinT. `steerNorm` is
+   read defensively for the lateral look-ahead and falls back to filtered lateral
+   acceleration if a caller's vehicle-like object does not carry it; `omega` and
+   `spinT` are read the same way, and a vehicle-like without them simply never
+   trips the crash/spin gate.
    ============================================================ */
 import * as THREE from 'three';
 import { clamp, sstep } from '../core/rng.js';
@@ -84,6 +86,37 @@ const CH = {
 
   yawHz: 1.91,            // Hz — critically damped boom yaw. See note in _chase().
   yawAirMul: 0.55,        // the same spring, softened while airborne.
+
+  /* ---- the crash/spin gate ----
+     Rule 3 says the boom follows travel, and it is right up until the car stops
+     travelling and starts rotating. A spin-out has no heading anybody wants to
+     look along: the nose sweeps 360°, the velocity heading sweeps with it, and
+     the yaw spring faithfully chases both — which is the "the camera gets
+     confusing when I crash" report. So while the car is tumbling the boom yaw
+     is FROZEN on the last heading from before it went wrong, and the boom is
+     lengthened so the whole mess fits in frame. */
+  tumbleOmega: 2.5,       // rad/s of body yaw rate that counts as a spin. 143°/s
+                          //   is past any corner: at 30 m/s that is a 12 m radius.
+  tumbleUpY: 0.6,         // body up.y below which the car is on its side or worse
+                          //   (53° off vertical) and its nose means nothing.
+  tumbleDist: 1.45,       // boom length multiplier at full tumble, ceilinged at
+                          //   distMax so a crash never puts the eye further out
+                          //   than the player's own zoom can ask for.
+  tumbleBlend: 1.2,       // 1/s — how fast the pull-back comes IN. Deliberately
+                          //   slow: this is the same lesson as airLo/airHi. A
+                          //   kerb strike spikes omega for three frames and a
+                          //   fast blend would pump the boom on every rut.
+  tumbleFall: 3.0,        // 1/s — and how fast it goes back OUT once the car is
+                          //   settled. Faster than it came in, because by then
+                          //   the shot belongs to the player again; still under
+                          //   the 6/s the airborne blend uses, so it reads as a
+                          //   move rather than a snap. With tumbleZero this puts
+                          //   a full release at ~1.3 s.
+  tumbleZero: 0.02,       // below this the blend is snapped to exactly 0. It has
+                          //   to reach zero, not approach it: zero is the only
+                          //   state in which _stableYaw tracks the live boom.
+  tumbleReleaseOmega: 0.8,   // rad/s — "settled" is slow…
+  tumbleReleaseContacts: 3,  // …and back on at least three wheels.
 
   pivotXZ: 22,            // 1/s — pivot follow, horizontal. Near-rigid: horizontal lag
                           //     reads as rubber-banding, not as weight.
@@ -210,6 +243,8 @@ export class CameraRig {
     this._pivot = new THREE.Vector3();
     this._aim = new THREE.Vector3();
     this._air = 0;                // 0..1 airborne blend
+    this._tumble = 0;             // 0..1 crash/spin blend (see CH.tumble*)
+    this._stableYaw = 0;          // rad, the boom heading from before the spin
     this._slope = 0;              // rad, low-passed ground slope ahead
     this._avoid = 0;              // m, current terrain push-up
     this._hoodQ = new THREE.Quaternion();
@@ -282,6 +317,7 @@ export class CameraRig {
     this.pitch = CH.pitch0;
     this.lookYaw = 0; this.lookPitch = 0; this.lookIdle = 99;
     this._air = 0; this._slope = 0; this._avoid = 0;
+    this._tumble = 0; this._stableYaw = this.yaw;
     this.shake = 0; this._rumbleS = 0;
     this.kickPitch = 0; this.kickYaw = 0; this.fovOffset = 0;
     this.rumble = 0; this.sway = 0;
@@ -331,6 +367,44 @@ export class CameraRig {
         ? sstep(CH.airLo, CH.airHi, vehicle.airTime) : 1)
       : 0;
     this._air += (airWant - this._air) * (1 - Math.exp(-dt * CH.airBlend));
+
+    /* ---- crash / spin blend ---------------------------------
+       A latch, not a follower: it ENGAGES on the spin and only lets go once the
+       car is both slow in rotation and back on its wheels. In between — a car
+       that has stopped spinning but is still in the air, still on its roof, or
+       still sliding on two wheels — it holds, because none of those are
+       "settled" either and the whole point is to not hand the shot back early.
+
+       Every field here is read defensively. A vehicle-like that publishes none
+       of them (the dev harness's mock, the garage turntable, a menu prop) is a
+       car that never tumbles, which is the correct answer for all three. */
+    const omg = vehicle.omega;
+    let omY = 0, omLen = 0;
+    if (omg) {
+      omY = omg.y || 0;
+      omLen = Math.hypot(omg.x || 0, omY, omg.z || 0);
+    }
+    // `up` is a getter on the real vehicle (it writes a scratch and hands it
+    // back), so it is read exactly once. Anything that is not a number reads as
+    // upright: an absent `up` must not be mistaken for a car on its roof.
+    const upv = vehicle.up;
+    const upY = upv && typeof upv.y === 'number' ? upv.y : 1;
+    const cts = typeof vehicle.contacts === 'number' ? vehicle.contacts : CH.tumbleReleaseContacts;
+    let tumbleWant;
+    if (omg && (Math.abs(omY) > CH.tumbleOmega || (vehicle.spinT || 0) > 0 || upY < CH.tumbleUpY)) {
+      tumbleWant = 1;
+    } else if (omLen < CH.tumbleReleaseOmega && cts >= CH.tumbleReleaseContacts) {
+      tumbleWant = 0;
+    } else {
+      tumbleWant = this._tumble > 0 ? 1 : 0;
+    }
+    const tRate = tumbleWant > this._tumble ? CH.tumbleBlend : CH.tumbleFall;
+    this._tumble += (tumbleWant - this._tumble) * (1 - Math.exp(-dt * tRate));
+    if (tumbleWant === 0 && this._tumble < CH.tumbleZero) this._tumble = 0;
+    /* The datum, taken BEFORE the per-mode pose runs, so it is always last
+       frame's finished boom heading — i.e. the last one from before things went
+       wrong, whichever frame that turns out to have been. */
+    if (this._tumble === 0) this._stableYaw = this.yaw;
 
     /* ---- per-mode pose -------------------------------------- */
     if (this.mode === CAM.HOOD) this._hood(dt, vehicle);
@@ -419,7 +493,15 @@ export class CameraRig {
       _fwd.z + (_vel.z - _fwd.z) * travelW,
     );
     const dl = _dir.lengthSq();
-    const yawTarget = dl > 1e-6 ? Math.atan2(_dir.x, _dir.z) : this.yaw;
+    let yawTarget = dl > 1e-6 ? Math.atan2(_dir.x, _dir.z) : this.yaw;
+    /* …and none of that survives a spin. Nose and travel both sweep the full
+       circle in a crash, so while the tumble blend is up the target is the
+       heading the boom already had — a hard hold, not a weighted one, because
+       any weight at all lets a 5 rad/s spin drag the frame round with it. The
+       switch itself costs nothing: _stableYaw was this.yaw on the frame the
+       latch closed, so the spring's error is zero going in and the error going
+       out is absorbed the way every other heading change in this file is. */
+    if (this._tumble > 0) yawTarget = this._stableYaw;
 
     /* Critically damped, closed form — unconditionally stable at any dt, which
        matters because a tab-out hands us a 50 ms frame.
@@ -496,8 +578,16 @@ export class CameraRig {
     else this._aim.lerp(_aim, 1 - Math.exp(-dt * 10));
 
     /* ---- eye -------------------------------------------------- */
-    const dist = this.dist * (1 + CH.distSpeed * sstep(0, CH.speedRef, vHoriz))
+    let dist = this.dist * (1 + CH.distSpeed * sstep(0, CH.speedRef, vHoriz))
       * (1 + (CH.airDist - 1) * this._air);
+    /* The tumble pull-back is the only boom term that can stack on top of the
+       airborne one, so it is the one that gets a ceiling — distMax, the same
+       11 m the zoom clamps to. A boom already past that (deep zoom plus a big
+       air) is left exactly where it was rather than being hauled back in. */
+    if (this._tumble > 0) {
+      dist = Math.min(Math.max(dist, CH.distMax),
+        dist * (1 + (CH.tumbleDist - 1) * this._tumble));
+    }
     const cp = Math.cos(pitch), sp = Math.sin(pitch);
     _eye.set(
       this._pivot.x - Math.sin(yaw) * cp * dist,

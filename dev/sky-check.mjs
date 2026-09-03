@@ -52,7 +52,7 @@ import * as THREE from 'three';
 import { Sky as VendoredSky } from 'three/addons/objects/Sky.js';
 import {
   Sky, SKY_THEMES, HAZE_H, skyParams, skyRadiance, skyBandColor,
-  deriveSkyColors, lum3
+  deriveSkyColors, lum3, skyKnee, SKY_KNEE_THRESH, SKY_KNEE_K
 } from '../src/world/sky.js';
 
 let failures = 0, checks = 0;
@@ -214,6 +214,129 @@ head('3. skyExposure — the horizon lands within +-15 % of the retired ramp');
     if (Math.abs(ratio - 1) > BAND) {
       info(`re-derive it: skyExposure ${f(t.skyExposure)} -> ${f(t.skyExposure / ratio)}`);
     }
+  }
+}
+
+/* ============================================================
+   3b. NOTHING IN THE DOME REACHES THE BLOOM THRESHOLD
+   ============================================================
+   §3 above calibrates skyExposure against ONE number, the horizon band, and
+   that is all it has ever done. It says nothing about the zenith, nothing
+   about the aureole, and nothing about how much of the dome clears the bloom
+   threshold — which is why five themes could pass it while Timberline was
+   putting 5.8 % of the sky over UnrealBloomPass's 1.30 and peaking at 1.93.
+   That is the "the sky is over-exposed" report, and it is the gate that was
+   missing rather than a number that was wrong.
+
+   The fix is a soft knee at the exposure point (sky.js, SKY_KNEE_THRESH), so
+   this measures the thing the knee promises: a hard ceiling at T + K = 1.25,
+   strictly under 1.30, everywhere on the dome and for every theme.
+
+   The scan is 64 azimuths x 16 elevation rows, with the rows spaced uniformly
+   in sin(elevation) rather than in elevation — every row is then the same
+   solid angle, so the plain sample count IS the fraction of the dome and no
+   cos weighting is needed. It deliberately misses the exact sun direction by
+   up to half a cell; the ceiling is a property of the curve and not of where
+   you sample it, and the raw peak is sampled separately below.
+   ============================================================ */
+const SCAN_AZ = 64, SCAN_EL = 16, BLOOM_THRESH = 1.30;
+function scanDome(p) {
+  const o = [0, 0, 0];
+  let peak = 0, over = 0, touched = 0, n = 0;
+  for (let j = 0; j < SCAN_EL; j++) {
+    const h = (j + 0.5) / SCAN_EL;
+    const ch = Math.sqrt(Math.max(0, 1 - h * h));
+    for (let i = 0; i < SCAN_AZ; i++) {
+      const a = (i / SCAN_AZ) * Math.PI * 2;
+      skyRadiance(p, Math.cos(a) * ch, h, Math.sin(a) * ch, o);
+      const m = Math.max(o[0], o[1], o[2]);
+      if (m > peak) peak = m;
+      if (m > BLOOM_THRESH) over++;
+      if (m > SKY_KNEE_THRESH) touched++;      // where the knee is doing work
+      n++;
+    }
+  }
+  return { peak, frac: over / n, touch: touched / n };
+}
+
+head('3b. THE HIGHLIGHT KNEE — no part of any dome can bloom');
+{
+  const CEIL = SKY_KNEE_THRESH + SKY_KNEE_K;          // 1.25
+  const EPS = 1e-9;
+  const o = [0, 0, 0];
+  ok('the knee asymptote is strictly under the bloom threshold',
+    CEIL < BLOOM_THRESH, `${f(CEIL, 3)} < ${f(BLOOM_THRESH, 2)}`);
+
+  let anyWork = false;
+  for (const name of THEMES) {
+    const p = skyParams(name);
+    const s = scanDome(p);
+    // the aureole itself, which a 64x16 grid can walk straight past
+    skyRadiance(p, p.sun[0], p.sun[1], p.sun[2], o);
+    const sunPeak = Math.max(o[0], o[1], o[2]);
+    if (s.touch > 0) anyWork = true;
+    info(`${name}: peak ${f(s.peak, 4)} (at the sun ${f(sunPeak, 4)}), ` +
+      `over 1.30 ${f(s.frac * 100, 2)} %, knee touches ${f(s.touch * 100, 2)} % of the dome`);
+    ok(`${name}: nothing on the dome exceeds the 1.25 ceiling`,
+      s.peak <= CEIL + EPS && sunPeak <= CEIL + EPS,
+      `${f(Math.max(s.peak, sunPeak), 6)}`);
+    ok(`${name}: at most 0.5 % of the dome over the 1.30 bloom threshold`,
+      s.frac <= 0.005, `${f(s.frac * 100, 3)} %`);
+  }
+  /* If the knee were reverted this section would fail on the ceiling, but it
+     would fail for a stage-dependent reason. This one asserts the gate is not
+     vacuous in the first place: there IS sky up there that needs bounding. */
+  ok('the knee is actually doing work on at least one theme', anyWork);
+
+  /* ---- JS / GLSL parity ----
+     The two curves are written twice — once as JS (skyKnee) and once as GLSL
+     inside patchSkyMaterial — and the whole §8.5 argument is that the model
+     the fog is read off and the model the dome is painted from cannot
+     disagree. There is no GL context here, so parity is asserted three ways:
+     the shader carries the uniforms, they carry the JS constants, and the
+     GLSL expression transcribed back into JS agrees with skyKnee() to the
+     last bit across the range that matters. */
+  const glslAsJs = (c, t, k) => Math.min(c, t + k * (1 - Math.exp(-Math.max(c - t, 0) / k)));
+  let worst = 0;
+  for (let i = 0; i <= 2000; i++) {
+    const c = i * 0.005;                       // 0 … 10, well past any theme's peak
+    const d = Math.abs(skyKnee(c, SKY_KNEE_THRESH, SKY_KNEE_K)
+      - glslAsJs(c, SKY_KNEE_THRESH, SKY_KNEE_K));
+    if (d > worst) worst = d;
+  }
+  ok('the GLSL expression and skyKnee() are the same curve', worst < 1e-12,
+    `worst delta ${worst.toExponential(2)} over 0..10`);
+  ok('the knee is identity below the threshold and asymptotic above it',
+    skyKnee(0.4, SKY_KNEE_THRESH, SKY_KNEE_K) === 0.4
+    && skyKnee(SKY_KNEE_THRESH, SKY_KNEE_THRESH, SKY_KNEE_K) === SKY_KNEE_THRESH
+    && skyKnee(1e6, SKY_KNEE_THRESH, SKY_KNEE_K) <= CEIL + EPS
+    && skyKnee(1e6, SKY_KNEE_THRESH, SKY_KNEE_K) > CEIL - 1e-9,
+    `knee(1e6) = ${f(skyKnee(1e6, SKY_KNEE_THRESH, SKY_KNEE_K), 6)}`);
+
+  for (const name of THEMES) {
+    const t = SKY_THEMES[name];
+    const s = Object.create(Sky.prototype);
+    s.theme = t;
+    s.skyModel = skyParams(name);
+    s.sunDir = new THREE.Vector3(t.sunDir.x, t.sunDir.y, t.sunDir.z).normalize();
+    s.group = new THREE.Group();
+    s._buildSkyDome();
+    const m = s.skyMesh.material, u = m.uniforms;
+    ok(`${name}: the shader declares and calls the knee`,
+      m.fragmentShader.includes('uniform float uSkyKneeThresh')
+      && m.fragmentShader.includes('uniform float uSkyKneeK')
+      && m.fragmentShader.includes('vec3 skyKnee(')
+      && m.fragmentShader.includes('skyKnee( retColor * uSkyExposure, uSkyKneeThresh, uSkyKneeK )'));
+    ok(`${name}: the shader's knee constants are the JS ones`,
+      u.uSkyKneeThresh && u.uSkyKneeK
+      && u.uSkyKneeThresh.value === SKY_KNEE_THRESH && u.uSkyKneeK.value === SKY_KNEE_K,
+      `T ${f(u.uSkyKneeThresh.value, 3)} K ${f(u.uSkyKneeK.value, 3)}`);
+    /* And the IBL dome shares the uniforms object by reference, so the
+       reflection is bounded by the same two numbers without a second edit —
+       _buildEnv needs a renderer, so this asserts the property that makes it
+       true rather than building one. */
+    ok(`${name}: skyUniforms is the object _buildEnv will share`,
+      s.skyUniforms === u && s.skyUniforms.uSkyKneeK === u.uSkyKneeK);
   }
 }
 
