@@ -17,6 +17,8 @@
     ]
   },
 
+  "env/training": { "url": "env/training-env.jpg", "kind": "equirect" },
+
   "models/hopper-carcass": { "url": "models/hopper-carcass.glb", "kind": "model" },
   "models/ridgeback-carcass": { "url": "models/ridgeback-carcass.glb", "kind": "model" },
   "models/redline-carcass": { "url": "models/redline-carcass.glb", "kind": "model" },

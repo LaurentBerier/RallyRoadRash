@@ -5,6 +5,16 @@
      ?veh=hopper|ridgeback|redline   ?q=low|medium|high|ultra
      ?orbit=1   slow circle around the car instead of driving
      ?fx=1      run every world/vfx.js effect at once, around the car
+     ?env=sky|image|none
+                the §8.5 environment-map A/B, on a real stage rather than the
+                garage's grey pad. `sky` (default) lights the reflections from
+                the physical dome; `image` hands sky.setEnvImage the
+                manifest's env/<theme> equirect; `none` drops the environment
+                entirely, so what is left on the chrome is the two lights.
+                The overlay says which one is actually in force — a missing
+                manifest entry falls back to `sky` and says so, because every
+                asset in this game is optional and this is what that looks
+                like from the outside.
    Console: FL.at(s) teleports, FL.census() counts the dressing,
    FL.frameMs() is the rolling mean frame time. */
 import * as THREE from 'three';
@@ -18,6 +28,7 @@ import { VFX } from '../src/world/vfx.js';
 import { Vehicle } from '../src/game/vehicle.js';
 import { VEHICLE_BY_ID } from '../src/game/vehicles.js';
 import { SURFACES } from '../src/world/surfaces.js';
+import { loadAssets, Assets } from '../src/core/assets.js';
 
 const stats = document.getElementById('stats');
 const err = document.getElementById('err');
@@ -26,6 +37,8 @@ window.addEventListener('error', (e) => { err.textContent += (e.message || e.err
 const q = new URLSearchParams(location.search);
 const trackId = q.get('track') || 'training';
 const vehId = q.get('veh') || 'hopper';
+const envMode = q.get('env') || 'sky';
+let envNote = '';
 
 async function boot() {
   const def = TRACKS.find(t => t.id === trackId) || TRACKS[0];
@@ -58,6 +71,18 @@ async function boot() {
   engine.attachTerrain(terrain);
   const sky = new Sky(engine.renderer, engine.scene, engine.quality, def.theme);
   engine.setLightTheme(SKY_THEMES[def.theme]);
+
+  /* ?env — the §8.5 A/B. Non-blocking on purpose: the stage is already up
+     and racing, and the panorama arriving two seconds later is exactly what
+     happens in the game. `none` is cleared every frame rather than once,
+     because sky.update() rebuilds the env whenever it is marked dirty. */
+  if (envMode === 'image') {
+    loadAssets('../assets/manifest.json').then((map) => {
+      const tex = new Assets(map).get('env/' + def.theme);
+      if (tex) { sky.setEnvImage(tex); envNote = 'image'; }
+      else envNote = 'no env/' + def.theme + ' in the manifest — shader env';
+    });
+  }
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData);
   const dust = new Dust(engine.scene, terrain, terrain.uniforms.uSunDir, engine.quality.dust, def.theme);
   const vfx = new VFX(engine.scene, dust, engine.quality, def.theme);
@@ -212,6 +237,7 @@ async function boot() {
 
     terrain.update(dt, engine.camera, sky.sunDir);
     sky.update(dt, engine.camera, elapsed);
+    if (envMode === 'none') engine.scene.environment = null;
     props.update(dt, elapsed, engine.camera);
     dust.update(dt);
     vfx.update(dt, engine.camera);
@@ -224,7 +250,8 @@ async function boot() {
     if (ft > 0.5) { fps = frames / ft; frames = 0; ft = 0; }
     const n = spline.nearest(veh.pos.x, veh.pos.z, _out);
     stats.textContent =
-      `track ${def.id}  veh ${vehId}  fps ${fps.toFixed(0)}  ${(ftMean * 1000).toFixed(1)} ms\n` +
+      `track ${def.id}  veh ${vehId}  env ${envMode}${envNote ? ' (' + envNote + ')' : ''}\n` +
+      `fps ${fps.toFixed(0)}  ${(ftMean * 1000).toFixed(1)} ms\n` +
       `speed ${(veh.speed * 3.6).toFixed(0)} km/h  gear ${veh.gear ?? '-'}  rpm ${(veh.rpmNorm ?? 0).toFixed(2)}\n` +
       `s ${n.s.toFixed(0)}/${spline.length.toFixed(0)}  d ${n.d.toFixed(1)}  surf ${SURFACES[veh.surfaceId]?.name}\n` +
       `air ${veh.airborne} ${veh.airTime.toFixed(1)}s  hardHit ${veh.hardHit.toFixed(1)}\n` +

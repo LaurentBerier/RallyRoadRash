@@ -84,6 +84,18 @@ const FinalShader = {
     /* Radial speed smear, 0..1, written per frame by the race loop off road
        speed. Zero is the default so a stage with nobody driving is clean. */
     uSpeedBlur: { value: 0.0 },
+    /* NITRO, 0..1 (§8.4). ONE writer: game/feel.js, via feel.nitro(k01), and
+       feel.reset() zeroes it. It rides INSIDE this pass rather than adding
+       another one — a second full-screen pass for four terms nobody sees for
+       more than two seconds at a time is not a trade worth making.
+
+       At uNitro === 0 this pass is bit-identical to what it was before nitro
+       existed, and that is guaranteed BY CONSTRUCTION, not by testing: every
+       nitro term is multiplied by the uniform and then added or subtracted,
+       so at zero every one of them is exactly +0.0 and `x + 0.0 == x` for
+       every finite x the pass can produce. Read the four sites below with
+       that in mind — if you ever add a fifth, it has to hold there too. */
+    uNitro: { value: 0.0 },
     uRes: { value: new THREE.Vector2(1, 1) },
     uSunUV: { value: new THREE.Vector3(0.5, 0.5, 0) }   // xy = screen pos, z = visibility
   },
@@ -94,7 +106,7 @@ const FinalShader = {
     uniform sampler2D tDiffuse;
     uniform float uTime, uExposure, uVignette, uGrain, uAberr, uGlitch, uFlash, uLetterbox;
     uniform vec3 uGrade;
-    uniform float uBlind, uShaft, uSat, uCon, uSpeedBlur;
+    uniform float uBlind, uShaft, uSat, uCon, uSpeedBlur, uNitro;
     uniform vec2 uRes; uniform vec3 uSunUV;
 
     vec3 aces(vec3 x){
@@ -122,10 +134,20 @@ const FinalShader = {
         uv.x += band * (hash(vec2(floor(uv.y*140.0), 7.0))-0.5) * 0.055 * uGlitch;
       }
 
+      /* NITRO 1/4 — the zoom warp. 1.5 % toward the centre, which is the
+         cheapest way to say "the whole world just got closer": everything
+         grows a little and the edges leave the frame. Applied to uv BEFORE d
+         is taken, so the pinch, the smear and the vignette all agree about
+         where the middle is. Adding (0.5 - uv) * 0.0 leaves uv exactly. */
+      uv += (vec2(0.5) - uv) * (uNitro * 0.015);
+
       /* lateral chromatic aberration, zero at centre */
       vec2 d = uv - 0.5;
       float r2 = dot(d,d);
-      float k = uAberr * (0.0004 + 0.0026*r2);
+      /* NITRO 2/4 — the chromatic push. The same lateral split, harder and
+         with a steeper r^2 term so it is invisible on the road ahead and
+         obvious at the edges. */
+      float k = uAberr * (0.0004 + 0.0026*r2) + uNitro * (0.0012 + 0.0090*r2);
       vec3 col;
       col.r = texture2D(tDiffuse, uv + d*k).r;
       col.g = texture2D(tDiffuse, uv).g;
@@ -136,7 +158,12 @@ const FinalShader = {
          are chasing live — stays sharp and only the periphery streaks. That
          is the whole trick: an even blur reads as a dirty lens, a radial one
          reads as velocity. */
-      float amt = clamp(uSpeedBlur * r2 * 2.2, 0.0, 0.22);
+      /* NITRO 3/4 — the radial blur. Nitro rides the speed smear at 2.2x the
+         weight and lifts its ceiling with it, because the point of nitro is
+         that it is faster than fast and a term that clamps at the same 0.22
+         would read as "already flat out". Same six taps: the cost is the
+         branch it was already taking at speed. */
+      float amt = clamp((uSpeedBlur + uNitro * 2.2) * r2 * 2.2, 0.0, 0.22 + uNitro * 0.16);
       if (amt > 0.002){
         vec3 acc = col;
         for (int i = 1; i <= 6; i++){
@@ -144,6 +171,13 @@ const FinalShader = {
         }
         col = acc * (1.0 / 7.0);
       }
+
+      /* NITRO 4/4 — the blue-white push. Cold, because the flame is: a
+         hydrocarbon burning rich enough to matter goes blue, and the whole
+         frame reading a stop cooler is what separates nitro from the warm
+         mini-turbo. Weighted by r^2 like everything else here, and added
+         BEFORE the grade so a sunset stage still owns its own colour. */
+      col += vec3(0.42, 0.68, 1.0) * (uNitro * (0.05 + 0.30 * r2));
 
       /* anamorphic-ish veiling glare toward the sun — the one thing a vacuum
          cannot give you, but a scratched lens can */
@@ -213,8 +247,12 @@ const FinalShader = {
       /* tone map in linear, then encode */
       col = aces(col);
 
-      /* vignette + a faint barrel darkening at the corners */
-      float vig = 1.0 - uVignette * smoothstep(0.28, 0.92, r2*1.65);
+      /* vignette + a faint barrel darkening at the corners. Nitro pinches it:
+         deeper AND starting further in, so the frame closes down around the
+         road. Both edges move by a term multiplied by uNitro, so at zero the
+         smoothstep arguments are still exactly 0.28 and 0.92. */
+      float vig = 1.0 - (uVignette + uNitro * 0.55)
+        * smoothstep(0.28 - uNitro * 0.16, 0.92 - uNitro * 0.22, r2*1.65);
       col *= vig;
 
       /* sensor noise: rises where the signal is low, exactly like a real CMOS */

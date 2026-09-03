@@ -541,10 +541,9 @@ export class Sky {
     u.sunPosition.value.copy(this.sunDir);        // unit, exactly as the port assumes
     u.uSkyExposure = { value: this.skyModel.exposure };
     u.uEnvGround = { value: new THREE.Color(t.groundHaze).multiplyScalar(0.55) };
-    patchSkyMaterial(mesh.material, false);
     mesh.material.depthWrite = false;
     mesh.material.depthTest = false;
-    mesh.material.fog = false;
+    patchSkyMaterial(mesh.material, false);
     mesh.scale.setScalar(DOME_R);
     mesh.frustumCulled = false;
     mesh.renderOrder = -1000;
@@ -562,17 +561,23 @@ export class Sky {
      premultipliedAlpha, because the ember block is ADDITIVE and the other two
      are coverage. Premultiplied source-over is the one blend that does both:
      a covering layer writes (colour * alpha, alpha), an additive one writes
-     (colour, 0). */
+     (colour, 0).
+
+     And depthTest goes back ON, which the old opaque dome did not need. That
+     dome was drawn in the OPAQUE pass before anything else and the world was
+     painted over the top of it; a transparent one is drawn AFTER every opaque
+     object, so with the test off the ash band and the ground haze would paint
+     straight over the terrain and the cars. It still writes no depth — it is a
+     shell at 9 km, and everything it has to lose to is nearer than that. */
   _buildDome() {
     const t = this.theme;
     const b = this.budget;
     const ash = !!t.ash;
-    const geo = new THREE.SphereGeometry(DOME_R * 0.98, b.domeW, b.domeH);
+    const geo = new THREE.SphereGeometry(DOME_R, b.domeW, b.domeH);
     const mat = new THREE.ShaderMaterial({
       side: THREE.BackSide, fog: false,
       transparent: true, premultipliedAlpha: true,
-      // no depth at all: this is a background fill, drawn before anything opaque
-      depthWrite: false, depthTest: false,
+      depthWrite: false, depthTest: true,
       defines: ash ? { ASH: 1, ASH_OCT: b.ashOct } : {},
       uniforms: {
         uHaze: { value: this.hazeColor },
@@ -595,8 +600,8 @@ export class Sky {
       fragmentShader: /* glsl */`
         precision highp float;
         varying vec3 vD;
-        uniform vec3 uZenith, uHorizon, uHaze, uGround, uSunCol, uSunDir, uAshCol, uEmberCol;
-        uniform float uHalo, uTime, uAsh, uEmber;
+        uniform vec3 uHaze, uGround, uAshCol, uEmberCol;
+        uniform float uTime, uAsh, uEmber;
         uniform vec2 uPlumeDir, uSkyBand;
         #ifdef SKYLINE
         uniform sampler2D uSkyline;
@@ -606,23 +611,38 @@ export class Sky {
           vec3 d = normalize(vD);
           float h = d.y;
 
-          // zenith ramp. The exponent, not the endpoints, is what makes a sky
-          // look like a sky: linear gradients read as a backdrop.
-          vec3 col = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.55));
+          /* premultiplied: col carries colour*coverage, a carries coverage.
+             Nothing here paints plain sky — that is the physical dome behind. */
+          vec3 col = vec3(0.0);
+          float a = 0.0;
 
-          // haze band straddling the horizon line
-          col = mix(col, uHaze, exp(-abs(h) * 7.5) * 0.80);
+        #ifdef ASH
+          // slow shear: two layers sliding over each other at different speeds
+          vec3 p = d * 2.4;
+          float n = 0.0, amp = 0.58, f = 1.0;
+          for (int i = 0; i < ASH_OCT; i++){
+            n += n31(p * f + vec3(uTime * 0.0032 * f, uTime * 0.0011, 0.0)) * amp;
+            f *= 2.17; amp *= 0.52;
+          }
+          float band = exp(-max(h, 0.0) * 1.9);
+          float ka = clamp((n - 0.40) * 1.9, 0.0, 1.0) * band * uAsh;
+          col = col * (1.0 - ka) + uAshCol * ka;
+          a = a * (1.0 - ka) + ka;
+        #endif
 
-          // below the horizon the dome only shows past the edge of the world
-          col = mix(col, uGround, smoothstep(-0.02, -0.32, h));
+          // below the horizon the dome only shows past the edge of the world,
+          // and the model has no answer down there — it just keeps showing sky
+          float kg = smoothstep(-0.02, -0.32, h);
+          col = col * (1.0 - kg) + uGround * kg;
+          a = a * (1.0 - kg) + kg;
 
         #ifdef SKYLINE
           {
             float u = atan(d.z, d.x) * 0.15915494 + 0.5;
             float v = clamp((h - uSkyBand.x) / (uSkyBand.y - uSkyBand.x), 0.0, 1.0);
-            vec4 a = texture2D(uSkyline, vec2(u, v));
-            vec4 b = texture2D(uSkyline, vec2(1.0 - u, v));      // mirrored wrap
-            vec4 sk = mix(b, a, smoothstep(0.0, 0.07, min(u, 1.0 - u)));
+            vec4 sa = texture2D(uSkyline, vec2(u, v));
+            vec4 sb = texture2D(uSkyline, vec2(1.0 - u, v));     // mirrored wrap
+            vec4 sk = mix(sb, sa, smoothstep(0.0, 0.07, min(u, 1.0 - u)));
             /* Two kinds of panorama have to work here. A PNG carries its own
                alpha and this is a silhouette; a JPEG has none, so sk.a is 1
                and the band is opaque — which is fine, because a photographic
@@ -633,38 +653,28 @@ export class Sky {
             float k = sk.a * (1.0 - smoothstep(0.62, 1.0, v));
             // and the base washes into the theme haze, so the horizon line
             // belongs to the same air as everything in front of it
-            col = mix(col, mix(uHaze, sk.rgb, 0.35 + 0.65 * smoothstep(0.0, 0.45, v)), k);
+            vec3 sc = mix(uHaze, sk.rgb, 0.35 + 0.65 * smoothstep(0.0, 0.45, v));
+            col = col * (1.0 - k) + sc * k;
+            a = a * (1.0 - k) + k;
           }
         #endif
 
-          // forward scatter around the sun — wide, warm, no disc (that is a billboard)
-          float s = max(dot(d, normalize(uSunDir)), 0.0);
-          col += uSunCol * (pow(s, 46.0) * 0.55 + pow(s, 6.0) * 0.17) * uHalo;
-
         #ifdef ASH
-          // slow shear: two layers sliding over each other at different speeds
-          vec3 p = d * 2.4;
-          float n = 0.0, a = 0.58, f = 1.0;
-          for (int i = 0; i < ASH_OCT; i++){
-            n += n31(p * f + vec3(uTime * 0.0032 * f, uTime * 0.0011, 0.0)) * a;
-            f *= 2.17; a *= 0.52;
-          }
-          float band = exp(-max(h, 0.0) * 1.9);
-          col = mix(col, uAshCol, clamp((n - 0.40) * 1.9, 0.0, 1.0) * band * uAsh);
-
-          // the caldera itself, burning a hole in the horizon behind the ash
+          // the caldera itself, burning a hole in the horizon behind the ash.
+          // Additive, which premultiplied source-over spells as alpha 0.
           vec2 hz = normalize(vec2(d.x, d.z) + 1e-5);
           float toward = max(dot(hz, uPlumeDir), 0.0);
           col += uEmberCol * exp(-abs(h) * 14.0) * pow(toward, 2.6) * uEmber;
           col += uEmberCol * exp(-abs(h + 0.01) * 26.0) * 0.16 * uEmber;   // the thin hot line
         #endif
 
-          gl_FragColor = vec4(max(col, 0.0), 1.0);
+          if (a < 0.002 && dot(col, col) < 1e-8) discard;
+          gl_FragColor = vec4(max(col, 0.0), clamp(a, 0.0, 1.0));
         }`
     });
     this.dome = new THREE.Mesh(geo, mat);
     this.dome.frustumCulled = false;
-    this.dome.renderOrder = -1000;
+    this.dome.renderOrder = -999;      // straight on top of the physical dome
     this.domeMat = mat;
     this.group.add(this.dome);
     this._applySkyline();          // a rebuild must not lose the panorama
@@ -1051,52 +1061,64 @@ export class Sky {
 
   /* ---------------- image-based lighting ----------------
      A 4-second job at load and then never again unless someone asks: this is
-     what puts sky colour in the car paint and the glass. Same ramp as the dome,
-     minus the ash, plus a ground bounce the dome does not need. */
+     what puts sky colour in the car paint and the glass.
+
+     A SECOND physical dome, sharing the first one's uniforms object, so the
+     reflection in a wing mirror and the sky above it are the same sky by
+     construction. The only difference is the ground bounce patched under its
+     horizon — the model keeps showing sky down there, and sky under a car is
+     how you get a floating car.
+
+     Vehicles are MeshPhysicalMaterial with envMapIntensity 0.95–2.4, so this
+     lands on chrome, rims, visor, glass and the generated carcasses. Terrain
+     and kit are custom/vertex-colour materials and ignore it; that is correct,
+     not a bug to chase. */
   _buildEnv() {
-    const t = this.theme;
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
     this.pmrem.compileEquirectangularShader();
     this.envScene = new THREE.Scene();
-    this.envMat = new THREE.ShaderMaterial({
-      side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
-      uniforms: {
-        uZenith: { value: this.zenithColor },
-        uHorizon: { value: this.horizonColor },
-        uHaze: { value: this.hazeColor },
-        uGround: { value: new THREE.Color(t.groundHaze) },
-        uSunCol: { value: new THREE.Color(t.sunDiscColor) },
-        uSunDir: { value: this.sunDir },
-        uSunInt: { value: t.sunIntensity },
-        uHalo: { value: t.haloStrength }
-      },
-      vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-      fragmentShader: /* glsl */`
-        precision highp float;
-        varying vec3 vD;
-        uniform vec3 uZenith, uHorizon, uHaze, uGround, uSunCol, uSunDir;
-        uniform float uSunInt, uHalo;
-        void main(){
-          vec3 d = normalize(vD);
-          float h = d.y;
-          vec3 col = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.55));
-          col = mix(col, uHaze, exp(-abs(h) * 7.5) * 0.80);
-          // the lower hemisphere is ground bounce, not sky: warm, dim, and the
-          // reason the underside of a car is not black
-          col = mix(col, uGround * 0.55, smoothstep(0.0, -0.45, h));
-          float s = max(dot(d, normalize(uSunDir)), 0.0);
-          col += uSunCol * (pow(s, 46.0) * 0.55 + pow(s, 6.0) * 0.17) * uHalo;
-          col += uSunCol * uSunInt * 3.4 * smoothstep(0.9986, 0.9994, s);
-          gl_FragColor = vec4(col, 1.0);
-        }`
-    });
-    this.envGeo = new THREE.SphereGeometry(100, 24, 16);
-    this.envScene.add(new THREE.Mesh(this.envGeo, this.envMat));
+    const mesh = new PhysicalSky();
+    mesh.material.uniforms = this.skyUniforms;      // shared, not copied
+    mesh.material.depthWrite = false;
+    mesh.material.depthTest = false;
+    patchSkyMaterial(mesh.material, true);
+    mesh.scale.setScalar(200);                      // inside the 1..4000 pmrem frustum
+    mesh.frustumCulled = false;
+    this.envMesh = mesh;
+    this.envScene.add(mesh);
   }
 
+  /**
+   * §8.5. Hand the scene an equirect panorama to light from, or null to go
+   * back to the shader dome. `assets.get('env/<theme>')` is the source and
+   * null is the normal case — every asset in this game is optional.
+   *
+   * Cheap: it only marks the env dirty, and update() rebuilds once. Calling
+   * this five times in a frame costs one PMREM, not five.
+   */
+  setEnvImage(tex) {
+    const next = tex || null;
+    if (next === this._envImage) return;
+    this._envImage = next;
+    this._envDirty = true;
+  }
+
+  /** Which of the two paths refreshEnv will take. Cheap enough to assert. */
+  envUsesImage() { return !!this._envImage; }
+
+  /**
+   * Rebuild the environment map from whichever source is current.
+   *
+   * BOTH paths dispose the previous render target before dropping the
+   * reference. A PMREM target is a cube mip chain and it is not small; three
+   * races in a row through the leak this used to have showed up as a hundred
+   * megabytes in QA's memory check, which is the only reason anybody noticed.
+   */
   refreshEnv() {
     const old = this.envRT;
-    this.envRT = this.pmrem.fromScene(this.envScene, 0, 1, 4000);
+    this.envRT = this._envImage
+      ? this.pmrem.fromEquirectangular(this._envImage)
+      : this.pmrem.fromScene(this.envScene, 0, 1, 4000);
     if (old) old.dispose();
     this.scene.environment = this.envRT.texture;
     this._envDirty = false;
@@ -1154,7 +1176,9 @@ export class Sky {
     return out.set(_v2.x * 0.5 + 0.5, _v2.y * 0.5 + 0.5, vis);
   }
 
-  /** Rebuild only what the tier actually changes: dome tessellation and clouds. */
+  /** Rebuild only what the tier actually changes: dome tessellation and clouds.
+      The physical dome is a box with an analytic shader — there is no
+      tessellation to change, so it survives every tier untouched. */
   setQuality(q) {
     const b = SKY_BUDGET[(q && q.name) || 'HIGH'] || SKY_BUDGET.HIGH;
     this.quality = q;
@@ -1193,6 +1217,8 @@ export class Sky {
   dispose() {
     this.scene.remove(this.group);
     this.dome.geometry.dispose(); this.dome.material.dispose();
+    this.skyMesh.geometry.dispose(); this.skyMesh.material.dispose();
+    this.envMesh.geometry.dispose(); this.envMesh.material.dispose();
     this.sunMesh.geometry.dispose(); this.sunMesh.material.dispose();
     if (this.vista) { this.vista.geometry.dispose(); this.vista.material.dispose(); }
     if (this.clouds) {
@@ -1203,15 +1229,15 @@ export class Sky {
       this.plume.geometry.dispose(); this.plume.material.dispose();
       this.smokeTex.dispose();
     }
-    this.envGeo.dispose();
-    this.envMat.dispose();
     this.pmrem.dispose();
     if (this.envRT) { this.envRT.dispose(); this.envRT = null; }
     if (this.scene.environment) this.scene.environment = null;
     if (this.scene.fog === this.fog) this.scene.fog = this._prevFog;
-    // The panorama belongs to Assets, which owns its lifetime — drop the
-    // reference, never the texture.
+    // The panorama and the env image belong to Assets, which owns their
+    // lifetimes — drop the reference, never the texture.
     this._skyline = null;
+    this._envImage = null;
     this.clouds = this.plume = this.dome = this.sunMesh = this.vista = null;
+    this.skyMesh = this.envMesh = null;
   }
 }

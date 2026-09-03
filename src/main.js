@@ -533,6 +533,10 @@ function buildWorld(def, baked) {
   /* Optional skyline panorama. When there is one it replaces the procedural
      vista ring; when there is not, the ring IS the horizon. */
   sky.setSkyline(App.assets.get('sky/' + theme));
+  /* An equirect panorama wins over the shader environment when one exists
+     (8.5). null is the normal case and returns to the physical sky — only
+     PROVING GROUNDS ships one, as an A/B against the shader env. */
+  sky.setEnvImage(App.assets.get('env/' + theme));
   engine.setLightTheme(SKY_THEMES[theme]);
   syncSun(terrain, sky);
 

@@ -258,3 +258,226 @@ named here is the one `meta.primary_output` points at — always the smaller; th
 Two source files also survived the stall, both complete and both parsing:
 `src/world/kit-arsenal.js` (all four §8.8 signatures) and `src/world/kit-wasteland.js`
 (P4's twelve new factories, split out of `kit.js` because `kit.js` was already large).
+
+---
+
+## Wave 8 — the sky went physical, and the env A/B the lead has to judge
+
+*P1, wave 8. Everything below is measured, not looked at: this package had no
+browser.*
+
+### What changed
+
+`src/world/sky.js` no longer paints a gradient. The vendored Preetham dome
+(`three/addons/objects/Sky.js`) is the sky; a **transparent overlay dome** sits
+on top of it carrying exactly the three things a scattering integral cannot do
+— the `SKYLINE` panorama band, the caldera's ash and ember blocks, and the
+ground haze below the horizon. Sun billboard, clouds, vista ring and ash plume
+are untouched.
+
+Two edits to the vendored shader, applied to the material's own strings and
+never to `vendor/`:
+
+* **the solar disc is removed.** `sunAngularDiameterCos` gives a 0.53° dot at
+  19 000× the sky, which lands *inside* our own sun billboard (1.1–3.4° per
+  theme) and measures about seven times brighter than it. Two suns is one too
+  many, and the billboard is the one with a per-theme colour and size.
+* **an output multiplier, `skyExposure`,** because the shader's units are its
+  own. See the table.
+
+### skyExposure, and the numbers behind it
+
+Calibrated by evaluating **both** models in JavaScript — the retired ramp
+expression and the Preetham formula — at h = 0.02, averaged over 64 azimuths,
+and dividing. `dev/sky-check.mjs` re-measures it and fails outside ±15 %, so
+the calibration cannot silently rot when somebody retunes a turbidity.
+
+| theme | turbidity | rayleigh | mie | mieG | skyExposure | measured ratio | dome over the 1.30 bloom threshold | brightest pixel (old dome) |
+|---|---|---|---|---|---|---|---|---|
+| training | 2.2 | 1.6 | 0.005 | 0.80 | 0.2668 | 1.0000 | 0.00 % | 0.77 (0.66) |
+| canyon | 7.0 | 2.2 | 0.005 | 0.80 | 0.3048 | 1.0000 | 0.99 % | 1.73 (0.90) |
+| forest | 10.0 | 2.0 | 0.004 | 0.70 | 0.4480 | 0.9999 | 4.07 % | 1.80 (1.19) |
+| volcano | 20.0 | 3.0 | 0.020 | 0.85 | 0.0775 | 1.0004 | 0.40 % | 1.86 (0.49) |
+| thunder | 8.0 | 2.6 | 0.012 | 0.80 | 0.3704 | 1.0000 | 2.81 % | 3.51 (0.85) |
+
+Two mie values were pulled **below** the wave-8 brief's starting points, for
+one measured reason each. Forest at mie 0.012 put **8.2 %** of the whole dome
+over the bloom threshold with a peak of 4.02; thunder at the brief's 0.020
+peaked at **6.05**, seven times the old dome's brightest pixel. Both are one
+number away from the brief's look if the aureole turns out to be wanted: raise
+mie and re-run `sky-check`, which prints the `skyExposure` to use with it.
+
+### The visible consequence, stated plainly
+
+`hazeColor` and `horizonColor` are now **derived** (§8.5) — the same value,
+deliberately, so the `FogExp2` colour, the terrain's haze uniform and the dome
+cannot disagree. Their **luminance** is unchanged to four decimal places. Their
+**hue is not**, and on the three warm stages the change is large:
+
+| theme | fog was (authored) | fog is (derived, linear RGB) |
+|---|---|---|
+| training | `0xc2d5e8` cool blue | 0.592 / 0.662 / 0.678 — near-neutral, faintly cool |
+| canyon | `0xe0b58a` warm sand | 0.512 / 0.535 / 0.544 — neutral |
+| forest | `0xcedcd4` pale green-grey | 0.723 / 0.728 / 0.725 — neutral |
+| volcano | `0x6e2c1c` deep red | 0.090 / 0.084 / 0.084 — neutral, same darkness |
+| thunder | `0xdd8846` orange | 0.446 / 0.375 / 0.360 — warm, about half as saturated |
+
+This is not a bug and it is not fixable by tuning: Preetham's output gamma of
+1/2.4 desaturates hard, and a parameter sweep (turbidity 4…60 × mie
+0.005…0.10) could not get canyon's horizon past r/L 1.05 against the authored
+1.47, or volcano's past 1.19 against 2.99. The stage's warmth now has to come
+from where it already comes from — `grade`, `sat`, `con`, the sun colour, the
+hemisphere fill, the vista ring, and the caldera's own ember block, all
+unchanged. **If a stage reads grey in QA, that is the conversation to have, and
+the honest fix is a stronger `grade`, not an authored fog colour: putting one
+back re-opens exactly the drift §8.5 exists to close.**
+
+### The env panorama
+
+`assets/env/training-env.jpg` — **2048 × 1024, 315 KB, JPEG quality 92.**
+
+The salvaged generation turned out to be a genuine full-sphere 360° equirect
+already: the left and right columns match to within adjacent-column noise
+(mean channel delta 5.9, against 4.7 for neighbouring columns and 16.9 for
+columns 400 apart), the horizon sits at v ≈ 0.49, and the ground converges to
+a nadir at the bottom centre. It was simply rendered into a 16:9 frame instead
+of a 2:1 one.
+
+So it was **not padded.** A 16:9 frame is *taller* than 2:1, so adding rows
+moves it further from 2:1 rather than closer; and flat sky and ground bands
+would have pushed the horizon off v = 0.5 and painted over a zenith and a
+nadir the image already has. It was resampled 2560 × 1440 → 2048 × 1024 with a
+Lanczos window (PIL, not GDI+ — the `DrawImage`/HighQualityBicubic box-average
+trap recorded in project memory does not apply, and a 1.25× reduction would not
+have triggered it anyway), which is exactly the 16:9 → 2:1 correction. The
+brief's instruction was then honoured where it actually helps: the top and
+bottom **ten rows** are ramped into the mean of the image's own top and bottom
+four rows, so the poles carry no azimuthal variation for PMREM to smear into a
+swirl.
+
+**The lead must add to `assets/manifest.json`:**
+
+```json
+"env/training": { "url": "env/training-env.jpg", "kind": "equirect" }
+```
+
+`kind: "equirect"` already exists in `src/core/assets.js` — sRGB,
+`EquirectangularReflectionMapping`, `RepeatWrapping` in longitude, no mipmaps.
+Nothing needs adding there.
+
+**And to `src/main.js`, next to the existing `setSkyline` call:**
+
+```js
+sky.setSkyline(App.assets.get('sky/' + theme));
+sky.setEnvImage(App.assets.get('env/' + theme));   // null is the normal case
+```
+
+`setEnvImage(null)` leaves the shader env in place, so the call is safe on the
+four themes that have no entry.
+
+### The A/B, and how to decide it from screenshots alone
+
+This package could not run a browser, so this is the whole handover. Two
+harnesses carry `?env=sky|image|none`:
+
+```
+dev/garage.html?veh=hopper&sky=training&ang=45&env=sky
+dev/garage.html?veh=hopper&sky=training&ang=45&env=image
+dev/garage.html?veh=hopper&sky=training&ang=135&env=sky
+dev/garage.html?veh=hopper&sky=training&ang=135&env=image
+dev/firstlight.html?track=training&orbit=1&env=image
+```
+
+`ang=45` and `ang=135`, because those are the two bearings that lay the
+Hopper's chrome roll cage across the frame at an angle; head-on and side-on
+both hide it against its own bodywork. Take the same four shots with
+`env=none` as the floor — that is the two lights answering alone, and any
+"improvement" the image path shows has to beat `env=sky`, not `env=none`.
+
+**Look at, in this order:**
+
+1. **The Hopper's chrome cage.** With `env=sky` it carries a smooth
+   bright-to-dark vertical gradient. With `env=image` it should carry
+   something you can *read*: a horizon line, the dark mesa mass above it, sand
+   below. A tube 40 mm across cannot show much, so the test is whether the
+   horizon line is identifiable, not whether the mesa is.
+2. **The rims.** Small, curved, and the busiest reflector on the car — this is
+   where a 2048-wide panorama either adds detail or adds noise.
+3. **The visor and the glass.** Broad and nearly flat, so they get the largest
+   readable patch of the panorama. If it is legible anywhere, it is here.
+
+**Pass criteria — all three must hold:**
+
+* the panorama is **readable** in at least the visor and the cage, at `ang=45`
+  or `ang=135`; not merely "different";
+* **no blowout after ACES** — no clipped white patch on chrome or glass that
+  `env=sky` did not also have. The panorama's sky rows sit near 0.9 linear
+  after sRGB decode against the shader env's 0.59 at the same elevation, so
+  this is the criterion that can genuinely fail;
+* the **bloom threshold stays at 1.30**. If the image path only looks right
+  after moving it, the image path has failed: that number is shared with the
+  lamps, the lava, the embers and the boost flames.
+
+**Keep the image path** if all three hold and the reflections gain readable
+structure. The manifest entry above then ships, and `env/<theme>` becomes the
+pattern for the other four stages.
+
+**Drop it** — delete `assets/env/`, leave the manifest alone, and the shader
+env stays — if the reflections gain nothing legible (a 40 mm tube may simply be
+below the resolution at which a panorama matters), or if anything blows out, or
+if it only works with a moved bloom threshold. Nothing else has to change:
+`setEnvImage` is written so that `null` is the normal case, and
+`dev/sky-check.mjs` gates that the shader env comes back cleanly and that
+neither path leaks its render target.
+
+### One thing found and deliberately not fixed
+
+`SKY_THEMES.forest.sunDir.x` is `-0.435229`; `cos(22°)cos(118°)` is
+`-0.435286`. A transcription slip of 5.7 × 10⁻⁵, three thousandths of a degree,
+and it predates this wave. It must **not** be corrected: `terrain-bake.js` has
+already baked forest's sun-occlusion mask against the number that is there, and
+a 0.003° improvement is not worth invalidating a bake. `dev/sky-check.mjs`
+gates the el/az agreement at 1 × 10⁻⁴ so it catches a wrong *digit* and not
+this.
+
+### Verifying this package
+
+```
+node --experimental-loader ./dev/loader.mjs dev/sky-check.mjs
+node --check src/world/sky.js
+node --check src/core/engine.js
+node --check dev/firstlight.js
+```
+
+### The environment-map A/B — decided (lead)
+
+Run as P1 specified: `garage.html?veh=hopper&sky=training&env=sky|image&ang=45`,
+judging the Hopper's chrome cage, rims and visor.
+
+**The image loses on the stated criterion, and it is kept anyway — for a
+different reason than the one it was bought for.**
+
+What the two look like is genuinely different and the difference is the right
+way round: on `env=sky` the rims and cage are cool blue-white, because a
+physical sky is blue and that is what a chrome wheel sitting under one reflects.
+On `env=image` the same metal goes warm ochre, which is what a chrome wheel
+sitting in a desert actually does — the ground fills most of a wheel's
+reflection hemisphere, not the sky.
+
+But **the panorama is not READABLE**. There are no mesas, no horizon line, no
+recognisable features in the reflections at any angle — it resolves to a warm
+average. P1's pass criterion was "the panorama must be readable in the
+reflections", and by that test this fails. So:
+
+- **The shader env stays the default** on all five themes.
+- `assets/env/training-env.jpg` is kept. It is paid for, tagged, 315 KB, fully
+  optional, and it measurably improves the training stage's metal.
+- **The other four themes are NOT commissioned.** Forty coins and ~1.3 MB for a
+  tint nobody can identify is the wrong trade.
+
+**The cheap version of what the image was actually doing.** Its whole
+contribution was "warm the ground half of the reflection hemisphere". P1 already
+added a patched ground bounce beneath the env sky's horizon, so that colour
+exists as a knob — making it per-theme would buy the same warmth on every stage
+for no bytes and no coins. That is the follow-up worth doing, not four more
+panoramas.

@@ -770,8 +770,23 @@ New: `sky.setEnvImage(tex|null)` — an equirect texture, when set, wins over th
 
 `SKY_THEMES[t]` gains `turbidity, rayleigh, mie, mieG, skyExposure`. `hazeColor` and
 `horizonColor` become **derived** from the physical model rather than authored, so the
-`FogExp2` colour, the terrain haze uniform in `main.js syncSun`, and the dome cannot
-disagree.
+`FogExp2` colour and the dome cannot disagree.
+
+**Amended after measurement: the terrain's far haze is NOT wired to the derived value, and
+that is deliberate.** This clause originally promised the terrain haze uniform agreed too.
+It does not. `terrain-shader.js` initialises `uHazeCol` from the theme's authored `haze` and
+`main.js syncSun` never updates it — so wiring it was one line, and the one line was not
+worth making. Preetham desaturates hard through its 1/2.4 output gamma: the derived haze
+matches the retired ramp's *luminance* to four decimals but loses most of its chroma,
+measured at r/L 1.05 against the authored 1.47 on canyon and 1.19 against 2.99 on volcano,
+and a sweep of turbidity 4…60 × mie 0.005…0.10 could not recover it. Pushing that onto
+distant terrain turns canyon's mesas and volcano's rim grey.
+
+So the dome and the scene fog are physical, and the terrain's far haze stays art-directed.
+Verified by screenshot on all five stages: canyon, volcano and thunder keep their warmth,
+which comes from `grade`/`sat`/`con`, the sun, the fill, the vista ring and the ember block
+— none of which this wave touched. If a stage ever does read grey, the fix is a stronger
+`grade`, not a re-authored fog colour.
 
 ### 8.6 Assets
 

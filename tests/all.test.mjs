@@ -148,6 +148,10 @@ test('deep: audio-check (manifest ↔ files, every cue has a fallback)', () => {
   run(['dev/audio-check.mjs']);
 });
 
+test('deep: sky-check (per-theme sky params, exposure calibration, sunDir)', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/sky-check.mjs']);
+});
+
 /* Registered before src/game/tricks.js exists. The check is a stub that exits
    0 today and fails loudly the moment the module lands without real gates
    behind it — see dev/trick-check.mjs. */
