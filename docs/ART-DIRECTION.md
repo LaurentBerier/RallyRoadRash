@@ -149,3 +149,73 @@ pulls the model toward a lit photograph. Do not re-run the de-light.
 **The title art is the one prompt that wants a vehicle**, and it is the one
 that came back best: a buggy mid-air off a dirt ramp over a red canyon at
 golden hour. Keep that framing if it is ever regenerated.
+
+## Production log — wasteland pass (wave 8)
+
+Budget approved: **5,000 coins**. Live prices, each read from the first real `quote`
+of its kind on 2026-09-03 — never quote these from memory, they are the platform's to
+change:
+
+| kind | price | planned calls | projected |
+|---|---:|---:|---:|
+| `image` | 10 | 17 | 170 |
+| `3d` | 80 | 13 | 1,040 |
+| `music` | 15 | 7 | 105 |
+| `sfx` | 10 | 30 | 300 |
+| | | | **1,615** |
+
+Comfortably inside 5,000, so the wave runs as planned. The four probe calls that
+established those prices produced real deliverables and are listed below.
+
+**The image model still puts wheels on a car you told it not to.** The Hopper concept
+prompt says "no wheels — empty wheel arches" and came back with four fat off-road tyres,
+rendered better than anything else in the frame. Everything else landed: welded plate,
+rust streaks, roll cage, exposed suspension, spikes, a clean white background.
+
+**And the mesh comes back as ONE fused node.** `hopper-carcass.glb` is 1 mesh, 1 node,
+1 material, 4 textures, 6,149 triangles, no Draco or meshopt — so `GLTFLoader` reads it
+with no decoder, but there is **no node named `wheel` to delete**. A strip that walks the
+node tree finds nothing to remove. Two ways out, and P2 owns the choice:
+
+1. **Strip by triangle**, once, at load: drop faces whose centroid falls inside the wheel
+   cylinders derived from `spec`, then recompute bounds. Costs one pass over 6 k triangles
+   and works on every future carcass regardless of how the exporter groups them.
+2. **Edit the concept first.** `generate image-edit "remove the wheels, leave empty wheel
+   arches" --in <concept>` is 10 coins against 80 for a fresh `3d`, and it keeps the
+   silhouette the concept already got right. Cheaper than a re-roll and much more likely
+   to work than re-prompting from scratch.
+
+**Also: the model's long axis is X, not Z.** Bounding box on the Hopper carcass is
+1.897 × 0.831 × 1.256 (X × Y × Z), so the fit table starts from a 90° yaw. Assume nothing
+per machine; measure each one.
+
+**Generated audio arrives as 44.1 kHz 16-bit stereo WAV, and it is enormous.** The
+training track is 105.0 s and **17.7 MB**; five of those plus a menu theme is over 100 MB,
+against a repo where three.js is currently the largest thing in the download. SFX are
+smaller but add up: 2.04 s of rocket launch is 352 KB, and there are twenty-six of them.
+
+There is **no ffmpeg on this machine** (searched Program Files, ProgramData and both
+AppData trees). The npm registry is reachable, so the encode is a **dev-time** step, run
+from the scratchpad and never from the repo: install a pure-JS MP3 encoder outside the
+project, transcode, and commit only the `.mp3`. The repo keeps its no-dependency promise
+because nothing it contains depends on the encoder — the same way the ground tiles were
+cropped locally with tools that are not in `package.json`. `server.js` already serves
+`.mp3`, and now also `.wav`, `.glb` and `.gltf`.
+
+One MP3 caveat that matters for music: the format carries encoder delay and padding, so a
+decoded buffer does **not** loop gaplessly on its own. Set `loopStart` / `loopEnd` on the
+`AudioBufferSourceNode` in samples to skip the padding rather than trusting `loop = true`.
+
+### Probe deliverables, staged and unplaced
+
+Left in `.sandscape/generated/` for the package that owns them:
+
+- **Hopper concept** (image, 10) — `bb1bf4f5fd0e329318fa33305ce008af/`
+  `hopper-carcass-concept_6273f6a4-….png` → P2, `assets/concepts/`.
+- **Hopper carcass** (3d, 80) — `8569ebe853dcf36ebd65a60add0ddc8a/generated_assets/assets/`,
+  two files; keep the **compressed** one (`…0856f78e….glb`, 3.3 MB), not the 16 MB raw
+  mesh → P2, `assets/models/hopper-carcass.glb`.
+- **Training music** (music, 15) — `f070882a0df923663bc9d3f8b947df23/generated_assets/audio/`
+  `music-training_d71b1ec5-….wav`, 105.0 s → P5, `assets/music/`.
+- **Rocket fire** (sfx, 10) — `999c5c58b79c1ef67e0eae6c4e21306e/generated_assets/audio/`
+  `sfx-rocket-fire_d4385f6b-….wav`, 2.04 s → P5, `assets/sfx/`.

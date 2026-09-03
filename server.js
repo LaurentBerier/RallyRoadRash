@@ -17,7 +17,12 @@ const MIME = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
   '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
   '.hdr': 'image/vnd.radiance', '.bin': 'application/octet-stream',
-  '.woff2': 'font/woff2', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg'
+  '.woff2': 'font/woff2', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg',
+  '.wav': 'audio/wav',
+  // glTF binary. The loader reads it as an ArrayBuffer either way, but a wrong
+  // Content-Type is exactly the kind of thing a production host gets right and
+  // a dev server gets wrong, which makes the bug look like a loader bug.
+  '.glb': 'model/gltf-binary', '.gltf': 'model/gltf+json'
 };
 
 // Dev-only frame capture. Off unless you pass --shots; the release server

@@ -693,3 +693,150 @@ input.poll() → race.update(dt, raw)
 camera.update → terrain.update → sky.update → props.update → dust.update
 audio.update → hud.update → engine.render
 ```
+
+## Wave 8 contracts ("wasteland glow-up")
+
+**Hard rule 1 is amended again.** Wave 6 said "no generated 3D and no generated audio:
+those stay procedural." This wave ships both — vehicle carcasses, hero props, five music
+tracks and a sample bank — under exactly the same terms as the images, and no weaker ones:
+relative URLs, non-blocking loads, a missing file resolves to `null` and never to a
+rejection, and **every consumer keeps its procedural path as the fallback**. Rename
+`assets/` aside and the game still runs, still races, still sounds like a game, and logs
+zero console errors. That is a QA gate. What changes is only the *kind* of file allowed in
+`assets/`, never the promise about it.
+
+Models do NOT load through `assets.js`. A GLB is megabytes; `assets.js` loads its whole
+manifest at boot because a texture is not. See 8.6.
+
+### 8.1 Arsenal state on `Vehicle` (P3 writes, P2 reads)
+
+Published fields, all zeroed by `placeAt()` like every other publication in 6.4:
+
+| field | type | meaning |
+|---|---|---|
+| `v.ammo` | int | rockets in the tube |
+| `v.ammoCap` | int | from `LAUNCHERS[spec.id].ammoCap` |
+| `v.nitroT` | s | nitro burn remaining, 0 when not boosting |
+| `v.reloadT` | s | time until the next shot is allowed |
+
+`extDriveMul` / `extTopMul` keep **one writer**: Arsenal. Nitro multiplies through those
+two, exactly where the old NITRO item did. The mini-turbo keeps its own separate path.
+
+### 8.2 Launcher geometry (P2 owns the field, P3 reads)
+
+`vehicles.js` gains per spec:
+
+```js
+launcher: { x, y, z, pitch, tubes }   // body-space mount, metres and radians
+```
+
+`Vehicle.muzzleWorld(out)` — P2, published from `vehicle-art.js` as `v._muzzle` — writes
+the world-space muzzle position into `out` and returns the world-space forward as a second
+scratch. Allocation-free, valid whether or not a GLB loaded.
+
+`LAUNCHERS[id]` — reload, rocket speed, splash radius, `ammoCap` — lives in P3's
+`weapons.js`, not in `vehicles.js`. Deltas between machines stay ≤ 15 % this pass: they say
+"different quality", not "different weapon". Converging or diverging them is a later call.
+
+### 8.3 HUD payload (P3 writes, P6 reads)
+
+The `item` block is **replaced**, not extended:
+
+```js
+arsenal: { enabled, ammo, ammoCap, reloadT, nitroT,
+           pickupSeq, pickupKind, pickupText, fireSeq }
+```
+
+`events` keeps its existing shape: `hitSeq/hitBy/hitWith`, `dealtSeq/dealtTo/dealtWith`,
+`rivalFireSeq/…`, `noteSeq/noteText`, `padSeq`, `landSeq`. Pre-allocated, strings only on
+change (6.6 still applies). `hud.setInputMethod` is unchanged. FIRE is **F / X / on-screen
+FIRE**, and holding reverse fires backwards.
+
+### 8.4 Post-fx nitro
+
+`engine.final.uniforms.uNitro` — 0..1, added by P1 with the GLSL that reads it. Written by
+**`feel.js` alone**, via `feel.nitro(k01)`; `feel.reset()` zeroes it, and `camera-check`
+gates that reset. The effect lives **inside the existing final pass** — no new pass:
+radial blur ×2.2, a blue-white chromatic push, a vignette pinch, and a 1.5 % zoom warp.
+
+### 8.5 Sky
+
+`new Sky(renderer, scene, quality, theme)` and every existing method keep their names —
+`update`, `setQuality`, `dispose`, `projectSun`, `setSkyline`, `refreshEnv`, `markEnvDirty`,
+`setFogEnabled`, `sunDir`, `sunColor`, `hazeColor`, `horizonColor`. `menuscene.js`,
+`garage.js`, `firstlight.js` and `main.js` all depend on them.
+
+New: `sky.setEnvImage(tex|null)` — an equirect texture, when set, wins over the shader env.
+
+`SKY_THEMES[t]` gains `turbidity, rayleigh, mie, mieG, skyExposure`. `hazeColor` and
+`horizonColor` become **derived** from the physical model rather than authored, so the
+`FogExp2` colour, the terrain haze uniform in `main.js syncSun`, and the dome cannot
+disagree.
+
+### 8.6 Assets
+
+`assets/manifest.json` gains two kinds, both added to `core/assets.js` by the lead:
+
+- **`equirect`** — id `env/<theme>`, `EquirectangularReflectionMapping`, sRGB, no mipmaps
+  (PMREM builds its own chain). Read with `assets.get(id)`.
+- **`model`** — id `models/<id>`, **url only**. `assets.js` records the resolved relative
+  url as a string and issues no request. Read it with **`assets.url(id)`**;
+  `assets.get(id)` deliberately returns `null` for a model, because handing a string to
+  something expecting a `Texture` fails deep inside three, a long way from the typo.
+
+`src/core/models.js` (lead) does the lazy loading:
+
+```js
+loadModel(url) -> Promise<THREE.Group|null>   // never rejects; null means "use your fallback"
+disposeModel(group)                            // the instance's cloned materials only
+clearModelCache()                              // the shared templates: geometry + textures
+modelCacheSize()
+```
+
+The cache holds one **template** per url and every call returns its own instance: node tree
+cloned, **materials cloned**, geometry and textures shared. Two rivals on the same machine
+need two Groups, and liveries/`mudify()`/the ghost overlay all write to materials — sharing
+those would let the second car to load win for both. Node never imports this file.
+
+### 8.7 Music and SFX (P5)
+
+`audio.setRaceTheme(theme)` — P5 writes it, P3 adds the single call in `race.js _enterGrid`.
+
+Every new cue is a method on `Audio` with a synth fallback behind it:
+`rocketFire(gain,pan)`, `rocketFlyby(pan)`, `rocketHit(gain,pan,near)`, `ammoPickup()`,
+`nitroPickup()`, `nitroBurst()`, `ammoEmpty()`, `crateBreak(gain)`.
+
+### 8.8 Arsenal kit — `src/world/kit-arsenal.js` (P3 owns)
+
+```js
+rocketCrateGeo(P, seed)   nitroCanGeo(P, seed)
+rocketGeo(P, seed)        launcherGeo(P, seed, tubes)
+```
+
+Same attribute set as `kit.js` — position + normal + color, **no uv** — and every shape
+stands on y = 0. P2 imports `launcherGeo` and `rocketGeo` for the mount and the ammo rack.
+P4's `kit-check` gates all four alongside its own factories.
+
+### 8.9 Hero models in the dressing plan (P4)
+
+```js
+DRESSING[theme].heroModels = [{ id, url, s, lat, yaw, scale, r, fallback }]
+```
+
+`props.js` loads them through `models.js`, places each at `heightAt`, and gives each **one
+fixed collider** of radius `r`. A missing file falls back to the named kit shape — which
+means the collider and the silhouette must be right in both cases.
+
+### 8.10 Settings
+
+The setting key `items` becomes `weapons` (bool). The lead migrates it in `main.js boot()`
+(`weapons ??= items`); P6 renames the row and its help text.
+
+The record flags `itemsTotal` / `itemsLap` in `progression.js` **keep their names** — they
+are a locked whitelist and renaming them invalidates every saved profile. Their label reads
+"set with weapons on".
+
+### 8.11 AI context (P3 owns both sides)
+
+`ctx.items` becomes `ctx.arsenal`, with `threats(out)`, `nearestPickup(ri,out)`,
+`nearestPad(ri,out)`, `ammoOf(ri)`. The mock in `dev/ai-check.mjs` is renamed to match.

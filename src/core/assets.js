@@ -29,9 +29,18 @@
          "art/canyon":   { "url": "art/canyon.jpg",         "kind": "color" } }
 
    `kind` decides the sampler set:
-     color   sRGB, clamped, mipmapped   — panoramas and key art
-     tile    sRGB, repeating, mipmapped — anything sampled by world position
-     layers  one DataArrayTexture built from N tiles, in SURF order
+     color    sRGB, clamped, mipmapped   — panoramas and key art
+     tile     sRGB, repeating, mipmapped — anything sampled by world position
+     layers   one DataArrayTexture built from N tiles, in SURF order
+     equirect sRGB, EquirectangularReflectionMapping — a 2:1 panorama fed to
+              PMREM as the environment map. No mipmaps: PMREM builds its own
+              roughness chain, and a mip pyramid on the source only costs
+              memory and blurs the pole rows.
+     model    NOT LOADED HERE. The entry carries a url and nothing else; the
+              map holds that url as a plain string and core/models.js fetches
+              it lazily when something actually wants the mesh. A GLB is
+              megabytes and blocks nothing at boot, which is the whole point.
+              Read it with `assets.url(id)`, never `assets.get(id)`.
    ============================================================ */
 import * as THREE from 'three';
 
@@ -59,8 +68,15 @@ export async function loadAssets(manifestUrl = 'assets/manifest.json') {
   const jobs = [];
   for (const id of Object.keys(manifest)) {
     const spec = manifest[id] || {};
-    if (spec.kind === 'layers') jobs.push(loadLayers(base, spec).then(t => out.set(id, t)));
-    else jobs.push(loadOne(base + spec.url, spec.kind).then(t => out.set(id, t)));
+    if (spec.kind === 'model') {
+      // A url, resolved against the manifest, and no request. models.js does
+      // the fetching; a missing file is its problem and its fallback.
+      if (spec.url) out.set(id, base + spec.url);
+    } else if (spec.kind === 'layers') {
+      jobs.push(loadLayers(base, spec).then(t => out.set(id, t)));
+    } else {
+      jobs.push(loadOne(base + spec.url, spec.kind).then(t => out.set(id, t)));
+    }
   }
   await Promise.all(jobs);
   return out;
@@ -84,6 +100,16 @@ async function loadOne(url, kind) {
   if (!img) return null;
   const t = new THREE.Texture(img);
   t.colorSpace = THREE.SRGBColorSpace;
+  if (kind === 'equirect') {
+    t.mapping = THREE.EquirectangularReflectionMapping;
+    t.wrapS = THREE.RepeatWrapping;          // the seam is a real wrap in longitude
+    t.wrapT = THREE.ClampToEdgeWrapping;
+    t.generateMipmaps = false;
+    t.minFilter = THREE.LinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.needsUpdate = true;
+    return t;
+  }
   const repeat = kind === 'tile';
   t.wrapS = t.wrapT = repeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
   t.generateMipmaps = true;
@@ -234,12 +260,23 @@ function reexpose(d) {
    ------------------------------------------------------------------ */
 export class Assets {
   constructor(map) { this.map = map || new Map(); }
-  /** The texture for `id`, or null. Callers must handle null. */
-  get(id) { return this.map.get(id) || null; }
+  /** The texture for `id`, or null. Callers must handle null.
+      A `model` entry is a url string and deliberately does NOT answer here —
+      handing a string to something expecting a Texture fails deep inside
+      three, a long way from the manifest typo that caused it. */
+  get(id) {
+    const v = this.map.get(id);
+    return (v && typeof v !== 'string') ? v : null;
+  }
+  /** The relative url for a `model` entry, or null. For core/models.js. */
+  url(id) {
+    const v = this.map.get(id);
+    return typeof v === 'string' ? v : null;
+  }
   /** True if anything at all loaded — for a one-line boot log. */
   get any() { return [...this.map.values()].some(Boolean); }
   dispose() {
-    for (const t of this.map.values()) if (t) t.dispose();
+    for (const t of this.map.values()) if (t && typeof t !== 'string') t.dispose();
     this.map.clear();
   }
 }

@@ -18,3 +18,10 @@ Thumbs.db
 # A real CLAUDE.md for this project should be hand-written.
 AGENTS.md
 CLAUDE.md
+
+# Sandscape design references, downloaded by `sandscape pull` into the repo
+# root and assets/. They are project media on the platform, not game assets —
+# nothing in src/ loads them and assets/manifest.json does not list them.
+# Left on disk so a later push does not delete them server-side.
+/mood_*.png
+/assets/key_art_*.png
