@@ -450,24 +450,51 @@ head('6. LOOK — manual orbit, auto-centre timing, zoom limits, invertY');
 /* ============================================================
    7 — DRIFT READ
    ============================================================ */
-head('7. DRIFT — the boom follows travel, so a slide shows the car rotated');
+head('7. DRIFT — the boom follows travel, bounded by the nose cone');
 {
+  /* Rule 3 with a limit on it. The boom still aims down the travel heading,
+     which is what draws the slide — but only out to rig.noseCone off the nose.
+     Past that the shot stops rotating and the CAR rotates in frame instead, so
+     a long committed drift can never walk the camera round onto the flank.
+     Both halves are gated: under the cone travel still wins, over it the cone
+     holds, and neither may quietly become the other. */
   const cam = makeCam();
   const rig = new CameraRig(cam, flat);
-  const v = new MockVehicle();
-  const slipDeg = 25, trav = 0.0;
-  v.heading = trav + slipDeg * Math.PI / 180;
-  v.vel.set(Math.sin(trav) * 28, 0, Math.cos(trav) * 28);
-  v._accelLat = 12; v.steerNorm = 0.7;
-  v.step(DT, flat); rig.snapBehind(v);
-  for (let i = 0; i < 240; i++) { v.step(DT, flat); v.pos.x = 0; v.pos.z = 0; rig.update(DT, v, look()); }
-  const yawErrTravel = Math.abs(((rig.yaw - trav + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * 180 / Math.PI;
-  const yawErrNose = Math.abs(((rig.yaw - v.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * 180 / Math.PI;
-  info(`held ${slipDeg}° of slip: boom is ${f(yawErrTravel, 2)}° off travel, ${f(yawErrNose, 2)}° off the nose`);
-  ok('boom settles on the travel heading, not the nose',
-    yawErrTravel < 3 && yawErrNose > slipDeg - 4, `${f(yawErrTravel, 2)}° / ${f(yawErrNose, 2)}°`);
+  const coneDeg = rig.noseCone * 180 / Math.PI;
+  const settle = (slipDeg) => {
+    const v = new MockVehicle();
+    const trav = 0.0;
+    v.heading = trav + slipDeg * Math.PI / 180;
+    v.vel.set(Math.sin(trav) * 28, 0, Math.cos(trav) * 28);
+    v._accelLat = 12; v.steerNorm = 0.7;
+    v.step(DT, flat); rig.snapBehind(v);
+    for (let i = 0; i < 240; i++) { v.step(DT, flat); v.pos.x = 0; v.pos.z = 0; rig.update(DT, v, look()); }
+    const d = (a, b) => Math.abs(((a - b + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * 180 / Math.PI;
+    return { travel: d(rig.yaw, trav), nose: d(rig.yaw, v.heading) };
+  };
+
+  info(`nose cone is ${f(coneDeg, 2)}°`);
+
+  // (a) A slide INSIDE the cone is untouched: the boom sits on travel.
+  const small = 8;
+  const a = settle(small);
+  info(`held ${small}° of slip (inside the cone): boom is ${f(a.travel, 2)}° off travel, ${f(a.nose, 2)}° off the nose`);
+  ok('a small slide still puts the boom on the travel heading',
+    a.travel < 3 && a.nose > small - 4, `${f(a.travel, 2)}° / ${f(a.nose, 2)}°`);
+
+  // (b) A slide PAST the cone is clamped — this is the "camera orbits me" fix.
+  const big = 45;
+  const b = settle(big);
+  info(`held ${big}° of slip (past the cone): boom is ${f(b.travel, 2)}° off travel, ${f(b.nose, 2)}° off the nose`);
+  ok('a big slide is held at the cone, not carried round to travel',
+    b.nose <= coneDeg + 1.5 && b.travel > big - coneDeg - 2,
+    `${f(b.nose, 2)}° off nose (cone ${f(coneDeg, 2)}°)`);
+  // …and the car must still visibly rotate in frame, or the drift stopped reading.
+  ok('the slide still reads — the car is rotated in frame',
+    b.travel > 20, `${f(b.travel, 2)}° of car rotation on screen`);
 
   // Reversing must not swing the camera round to stare at the bonnet.
+  const v = new MockVehicle();
   v.heading = 0; v.vel.set(0, 0, -4); v._accelLat = 0; v.steerNorm = 0;
   v.step(DT, flat); rig.snapBehind(v);
   for (let i = 0; i < 240; i++) { v.step(DT, flat); v.pos.z = 0; rig.update(DT, v, look()); }

@@ -84,6 +84,25 @@ const CH = {
                                 //   over from the nose to the direction of travel.
   travelLo: 1.5, travelHi: 6.5, // m/s over which boom yaw hands over from nose to travel.
 
+  /* ---- the nose cone (rule 3, bounded) ----
+     Rule 3 is right about WHY the boom follows travel and wrong about how far
+     it may go. This car carries real slip — a committed drift runs 30-45° and
+     a throttle-on slide holds it for the whole corner — and a boom that tracks
+     the velocity heading faithfully swings that far around the flank and stays
+     there. From the seat that is not "the drift reads", it is the camera
+     orbiting the car mid-corner, and it costs you the one thing the shot is
+     for: seeing where the road goes next.
+     So travel still aims the boom, inside a cone around the nose. Under the
+     cone nothing changes at all; past it the shot stops rotating and the car
+     rotates inside the frame instead — which is the drift, drawn by the car
+     rather than by the lens. The cone opens to a full circle in the air, where
+     the nose is meaningless (the car may be mid-barrel-roll and travel is the
+     only honest heading), and the tumble latch below still overrides both. */
+  noseCone: 0.20,         // rad — 11.5°, the most the boom may sit off the nose
+                          //   on the ground. Tune with rig.noseCone; 0 pins the
+                          //   camera dead astern, Math.PI restores pure rule 3.
+  noseConeAir: Math.PI,   // rad — no cone at all once fully airborne.
+
   yawHz: 1.91,            // Hz — critically damped boom yaw. See note in _chase().
   yawAirMul: 0.55,        // the same spring, softened while airborne.
 
@@ -212,6 +231,7 @@ export class CameraRig {
     this.pitch = CH.pitch0;       // rad, boom elevation over the pivot
     this.dist = CH.dist;          // m, zoom-adjusted base boom length
     this.yawHz = CH.yawHz;        // public: the one knob for "how tight is the follow"
+    this.noseCone = CH.noseCone;  // public: and the one for "how far off astern may it get"
     this._yawVel = 0;
 
     /* ---- manual look, as offsets on top of the auto boom ---- */
@@ -494,6 +514,24 @@ export class CameraRig {
     );
     const dl = _dir.lengthSq();
     let yawTarget = dl > 1e-6 ? Math.atan2(_dir.x, _dir.z) : this.yaw;
+
+    /* Bound it to the nose cone (CH.noseCone). This is a clamp on the TARGET,
+       not on the boom: the spring downstream is untouched, so the approach to
+       the cone edge is the same filtered move as every other heading change
+       here and hitting the limit mid-drift reads as the shot settling, not as
+       a stop. Clamping the target is also what keeps the limit honest — clamp
+       `this.yaw` after the spring and the spring integrates against a wall,
+       which is how a camera gets the sticky feel this file spends 700 lines
+       avoiding. Low speed needs no special case: travelW is already 0 there,
+       so the target IS the nose and the offset is zero. */
+    const cone = this.noseCone + (CH.noseConeAir - this.noseCone) * this._air;
+    if (cone < Math.PI) {
+      const noseYaw = Math.atan2(_fwd.x, _fwd.z);
+      const off = wrapPi(yawTarget - noseYaw);
+      if (off > cone) yawTarget = wrapPi(noseYaw + cone);
+      else if (off < -cone) yawTarget = wrapPi(noseYaw - cone);
+    }
+
     /* …and none of that survives a spin. Nose and travel both sweep the full
        circle in a crash, so while the tumble blend is up the target is the
        heading the boom already had — a hard hold, not a weighted one, because

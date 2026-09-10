@@ -288,9 +288,18 @@ function sharpen(mat, aniso) {
     _sharpened.add(t);
     t.generateMipmaps = true;
     t.minFilter = THREE.LinearMipmapLinearFilter;
-    // no renderer, no capability query, and no way to know what is safe — so
-    // the mips still happen and the anisotropy silently does not
-    if (aniso > 1) t.anisotropy = Math.min(8, aniso);
+    /* no renderer, no capability query, and no way to know what is safe — so
+       the mips still happen and the anisotropy silently does not.
+       The ceiling is the GPU's own number, not a constant. A carcass atlas is
+       1024² stretched over a whole machine, so its texel density is the lowest
+       of any surface in the game, and the body panels are read at exactly the
+       grazing angles anisotropy exists for — from directly astern, most of the
+       car is nearly edge-on to the eye. That is the case where 8 and 16 taps
+       differ visibly, and it is the case the chase camera is in for the entire
+       race. `aniso` is already the capability query's answer (16 on anything
+       current, 1 where the extension is missing), so the old Math.min(8, …)
+       was throwing away half the sharpness the hardware was offering. */
+    if (aniso > 1) t.anisotropy = aniso;
     t.needsUpdate = true;
   }
 }
