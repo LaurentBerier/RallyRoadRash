@@ -187,8 +187,15 @@ function elevStrip(g, elev, W, H, skin) {
  * @param canvas  the card's <canvas class="stage-art">
  * @param def     the track module's default export
  * @param locked  true if the player has not earned it
- * @param opts    { art: THREE.Texture|null, elev: Float32Array|null }
- *                Both optional and both usually absent — see the header.
+ * @param opts    { art: THREE.Texture|null, elev: Float32Array|null,
+ *                  mapOnly: boolean }
+ *                All optional; `art` and `elev` are usually absent — see the
+ *                header. `mapOnly` refuses the photograph even when one was
+ *                passed: the stage-select hero already IS that painting at
+ *                full size, so the map drawn over it wants the theme gradient
+ *                and the contour rings, which is exactly the no-art branch
+ *                below. Everything after the backdrop is identical either way,
+ *                so the card path is untouched when the flag is absent.
  */
 export function drawStage(canvas, def, locked, opts) {
   const g = canvas.getContext('2d');
@@ -202,7 +209,7 @@ export function drawStage(canvas, def, locked, opts) {
      theme gradient this card has always used. The art is dimmed hard and
      desaturated toward the theme wash, because everything that follows is
      line work and a photograph at full contrast eats all of it. ---- */
-  const img = artImage(o.art);
+  const img = o.mapOnly ? null : artImage(o.art);
   if (img) {
     // cover-fit: never letterbox, never distort
     const s = Math.max(W / img.width, H / img.height);

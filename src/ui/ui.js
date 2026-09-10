@@ -160,6 +160,7 @@ export class UI {
     this._flushT = 0;
     this._artSrc = '';                // last loading-screen art, so we set it once
     this._vehArtSrc = '';             // and the same for the garage hero
+    this._trackArtSrc = '';           // and for the stage-select hero
 
     this.el = {
       boot: $('boot'), bootBar: $('bootBar'), bootMsg: $('bootMsg'), bootArt: $('bootArt'),
@@ -171,6 +172,7 @@ export class UI {
       garageSub: $('garageSub'),
       trackGrid: $('trackGrid'), tracksNote: $('tracksNote'), tracksNext: $('tracksNext'),
       tracksChampion: $('tracksChampion'), tracksSub: $('tracksSub'),
+      tracksHero: $('tracksHero'), tracksDetail: $('tracksDetail'),
       garageGrid: $('garageGrid'), garageNote: $('garageNote'), garageStart: $('garageStart'),
       garageTrack: $('garageTrack'),
       garageHero: $('garageHero'), garageDetail: $('garageDetail'),
@@ -510,6 +512,16 @@ export class UI {
       this.el.tracksChampion.innerHTML = d.champion
         ? `<span class="chip gold">★ CHAMPION</span>` : '';
     }
+    this._renderTracksHero(list);
+
+    /* The strip. Same `.pick` markup contract as the garage's — a focusable
+       <button class="pick" data-focus data-id> — because the focus manager
+       walks [data-focus] purely by class and getBoundingClientRect()
+       geometry and knows nothing about layout.
+
+       The tagline, the chips and the lap times are NOT here any more. They
+       are one block over the hero, because saying them five times in five
+       boxes is what made this screen a spreadsheet. */
     const g = this.el.trackGrid;
     if (!g) return;
     g.innerHTML = '';
@@ -519,32 +531,15 @@ export class UI {
       b.className = 'pick' + (t.locked ? ' locked' : '') + (t.id === this._sel.trackId ? ' sel' : '');
       b.setAttribute('data-focus', '');
       b.dataset.id = t.id;
-      const laps = t.laps || 1;
-      const medal = t.medal ? `<span class="chip ${esc(t.medal)}">${esc(String(t.medal)).toUpperCase()}</span>` : '';
-      const times = (t.best != null || t.bestLap != null)
-        ? `<div class="pick-times">
-             <span><em>BEST</em>${fmtTime(t.best)}${t.bestItems ? ITEM_FLAG : ''}</span>
-             <span><em>LAP</em>${fmtTime(t.bestLap)}${t.bestLapItems ? ITEM_FLAG : ''}</span>
-           </div>` : '';
       const def = TRACKS.find(x => x.id === t.id) || null;
-      /* The chip row is derived from the track schema, so a wave-6 stage that
-         declares banks, whoops, pads, routes, a difficulty and named set
-         pieces advertises all of them, and a stage written before §6.1 lands
-         produces exactly the chips this card had before. */
-      const chips = def ? stageChips(def) : [];
-      if (t.locked && t.lockHint) chips.push({ text: t.lockHint, kind: 'info' });
-      const bonus = !!(t.bonus || (def && def.bonus));
-      b.classList.toggle('bonus', bonus);
-      b.innerHTML = `
-        <div class="pick-top">
-          <span class="pick-name">${esc(t.name || t.id)}</span>
-          ${t.locked ? `<span class="lock"><b>&#128274;</b>LOCKED</span>` : medal}
-        </div>
-        <canvas class="stage-art" width="440" height="252" aria-hidden="true"></canvas>
-        <div class="pick-tag">${esc(t.tagline || '')}</div>
-        <div class="pick-meta">${chips.map(c =>
-        `<span class="chip${c.kind ? ' ' + c.kind : ''}">${esc(c.text)}</span>`).join('')}</div>
-        ${times}`;
+      b.classList.toggle('bonus', !!(t.bonus || (def && def.bonus)));
+      const medal = t.medal ? `<span class="chip ${esc(t.medal)}">${esc(String(t.medal)).toUpperCase()}</span>` : '';
+      b.innerHTML =
+        `<canvas class="stage-art" width="360" height="206" aria-hidden="true"></canvas>
+         <div class="pick-top">
+           <span class="pick-name">${esc(t.name || t.id)}</span>
+           ${t.locked ? `<span class="lock"><b>&#128274;</b>LOCKED</span>` : medal}
+         </div>`;
       b.addEventListener('click', () => this._pickTrack(t));
       g.appendChild(b);
       const cv = b.querySelector('.stage-art');
@@ -553,6 +548,72 @@ export class UI {
       }
     }
     this._syncTrackFoot(list);
+  }
+
+  /**
+   * The hero: the selected stage's key art full-bleed, with its name, its
+   * chips, its records and the whole lap drawn big over the dark left third.
+   *
+   * Same two-layer contract as _renderGarageHero and the same reasons. The
+   * BACKDROP is a CSS background-image written only when the URL actually
+   * changes, so re-rendering does not make the browser re-decode a 150 KB
+   * JPEG; with no art the `has-art` class stays off and styles.css draws a
+   * per-theme gradient instead, which is why `data-theme` is set either way.
+   * The MAP is drawn by the same `drawStage` the thumbnails use, with the
+   * photograph turned off — it is line work over a dark panel at that size,
+   * and it never depends on an asset.
+   */
+  _renderTracksHero(list) {
+    const cur = list.find(t => t.id === this._sel.trackId) || list[0] || null;
+    const def = cur ? (TRACKS.find(x => x.id === cur.id) || null) : null;
+
+    const el = this.el.tracksHero;
+    if (el) {
+      el.dataset.theme = (def && def.theme) || 'training';
+      const img = artImage(this._stageArt(cur && cur.id));
+      const src = img && img.nodeName === 'IMG' ? img.src : '';
+      if (src !== this._trackArtSrc) {
+        this._trackArtSrc = src;
+        el.style.backgroundImage = src ? `url("${src}")` : '';
+        el.classList.toggle('has-art', !!src);
+      }
+    }
+
+    const host = this.el.tracksDetail;
+    if (!host) return;
+    if (!cur) { host.innerHTML = ''; return; }
+    host.classList.toggle('locked', !!cur.locked);
+
+    const medal = cur.medal
+      ? `<span class="chip ${esc(cur.medal)}">${esc(String(cur.medal)).toUpperCase()}</span>` : '';
+    /* The chip row is derived from the track schema, so a wave-6 stage that
+       declares banks, whoops, pads, routes, a difficulty and named set pieces
+       advertises all of them, and a stage written before §6.1 produces exactly
+       the chips this screen had before. */
+    const chips = def ? stageChips(def) : [];
+    const times = (cur.best != null || cur.bestLap != null)
+      ? `<div class="pick-times">
+           <span><em>BEST</em>${fmtTime(cur.best)}${cur.bestItems ? ITEM_FLAG : ''}</span>
+           <span><em>LAP</em>${fmtTime(cur.bestLap)}${cur.bestLapItems ? ITEM_FLAG : ''}</span>
+         </div>` : '';
+
+    host.innerHTML =
+      `<div class="pick-top">
+         <span class="pick-name">${esc(cur.name || cur.id || '')}</span>
+         ${cur.locked ? `<span class="lock"><b>&#128274;</b>LOCKED</span>` : medal}
+       </div>
+       <div class="pick-tag">${esc(cur.tagline || '')}</div>
+       <div class="pick-meta">${chips.map(c =>
+        `<span class="chip${c.kind ? ' ' + c.kind : ''}">${esc(c.text)}</span>`).join('')}</div>
+       <canvas class="track-map" width="560" height="320" aria-hidden="true"></canvas>
+       ${times}` +
+      (cur.locked && cur.lockHint
+        ? `<div class="pick-meta"><span class="chip info">${esc(cur.lockHint)}</span></div>` : '');
+
+    const cv = host.querySelector('.track-map');
+    if (cv && def) {
+      drawStage(cv, def, cur.locked, { elev: cur.elev || def.elev, mapOnly: true });
+    }
   }
 
   _pickTrack(t) {
@@ -565,8 +626,14 @@ export class UI {
     this._sfx('tick');
     const g = this.el.trackGrid;
     if (g) for (const c of g.children) c.classList.toggle('sel', c.dataset.id === t.id);
+    /* The hero IS the selection now, so it has to follow it. Only the hero:
+       re-rendering the strip would rebuild the five buttons under the focus
+       ring and throw away the ring's element identity mid-press. */
+    this._renderTracksHero(this._trackList(this._data.tracks || {}));
     this._syncTrackFoot(this._trackList(this._data.tracks || {}));
-    // ARCHITECTURE §6.8: the menu backdrop swaps its sky from this.
+    /* ARCHITECTURE §6.8. The backdrop is not live on this screen any more, so
+       nothing swaps a sky from here — but main.js still reads App.trackId out
+       of it, and that is what the garage builds its sky from when you walk in. */
     this._emit({ type: 'preview', trackId: t.id });
   }
 

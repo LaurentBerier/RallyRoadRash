@@ -156,6 +156,14 @@ test('deep: props-check (the mass rule, the dynamic pool, sleep and reset)', () 
   run(['--experimental-loader', './dev/loader.mjs', 'dev/props-check.mjs']);
 });
 
+/* The one check in the suite that reads a STYLESHEET. The garage window is
+   four numbers in menuscene.js and the same rectangle in two styles.css
+   rules, and nothing at runtime can notice when they drift — see the file's
+   own header. */
+test('deep: menu-check (showroom rig, the garage window, screen fallbacks)', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/menu-check.mjs']);
+});
+
 /* Registered before src/game/tricks.js exists. The check is a stub that exits
    0 today and fails loudly the moment the module lands without real gates
    behind it — see dev/trick-check.mjs. */

@@ -119,6 +119,41 @@ body.menu3d .hero-veil{
   background:linear-gradient(90deg, rgba(6,6,9,.55) 0%, rgba(6,6,9,0) 55%, rgba(6,6,9,.30) 100%);
 }
 
+/* ---- the main menu is a POSTER (wave 10) ----
+   `body.hero-poster` is set by ui/menuscene.js for kind 'main' and nothing
+   else. The live turntable used to run behind this screen; it is the garage's
+   alone now, so what is left is one painting, full bleed, with the wordmark,
+   the career strip and the three buttons over it.
+
+   The scrim is the whole reason this works. `assets/art/menu-hero.jpg` is
+   painted with a dark, empty left third for exactly this, but GUARANTEEING
+   the contrast beats trusting a JPEG to keep agreeing about it — the same
+   argument `.garage-hero::after` makes, and the same reason it is a stack of
+   gradients rather than one: the left column holds the type, the bottom band
+   holds the hint line, and the middle of the frame is left alone because that
+   is where the painting is.
+
+   TUNED AGAINST THE REAL PAINTING, not guessed. `menu-hero.jpg` measures a
+   mean luma of 83/255 across its left third — but that average hides a bright
+   dust plume and a sun flare right where the strap line and the career strip
+   sit, and both were unreadable at the first cut's `.86 -> .30 at 34%`. These
+   stops are the garage's proven ramp: the text column runs to 44 % of the
+   frame at 1280, so the scrim holds past that and then falls away fast enough
+   that the rocket trail and the four machines are untouched. */
+body.hero-poster .hero-veil{
+  background:
+    repeating-linear-gradient(115deg, rgba(255,255,255,.020) 0 2px, transparent 2px 9px),
+    linear-gradient(0deg, rgba(6,6,9,.58) 0%, rgba(6,6,9,0) 28%),
+    linear-gradient(90deg, rgba(6,6,9,.90) 0%, rgba(6,6,9,.82) 22%,
+                          rgba(6,6,9,.52) 44%, rgba(6,6,9,.12) 66%,
+                          rgba(6,6,9,.26) 100%);
+}
+/* The tablet tier drops the whole hero to 30 % so a full-width plate can be
+   read over it. This screen has no plate — the hero IS the screen — so a
+   dimmed one is just a dim menu. The scrim above is what keeps the type
+   legible instead, and it is heavier below 620 px. */
+body.hero-poster .hero{opacity:1}
+
 /* ============================================================
    WORDMARK
    ------------------------------------------------------------
@@ -276,8 +311,6 @@ canvas.logo.big{max-width:640px}
    min(A%, Bpx) below is split instead into "A% up to the crossover, a flat
    Bpx above it" (crossover = B / (A/100)) — the same computed width at every
    viewport, just reached without the function Chromium chokes on. */
-#scr-tracks{--plate-w:62%}
-@media (min-width:1420px){ #scr-tracks{--plate-w:880px} }
 #scr-playbook,#scr-settings{--plate-w:76%}
 @media (min-width:1474px){ #scr-playbook,#scr-settings{--plate-w:1120px} }
 /* Over a live race: dim everything, no plate edge, no feathered mask —
@@ -295,6 +328,16 @@ canvas.logo.big{max-width:640px}
    an id selector in a later media query would otherwise win over this. */
 #scr-garage{--plate-w:100%}
 #scr-garage::before,#scr-garage::after{display:none}
+/* MAIN and TRACKS opt out for the same reason, since wave 10: both are now a
+   painting with type over it rather than a text column with a picture beside
+   it, so a .93-alpha gradient over the left half covers the thing the screen
+   exists to show. `.hero-veil` under body.hero-poster does the darkening on
+   MAIN and `.tracks-hero::after` does it on TRACKS.
+   --plate-w is left at 100% rather than removed because .scr-head/.scr-body/
+   .scr-foot read it as a max-width, and .main-wrap now carries its own cap. */
+#scr-main,#scr-tracks{--plate-w:100%}
+#scr-main::before,#scr-main::after,
+#scr-tracks::before,#scr-tracks::after{display:none}
 
 .scr-head,.scr-body,.scr-foot{max-width:var(--plate-w)}
 /* The medal and the best trick stack rather than fighting for one line. */
@@ -370,8 +413,13 @@ canvas.logo.big{max-width:640px}
    MAIN MENU
    ============================================================ */
 .screen.main{justify-content:center}
+/* Its OWN cap, not the plate's. --plate-w used to mean "the width of the text
+   column" here; with the plate gone (see #scr-main above) it is 100 % and
+   means nothing, so the wrap says how wide a menu wants to be: enough for the
+   wordmark and the career strip, narrow enough to sit inside the painting's
+   dark left third. */
 .main-wrap{
-  width:100%;max-width:var(--plate-w);margin:0;
+  width:min(560px,88vw);margin:0;
   padding:clamp(16px,4vh,40px) clamp(18px,3.4vw,44px);
 }
 .main-brand{margin-bottom:clamp(20px,5vh,54px)}
@@ -425,11 +473,13 @@ canvas.logo.big{max-width:640px}
 }
 
 /* ============================================================
-   CARD GRIDS — tracks + garage
+   CARDS — the shared `.pick` button
+   ------------------------------------------------------------
+   There is no card GRID left in this game. Both screens that had one are a
+   hero and a strip now (see TRACKS and GARAGE below); what survives is the
+   button itself, because the focus manager in ui.js walks [data-focus] by
+   class and geometry and every card in the game is one of these.
    ============================================================ */
-/* Stage select only now — the garage is a hero and a strip (see GARAGE
-   below), so the `.cars` variant this used to carry has no cards left. */
-.card-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(272px,1fr));align-content:start}
 
 /* Same chamfer and the same inset-ring rule as .btn — see the note there. */
 .pick{
@@ -523,6 +573,156 @@ canvas.logo.big{max-width:640px}
 .stat .bar{height:7px;background:rgba(255,255,255,.09);border-radius:2px;overflow:hidden}
 .stat .bar i{display:block;height:100%;background:var(--acc);transform-origin:left;border-radius:2px}
 .stat.neutral .bar i{background:var(--fg-3)}
+
+/* ============================================================
+   STAGE SELECT — full-bleed hero + stage strip
+   ------------------------------------------------------------
+   The same shape as the GARAGE below, deliberately: one stage full-bleed,
+   its name and numbers and the whole lap over the dark left third, five
+   thumbnails along the bottom to change it.
+
+   ONE DIFFERENCE, AND IT DRIVES THE SCRIM. The four vehicle paintings were
+   commissioned with a dark empty left third for exactly this. The five STAGE
+   paintings were not — they predate the layout by three waves and were
+   composed for a 272 px card, so canyon has a sunburst top-right and lit rock
+   on the LEFT, and only forest happens to have a dark edge where the type
+   goes. Re-rolling five paintings to add a dark side is 50 coins to solve
+   what a gradient solves for nothing, so the scrim here is heavier than the
+   garage's and it is not optional.
+
+   THREE LAYERS, EVERY ONE DEGRADING ON ITS OWN (rename assets/ aside and all
+   three still draw, with no console errors):
+     hero        key art -> the per-theme gradient in `[data-theme]` below
+     thumbnails  key art -> ui/cards.js's procedural lap drawing
+     the big map never reads an asset at all — it is `drawStage` with the
+                 photograph refused (`mapOnly`), which is the branch the cards
+                 have always used on a normal install.
+   ============================================================ */
+.tracks-hero{
+  position:absolute;z-index:-1;pointer-events:none;overflow:hidden;
+  /* Full BLEED — the same env() cancellation as .garage-hero, same reason. */
+  top:calc(-1 * env(safe-area-inset-top));right:calc(-1 * env(safe-area-inset-right));
+  bottom:calc(-1 * env(safe-area-inset-bottom));left:calc(-1 * env(safe-area-inset-left));
+  background-position:center;background-size:cover;background-repeat:no-repeat;
+  background-color:#07070a;
+}
+/* One scrim per thing that has to stay readable: the heading across the top,
+   the strip along the bottom, and the name / chips / map / times down the
+   left. Heavier than the garage's on all three counts — see the note above. */
+.tracks-hero::after{
+  content:"";position:absolute;inset:0;
+  background:
+    linear-gradient(180deg,rgba(6,6,9,.90) 0%,rgba(6,6,9,.52) 10%,transparent 20%),
+    linear-gradient(0deg,rgba(6,6,9,.95) 0%,rgba(6,6,9,.74) 22%,rgba(6,6,9,.34) 38%,
+                          transparent 52%),
+    linear-gradient(90deg,rgba(6,6,9,.95) 0%,rgba(6,6,9,.90) 24%,rgba(6,6,9,.62) 46%,
+                          rgba(6,6,9,.14) 74%,rgba(6,6,9,.30) 100%);
+}
+/* No key art — the normal install. One gradient per theme, and the colours
+   are STAGE_SKIN's from ui/cards.js so the empty stage-select agrees with the
+   lap drawing on top of it. KEEP THE TWO IN SYNC: cards.js STAGE_SKIN. */
+.tracks-hero:not(.has-art){
+  background-image:
+    radial-gradient(58% 66% at 74% 34%, rgba(255,122,26,.16), transparent 64%),
+    repeating-linear-gradient(115deg, rgba(255,255,255,.022) 0 2px, transparent 2px 9px),
+    linear-gradient(160deg,#2b2f36 0%,#1a2026 58%,#070709 100%);
+}
+.tracks-hero:not(.has-art)[data-theme="canyon"]{
+  background-image:
+    radial-gradient(58% 66% at 74% 34%, rgba(255,122,26,.22), transparent 64%),
+    repeating-linear-gradient(115deg, rgba(255,255,255,.022) 0 2px, transparent 2px 9px),
+    linear-gradient(160deg,#3a2820 0%,#241a15 58%,#070709 100%);
+}
+.tracks-hero:not(.has-art)[data-theme="forest"]{
+  background-image:
+    radial-gradient(58% 66% at 74% 34%, rgba(79,208,122,.16), transparent 64%),
+    repeating-linear-gradient(115deg, rgba(255,255,255,.022) 0 2px, transparent 2px 9px),
+    linear-gradient(160deg,#243026 0%,#161f19 58%,#070709 100%);
+}
+.tracks-hero:not(.has-art)[data-theme="volcano"]{
+  background-image:
+    radial-gradient(58% 66% at 74% 34%, rgba(255,90,44,.24), transparent 64%),
+    repeating-linear-gradient(115deg, rgba(255,255,255,.022) 0 2px, transparent 2px 9px),
+    linear-gradient(160deg,#33211d 0%,#1d1211 58%,#070709 100%);
+}
+.tracks-hero:not(.has-art)[data-theme="thunder"]{
+  background-image:
+    radial-gradient(58% 66% at 74% 34%, rgba(196,107,255,.20), transparent 64%),
+    repeating-linear-gradient(115deg, rgba(255,255,255,.022) 0 2px, transparent 2px 9px),
+    linear-gradient(160deg,#2a2336 0%,#171325 58%,#070709 100%);
+}
+
+#scr-tracks .scr-body{display:flex;flex-direction:column;gap:clamp(10px,2.2vh,22px)}
+/* `1 0 auto` for the same reason the garage's detail block has it: on a short
+   screen this must push past the box and let .scr-body scroll rather than
+   squash a 320 px map into three pixels. */
+.tracks-detail{
+  flex:1 0 auto;display:flex;flex-direction:column;justify-content:center;
+  align-items:flex-start;gap:clamp(6px,1.4vh,14px);
+  width:min(46%,560px);min-width:0;
+}
+.tracks-detail .pick-top{flex-direction:column;align-items:flex-start;gap:8px}
+.tracks-detail .pick-name{
+  font-size:clamp(26px,3.8vw,48px);line-height:.96;letter-spacing:-.01em;
+  text-shadow:0 3px 0 rgba(0,0,0,.5),0 0 34px rgba(0,0,0,.65);
+}
+.tracks-detail .pick-tag{font-size:13px;line-height:1.5;color:var(--fg-2);max-width:46ch}
+.tracks-detail .chip{font-size:10.5px;padding:5px 9px}
+.tracks-detail .pick-times{border-top-color:var(--line-2);font-size:12px}
+/* The base rule pushes the times to the bottom of a CARD with margin-top:auto.
+   This is not a card: the block is centred, so auto opens a hole above the
+   times and pushes the map off the top of it. */
+.tracks-detail .pick-times{margin-top:0}
+.tracks-detail.locked .pick-name{color:var(--fg-2)}
+/* The lap, big. Same painter as the thumbnails and the same 1.75:1, because
+   most of these laps are roughly round and at 2.2:1 the fit is height-limited
+   with half the panel empty either side of the loop.
+
+   SIZED OFF THE VIEWPORT'S HEIGHT, not its width, and that is the whole
+   trick. Width is what this column has spare; HEIGHT is what it does not —
+   the name, the tagline, two rows of chips and the lap times are ~200 px
+   before the map draws a pixel, and the strip below needs another 150. At a
+   flat max-width:560px the map came out 310 px tall on a 720 p screen and
+   pushed the strip clean off the bottom. 26vh of height, times the aspect,
+   IS the width — so the map takes what the screen actually has and the three
+   blocks fit at 720 p without .scr-body having to scroll. */
+.track-map{
+  width:min(100%,560px,calc(26vh * 1.75));
+  height:auto;display:block;aspect-ratio:1.75/1;
+  border:1px solid var(--line-2);border-radius:2px;background:rgba(10,12,16,.72);
+}
+
+/* ---- the strip ----
+   Five across on a desktop. `grid-auto-flow:column` rather than auto-fill so
+   they stay one row: a five-card auto-fill wraps to 3+2 the moment the
+   viewport is under about 1400 px, and a stage strip that reflows into a
+   block is the grid this replaced. */
+.tracks-strip{
+  flex:0 0 auto;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);
+  gap:12px;width:min(100%,940px);align-items:stretch;
+}
+/* Opaquer than the garage's cards. Those sit on the bottom quarter of a
+   painting composed to go dark there; these sit wherever five stage paintings
+   happen to be brightest, and a .52 top on a lit sky is a card you cannot see
+   the edge of. */
+.tracks-strip .pick{
+  gap:0;padding:0 0 12px;min-height:0;
+  background:linear-gradient(180deg,rgba(12,13,18,.80),rgba(7,8,11,.94));
+}
+.tracks-strip .pick.sel{background:linear-gradient(180deg,rgba(255,122,26,.16),rgba(8,9,12,.92))}
+.tracks-strip .stage-art{border:none;border-bottom:1px solid var(--line);border-radius:0}
+.tracks-strip .pick-top{align-items:center;padding:9px 12px 0;gap:8px}
+.tracks-strip .pick-name{font-size:12.5px;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.tracks-strip .chip{font-size:9px;padding:3px 6px}
+/* Five stage names across a 940 px strip leaves ~150 px a card, and "SUNSTRIKE
+   CANYON" plus the word LOCKED does not fit in it — the name ellipsised to
+   "SUNSTRIK…", which is the half a player actually needs. So the strip keeps
+   the padlock and drops the word: font-size:0 on the wrapper collapses the
+   text node and the glyph gets its size back. Still in the accessibility tree,
+   still read aloud, and `.pick.locked{opacity:.44}` says it a third way. */
+.tracks-strip .lock{font-size:0;gap:0}
+.tracks-strip .lock b{font-size:12px}
 
 /* ============================================================
    GARAGE — full-bleed hero + machine strip
@@ -642,8 +842,15 @@ canvas.logo.big{max-width:640px}
    ONE EffectComposer renders every screen, so the machine cannot be given a
    viewport of its own. ui/menuscene.js `_frameGarage` aims the camera so it
    lands in this rectangle instead, and the hero is clipped away over it. The
-   polygon below IS `GARAGE_WIN` in that file — x 58%..100%, y 22%..58% — and
-   the two have to be edited together.
+   polygon below IS `GARAGE_WIN` in that file — x 50%..100%, y 12%..66% — and
+   the two have to be edited together. dev/menu-check.mjs reads this file as
+   text and fails if they disagree, which is the only thing that can: nothing
+   at runtime compares them.
+
+   IT GREW IN WAVE 10, from 42 % x 36 % of the frame to 50 % x 54 %. The old
+   window was a letterbox with a car in the middle of it and most of a
+   showroom floor cropped away, and half the point of lighting the thing
+   properly is being able to see it.
 
    LITERAL PERCENTAGES, NOT A CUSTOM PROPERTY. See the --plate-w note above:
    Chromium has already bitten this file once over a computed width on a
@@ -653,10 +860,10 @@ canvas.logo.big{max-width:640px}
    built. With it off there is nothing behind the hole but the menu hero, and
    a rectangle of a DIFFERENT picture punched into this one reads as a bug. */
 body.menu3d #scr-garage .garage-hero{
-  clip-path:polygon(0 0,100% 0,100% 22%,58% 22%,58% 58%,100% 58%,100% 100%,0 100%);
+  clip-path:polygon(0 0,100% 0,100% 12%,50% 12%,50% 66%,100% 66%,100% 100%,0 100%);
 }
 .garage-inset{
-  position:absolute;left:58%;right:0;top:22%;bottom:42%;
+  position:absolute;left:50%;right:0;top:12%;bottom:34%;
   display:none;pointer-events:none;
   border-left:1px solid rgba(255,255,255,.14);
   border-top:1px solid rgba(255,255,255,.10);
@@ -1302,14 +1509,20 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
    ============================================================ */
 @media (max-width:1099px){
   .hud{--u:.94px}
-  /* The hero has less room to be worth looking at; the plate takes more. */
+  /* The hero has less room to be worth looking at; the plate takes more.
+     MAIN, TRACKS and GARAGE are absent on purpose: all three are a painting
+     with type over it and have no plate to widen. */
   .screen{--plate-w:58%}
-  #scr-tracks{--plate-w:72%}
   #scr-playbook,#scr-settings{--plate-w:88%}
   /* The hero has less width to give away, so the text column takes more of
-     it and the strip follows the column rather than the viewport. */
-  .garage-detail{width:min(50%,480px)}
+     it and the strip follows the column rather than the viewport.
+     The garage's column goes the other way — DOWN from 50 % — because the
+     live window now starts at 50 % of the frame and a text column that runs
+     past it puts the name under the machine. */
+  .garage-detail{width:min(46%,460px)}
   .garage-strip{width:min(100%,760px)}
+  .tracks-detail{width:min(52%,500px)}
+  .tracks-strip{width:min(100%,860px)}
   .settings-cols{grid-template-columns:1fr}
   .results-grid{grid-template-columns:1fr}
   .podium{min-height:170px}
@@ -1320,11 +1533,10 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   .hud{--u:.90px}
   /* Below here the plate is the whole screen: a 46 % column on a phone is a
      column of hyphens. The hero stays, dimmed, as a backdrop under it. */
-  .screen,#scr-tracks,#scr-playbook,#scr-settings{--plate-w:100%}
+  .screen,#scr-playbook,#scr-settings{--plate-w:100%}
   .screen::after{display:none}
   .screen::before{-webkit-mask-image:none;mask-image:none}
   .hero{opacity:.30}
-  .card-grid{grid-template-columns:1fr 1fr}
   .class-head,.class-row{grid-template-columns:38px minmax(0,1fr) 80px 80px 54px;font-size:11px}
   .pb-items{grid-template-columns:1fr}
   .pb-ctl{grid-template-columns:1fr}
@@ -1338,6 +1550,20 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   .garage-detail .pick-name{font-size:clamp(26px,6vw,40px)}
   .garage-detail .stats{max-width:none}
   .garage-strip{width:100%}
+
+  /* ---- stage select: same fold, same reason ---- */
+  .tracks-detail{width:100%;gap:9px}
+  .tracks-detail .pick-name{font-size:clamp(24px,5.6vw,38px)}
+  .tracks-strip{width:100%}
+  /* Lighter than the garage's fold. The garage's backdrop is a painting of the
+     machine you already see 3D; this one is the STAGE, and on a phone it is
+     the only look at it you get — scrimmed to .88/.94 the painting went black
+     and the screen was the dark plate this wave replaced. */
+  .tracks-hero::after{
+    background:
+      linear-gradient(90deg,rgba(6,6,9,.84) 0%,rgba(6,6,9,.56) 52%,rgba(6,6,9,.46) 100%),
+      linear-gradient(0deg,rgba(6,6,9,.92) 0%,rgba(6,6,9,.48) 34%,rgba(6,6,9,.24) 100%);
+  }
   .garage-hero::after{
     background:
       linear-gradient(90deg,rgba(6,6,9,.86) 0%,rgba(6,6,9,.60) 52%,rgba(6,6,9,.52) 100%),
@@ -1349,8 +1575,25 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
 
 /* ---- phone-ish width ---- */
 @media (max-width:620px){
-  .card-grid{grid-template-columns:1fr}
   .scr-head{flex-direction:column;align-items:flex-start;gap:6px}
+  /* The poster is the whole screen on a phone and the wordmark sits over the
+     middle of it, not over a reserved third — so the scrim stops being a left
+     column and becomes a top-to-bottom wash. */
+  body.hero-poster .hero-veil{
+    background:
+      repeating-linear-gradient(115deg, rgba(255,255,255,.020) 0 2px, transparent 2px 9px),
+      linear-gradient(180deg, rgba(6,6,9,.72) 0%, rgba(6,6,9,.52) 42%, rgba(6,6,9,.82) 100%);
+  }
+  /* ---- stage select on a phone: the strip becomes a scroller ----
+     Five cards side by side on a 390 px screen are 70 px wide, which is a row
+     of stamps. Same treatment, same `.pick` markup and the same touch-action
+     note as the garage strip below. */
+  .tracks-strip{
+    display:flex;overflow-x:auto;overflow-y:hidden;gap:10px;
+    touch-action:pan-x;scroll-snap-type:x proximity;padding-bottom:4px;
+  }
+  .tracks-strip .pick{flex:0 0 clamp(148px,42vw,190px);scroll-snap-align:center}
+  .tracks-detail .pick-tag{font-size:12px}
   /* ---- garage on a phone: the strip becomes a scroller ----
      Four cards side by side on a 390 px screen are 88 px wide, which is a
      row of stamps. A flex row that overflows keeps them legible and keeps
@@ -1428,7 +1671,18 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
      the two sit side by side instead — the same left-text / right-machines
      reading as the desktop layout, folded into a landscape phone. The
      paragraph goes: it is the one line here that is flavour, not fact. */
-  #scr-garage .scr-body{flex-direction:row;align-items:stretch;gap:14px}
+  #scr-garage .scr-body,#scr-tracks .scr-body{flex-direction:row;align-items:stretch;gap:14px}
+  .tracks-detail{flex:0 0 auto;width:min(48%,400px);gap:6px}
+  .tracks-detail .pick-tag{display:none}
+  .tracks-detail .pick-name{font-size:clamp(20px,4.4vh,30px)}
+  /* The map is the one thing here that survives losing half the height: it is
+     what the screen is FOR, and at 1.75:1 it still fits beside the strip. The
+     26vh the desktop rule budgets is 104 px on a 400 px-tall landscape phone,
+     which is a postage stamp — the tagline and one row of chips are gone here,
+     so the map can have their height. */
+  .track-map{width:min(100%,320px,calc(42vh * 1.75))}
+  .tracks-strip{flex:1 1 auto;width:auto;align-content:center;
+    grid-auto-flow:row;grid-template-columns:1fr 1fr;grid-auto-columns:auto}
   .garage-detail{flex:0 0 auto;width:min(48%,400px);gap:8px}
   .garage-detail .pick-tag{display:none}
   .garage-detail .pick-name{font-size:clamp(22px,4.6vh,32px)}
@@ -1527,9 +1781,7 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
      `.screen`, so without it the main menu itself is the empty panel at
      1920×1080, not just settings/playbook. */
   .screen{--plate-w:42%}
-  #scr-tracks{--plate-w:56%}
   #scr-playbook,#scr-settings{--plate-w:66%}
-  .main-wrap{max-width:min(var(--plate-w),760px)}
   /* The garage keeps its full-width sheet — it has a painting behind it, not
      a text column — but the two things ON that sheet are capped, or at 1920
      the name is a billboard and the four thumbnails are 440 px posters that
@@ -1539,7 +1791,15 @@ body.touch-controls .z-speed{margin-right:calc(150px + env(safe-area-inset-right
   .garage-detail .pick-tag{font-size:14px}
   .garage-detail .stats{max-width:480px}
   .garage-strip{width:min(100%,1180px);gap:16px}
+  /* Stage select, same cap and the same reason — at 1920 the five thumbnails
+     grow into 370 px posters and stop being a strip. */
+  .tracks-detail{width:min(42%,660px)}
+  .tracks-detail .pick-name{font-size:clamp(42px,3.2vw,58px)}
+  .tracks-detail .pick-tag{font-size:14px}
+  /* The 26vh term still binds below about 1450 px of viewport height, which is
+     every monitor anyone has — this only opens up on a very tall one. */
+  .track-map{width:min(100%,660px,calc(26vh * 1.75))}
+  .tracks-strip{width:min(100%,1300px);gap:16px}
 }
-@media (min-width:1786px){ #scr-tracks{--plate-w:1000px} }
 @media (min-width:1810px){ .screen{--plate-w:760px} }
 @media (min-width:1940px){ #scr-playbook,#scr-settings{--plate-w:1280px} }

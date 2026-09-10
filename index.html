@@ -79,13 +79,28 @@
     </div>
   </section>
 
-  <!-- ---- track select ---- -->
+  <!-- ---- track select ----
+       Hero + strip, the same shape as the garage below and for the same
+       reason: five identical boxes each carrying a name, a tagline, four
+       chips, two lap times and a map said the same six things five times, so
+       nothing was said loudly.
+
+       #tracksHero MUST be the first child — it is the screen's backdrop at
+       z-index:-1 (.tracks-hero in styles.css) and it replaces the plate
+       #scr-tracks now opts out of. #trackGrid keeps its id (ui.js binds it)
+       and changes class only: it is the strip of five thumbnails now, and the
+       name, the chips, the times and the big lap map are one block over the
+       painting instead. -->
   <section id="scr-tracks" class="screen sheet hidden">
+    <div class="tracks-hero" id="tracksHero" aria-hidden="true"></div>
     <header class="scr-head">
       <div><h2>STAGE SELECT</h2><p class="scr-sub" id="tracksSub">Pick where you want to lose the back end.</p></div>
       <div class="scr-head-right" id="tracksChampion"></div>
     </header>
-    <div class="scr-body"><div class="card-grid" id="trackGrid"></div></div>
+    <div class="scr-body">
+      <div class="tracks-detail" id="tracksDetail"></div>
+      <div class="tracks-strip" id="trackGrid"></div>
+    </div>
     <footer class="scr-foot">
       <button class="btn ghost" data-focus data-act="tracks-back">BACK</button>
       <span class="foot-spacer"></span>

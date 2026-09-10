@@ -95,8 +95,9 @@ sky, floodlight towers and banners along the rim.
 |---|---|---|---|
 | Skyline panorama ×5 | `assets/sky/<theme>-skyline.jpg` | widest available | **No sun in frame** — the renderer draws the sun and the sky would fight it. Horizon ≈ 40 % up. Edges get mirrored and cross-faded at load, so the panorama wraps at any aspect. ≤ 2048×512. |
 | Ground tile ×6 | `assets/ground/<surface>.jpg` | 1:1 | DIRT, SAND, ROCK, MUD, GRASS, ROAD. "Seamless tileable texture, top-down, **flat even lighting, no shadows, no highlights**" — the renderer supplies the light, and any baked shadow tiles into a visible grid. 1024². |
-| Stage key art ×5 | `assets/art/<trackId>.jpg` | 16:9 | The signature set piece above. No text. 1280×720. |
-| Title key art ×1 | `assets/art/title.jpg` | 16:9 | Hero buggy mid-air over a canyon at golden hour. The one prompt that WANTS a vehicle. 1280×720. |
+| Stage key art ×5 | `assets/art/<trackId>.jpg` | 16:9 | The signature set piece above. No text. 1280×720. **Composed for a 272 px card, not for a screen** — wave 10 made them the stage-select backdrop, and none of the five reserves a dark side for type. `.tracks-hero::after` carries a heavier scrim than the garage's for exactly that reason; re-rolling five paintings to add one would cost 50 coins to fix what a gradient fixes for nothing. |
+| Title key art ×1 | `assets/art/title.jpg` | 16:9 | Hero buggy mid-air over a canyon at golden hour. Superseded as the menu backdrop by `menu-hero` — its buggy is the CLEAN pre-wasteland one, and the roster is rusted, spiked and launcher-equipped since wave 8. Kept as the fallback below `art/menu-hero`. 1280×720. |
+| Menu key art ×1 | `assets/art/menu-hero.jpg` | 16:9 | Wave 10. All four machines abreast out of a red canyon at golden hour, launchers on the roofs, one rocket trail overhead. Same painterly wasteland vocabulary as the four `veh-*` paintings. **The left third is asked for dark and empty in the prompt** — the wordmark, the career strip and the three buttons sit on it — and the scrim still guarantees it. 1600×900, JPEG q88, ~220 KB. |
 
 JPEG q ≈ 82; ≤ 3.5 MB for the whole set. Post-processing is done locally with
 `System.Drawing` — no new dependencies.

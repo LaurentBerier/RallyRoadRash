@@ -617,11 +617,35 @@ show(kind, { trackId, vehicleId, profile })   // 'main' | 'tracks' | 'garage'
 setTrack()   setVehicle()   update(dt, elapsed)   hide()   dispose()
 sky                                            // for projectSun
 resultsBurst(vfx, pos)
+GARAGE_WIN  SHOWROOM                           // exported constants
+buildShowroomRig(group, engine, theme)         // -> { key, rim } | null
+tuneShowroomRig(rig, engine, theme)            // re-floor after setLightTheme
+teardownShowroomRig(group, rig, engine, theme) // -> null
 ```
 
 `hide()`/`dispose()` **must dispose its `Sky` before `buildWorld` runs** — `Sky.dispose`
 restores fog and environment, and a menu sky left alive is the wrong IBL for the whole race.
 UI emits `{ type: 'preview', trackId?, vehicleId? }` on card selection.
+
+**The 3D half is the GARAGE and only the garage (wave 10).** `_wantLive()` returns false for
+every other kind, and `show()` re-evaluates it on every call, so walking into the garage
+builds and walking out tears down — through the path the LOW-tier / `motionFx 0` case has
+always used. `main` and `tracks` are DOM: each carries its own full-bleed painting inside the
+screen (`#heroArt` under `body.hero-poster`, and `.tracks-hero`), so `menuScene.live` is false
+on both and `main.js idle()` runs its own orbit as it does at LOW.
+
+**The showroom rig** is three-point lighting for the garage: a warm key, a cool rim coloured
+from the theme's `hemiSky`, and ONE-SIDED floors on `engine.sun` / `engine.fill` so the
+machine's exposure stops being decided by the last stage picked (stage `sunIntensity` runs
+1.55 → 2.95). `tuneShowroomRig` exists because `_makeSky` ends in `setLightTheme`, which
+writes the table's intensities straight over those floors. Neither rig light casts a shadow —
+`engine.sun` owns the only shadow map — so the machine is grounded by a painted contact
+shadow instead, which is also what grounds it on LOW, where shadows are off entirely.
+
+**`GARAGE_WIN` is one rectangle in three places**: these four numbers, the `clip-path` on
+`body.menu3d #scr-garage .garage-hero`, and the `.garage-inset` frame. Nothing at runtime can
+notice them drifting apart, so `dev/menu-check.mjs` reads `styles.css` as text and asserts
+they agree.
 
 ### 6.9 Items copy — `game/items.js` (P6 owns exactly three fields; P5 reads `ITEMS` read-only)
 
@@ -653,8 +677,10 @@ in that file moves.
 |---|---|---|
 | `sky/<theme>` | skyline panorama | P1 dome (`uSkyline`/`uSkylineOn`) — the procedural vista ring is the fallback and hides when a panorama is present |
 | `ground` | `DataArrayTexture`, layers DIRT SAND ROCK MUD GRASS ROAD | P1 terrain shader (`uGround`/`uGroundOn`), close-range detail faded out by 60 m, sampled per surface id |
-| `art/<trackId>` | 16:9 stage key art | P6 stage cards, race loading screen |
-| `art/title` | 16:9 title key art | P6 menu backdrop |
+| `art/<trackId>` | 16:9 stage key art | P6 stage-select hero + strip thumbnails, race loading screen |
+| `art/menu-hero` | 16:9 wasteland key art | P6 main-menu poster — the whole backdrop |
+| `art/title` | 16:9 title key art | fallback for `art/menu-hero`; the CSS gradient is the fallback for both |
+| `art/veh-<vehicleId>` | 16:9 machine key art | P6 garage hero + strip thumbnails |
 
 Every path must render correctly with the map empty. See hard rule 1.
 
