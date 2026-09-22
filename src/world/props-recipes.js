@@ -39,15 +39,15 @@ import * as THREE from 'three';
 export const RECIPES = {
   training: {
     accent: '#2ad2ff',
-    rock: 0x7a7166, dust: 0x8b8578,
+    rock: 0x94806a, dust: 0xb49b77,
     kinds: [
-      { id: 'cone', share: 0.21, min: 0.9, max: 1.5, solid: false, slope: 22, clear: 1.35, shadow: false },
-      { id: 'tyre', share: 0.16, min: 0.9, max: 1.4, solid: true, r: 0.62, slope: 18, clear: 1.5, shadow: false },
-      { id: 'drum', share: 0.10, min: 0.9, max: 1.2, solid: true, r: 0.42, slope: 16, clear: 1.6, shadow: true },
-      { id: 'crate', share: 0.08, min: 0.9, max: 1.3, solid: true, r: 0.55, slope: 14, clear: 1.7, shadow: true },
-      { id: 'bale', share: 0.07, min: 0.9, max: 1.15, solid: true, r: 0.72, slope: 16, clear: 1.7, shadow: true },
-      { id: 'bush0', share: 0.18, min: 0.6, max: 1.5, solid: false, slope: 34, clear: 1.4, shadow: false },
-      { id: 'rock2', share: 0.18, min: 0.3, max: 0.9, solid: false, slope: 34, clear: 1.6, shadow: false },
+      { id: 'cone', share: 0.035, min: 0.9, max: 1.2, solid: false, slope: 22, clear: 1.35, shadow: false },
+      { id: 'tyre', share: 0.045, min: 0.9, max: 1.4, solid: true, r: 0.62, slope: 18, clear: 1.5, shadow: false },
+      { id: 'drum', share: 0.03, min: 0.9, max: 1.2, solid: true, r: 0.42, slope: 16, clear: 1.6, shadow: true },
+      { id: 'crate', share: 0.03, min: 0.9, max: 1.3, solid: true, r: 0.55, slope: 14, clear: 1.7, shadow: true },
+      { id: 'bale', share: 0.02, min: 0.9, max: 1.15, solid: true, r: 0.72, slope: 16, clear: 1.7, shadow: true },
+      { id: 'rock0', share: 0.22, min: 0.8, max: 2.7, solid: true, r: 0.72, slope: 34, clear: 1.8, shadow: true },
+      { id: 'rock2', share: 0.60, min: 0.3, max: 0.9, solid: false, slope: 34, clear: 1.6, shadow: false },
       { id: 'scrap', share: 0.02, min: 0.8, max: 1.5, solid: true, r: 0.62, slope: 20, clear: 1.5, shadow: false }
     ]
   },
@@ -199,11 +199,11 @@ export const DRESSING = {
     ],
     centerpieces: [
       { id: 'training-conveyor', url: 'assets/models/heroes/training-conveyor.glb',
-        s: 390, lat: 44, yaw: 1.5708, scale: 8, size: 16, height: 12, r: 12, fallback: 'container' },
+        s: 195, lat: 58, yaw: 1.5708, scale: 8, size: 25, height: 22, r: 18, fallback: 'container' },
     ],
     heroModels: [
       { id: 'crusher', url: 'assets/models/heroes/training-hero.glb',
-        s: 300, lat: 32, yaw: -1.15, scale: 3.20, size: 10, height: 9, r: 7.2, fallback: 'container' },
+        s: 310, lat: 42, yaw: -1.15, scale: 3.20, size: 18, height: 15, r: 13, fallback: 'container' },
     ],
   },
   canyon: {
@@ -648,11 +648,24 @@ export function checkerTex() {
 }
 
 export function railTex(accent) {
-  return canvasTex(256, 32, (g, w, h) => {
-    g.fillStyle = '#dedbd2'; g.fillRect(0, 0, w, h);
+  return canvasTex(512, 96, (g, w, h) => {
+    g.fillStyle = '#a6a399'; g.fillRect(0, 0, w, h);
     g.fillStyle = accent;
-    for (let x = 0; x < w; x += 64) g.fillRect(x, 0, 32, h);
-    g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(0, h - 6, w, 6);
+    g.globalAlpha = 0.62;
+    for (let x = 0; x < w; x += 256) g.fillRect(x, 0, 100, h);
+    g.globalAlpha = 1;
+    let seed = 731;
+    const rand = () => ((seed = Math.imul(seed,1664525)+1013904223|0)>>>0)/4294967296;
+    for(let i=0;i<2100;i++) {
+      g.fillStyle = i%3 ? 'rgba(27,23,18,0.12)' : 'rgba(225,214,188,0.18)';
+      g.fillRect(rand()*w,rand()*h,1+rand()*5,1+rand()*2);
+    }
+    const dirt=g.createLinearGradient(0,0,0,h);
+    dirt.addColorStop(0,'rgba(10,8,5,0.03)');
+    dirt.addColorStop(0.58,'rgba(10,8,5,0.02)');
+    dirt.addColorStop(1,'rgba(40,28,14,0.55)');
+    g.fillStyle=dirt; g.fillRect(0,0,w,h);
+    g.fillStyle='rgba(220,216,199,0.4)';g.fillRect(0,1,w,2);
   });
 }
 

@@ -1,23 +1,21 @@
 {
-  "sky/training": { "url": "sky/training-skyline.webp", "kind": "color" },
-  "sky/canyon": { "url": "sky/canyon-skyline.webp", "kind": "color" },
-  "sky/forest": { "url": "sky/forest-skyline.webp", "kind": "color" },
-  "sky/volcano": { "url": "sky/volcano-skyline.webp", "kind": "color" },
-  "sky/thunder": { "url": "sky/thunder-skyline.webp", "kind": "color" },
+  "foliage/spruce": { "url": "foliage/spruce-bough.webp", "kind": "color" },
+  "foliage/scrub": { "url": "foliage/quarry-scrub.webp", "kind": "color" },
+  "terrain/cliff": { "url": "ground/cliff-v2.webp", "kind": "tile" },
 
   "ground": {
     "kind": "layers",
+    "seamless": [0, 1, 2, 3, 5],
     "layers": [
-      "ground/dirt.webp",
-      "ground/sand.webp",
-      "ground/rock.webp",
-      "ground/mud.webp",
+      "ground/soil-v2.webp",
+      "ground/sand-v2.webp",
+      "ground/cliff-v2.webp",
+      "ground/soil-v2.webp",
       "ground/grass.webp",
-      "ground/road.webp"
+      "ground/gravel-v2.webp"
     ]
   },
 
-  "env/training": { "url": "env/training-env.webp", "kind": "equirect" },
 
   "models/heroes/training-hero": { "url": "models/heroes/training-hero.glb", "kind": "model" },
   "models/heroes/canyon-hero": { "url": "models/heroes/canyon-hero.glb", "kind": "model" },

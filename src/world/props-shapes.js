@@ -13,7 +13,7 @@
    rock, a green pine, an orange cone — it belongs here.
    ============================================================ */
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeRNG, vnoise, fbm } from '../core/rng.js';
 
 /** Deterministic 0..1 from a world point. Cheap, uncorrelated on a lattice. */
@@ -42,9 +42,14 @@ export function boulderGeo(seed, detail = 2, squash = 0.76) {
     v.y *= squash;
     p.setXYZ(i, v.x, v.y, v.z);
   }
-  g.computeVertexNormals();
   g.deleteAttribute('uv');                              // triplanar in the shader
-  return g;
+  g.deleteAttribute('normal');
+  // Weld duplicated icosphere corners before recalculating normals. Computing
+  // them on the triangle soup gave every boulder a low-poly jewel finish.
+  const smooth = mergeVertices(g);
+  smooth.computeVertexNormals();
+  g.dispose();
+  return smooth;
 }
 
 /** A hoodoo: stacked resistant caps on a soft column, which is exactly how the
@@ -83,26 +88,36 @@ export function pineGeo(seed) {
     parts.push(g);
   };
   const trunk = new THREE.CylinderGeometry(0.065, 0.23, h * 0.85, 7, 1);
+  for(let i=0;i<trunk.attributes.uv.count;i++) trunk.attributes.uv.setXY(i,-1,0);
   trunk.translate(0, h * 0.425, 0);
   paint(trunk, 0x65513c, 0.22);
-  const tiers = 7;
-  for (let i = 0; i < tiers; i++) {
-    const t = i / (tiers - 1);
-    const r = (1.8 - t * 1.48) * (0.87 + rng()*0.23);
-    const ch = h * (0.26 - t*0.10);
-    const cone = new THREE.ConeGeometry(r, ch, 9, 1);
-    const pos = cone.attributes.position;
-    for (let j = 0; j < pos.count; j++) {
-      const x=pos.getX(j), y=pos.getY(j), z=pos.getZ(j);
-      const angle=Math.atan2(z,x);
-      const k=0.88 + 0.16*Math.sin(angle*5 + seed + i*1.7);
-      pos.setXYZ(j, x*k, y + (y < 0 ? Math.sin(angle*3+i)*ch*0.085 : 0), z*k);
+  // Open branch whorls leave sky between the limbs. The old stacked cones
+  // made every tree a solid Christmas-tree silhouette even at arm's length.
+  for (let i = 0; i < 13; i++) {
+    const t = i/12, y=h*(0.15+t*0.80), radius=(2.2-t*1.95)*(0.8+rng()*0.35);
+    const verts=[], uvs=[];
+    const branches=8;
+    for(let j=0;j<branches;j++) {
+      const a=j/branches*Math.PI*2+i*2.4+(rng()-0.5)*0.45;
+      const r=radius*(0.72+rng()*0.46), dx=Math.cos(a), dz=Math.sin(a);
+      const width=r*0.48, droop=0.25+rng()*0.48;
+      const root=[0,y+0.42,0], left=[dx*r*0.58-dz*width,y-droop,dz*r*0.58+dx*width];
+      const right=[dx*r*0.58+dz*width,y-droop,dz*r*0.58-dx*width];
+      const tip=[dx*r,y-droop*0.55,dz*r];
+      const ridge=[dx*r*0.55,y+0.17,dz*r*0.55];
+      const uvFor=new Map([[root,[0.5,0]],[left,[0,0.4]],[tip,[0.5,1]],[right,[1,0.4]],[ridge,[0.5,0.45]]]);
+      for(const tri of [[root,left,ridge],[left,tip,ridge],[tip,right,ridge],[right,root,ridge]]) {
+        for(const v of tri) { verts.push(...v); uvs.push(...uvFor.get(v)); }
+      }
     }
-    cone.rotateY(i*2.4);
-    cone.translate(Math.sin(i+seed)*0.10, h*(0.19+t*0.70)+ch*0.5, Math.cos(i)*0.08);
-    paint(cone, i%2 ? 0x294730 : 0x36543b, 0.36);
+    const branch=new THREE.BufferGeometry();
+    branch.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+    branch.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));
+    branch.setIndex(Array.from({length:verts.length/3},(_,i)=>i));
+    branch.computeVertexNormals();
+    paint(branch,i%2?0x253f2c:0x344c32,0.40);
   }
-  const g = finish(parts);
+  const g = finish(parts, true);
   g.userData.height = h;
   return g;
 }
@@ -190,23 +205,44 @@ export function railQuad(ax, ay, az, bx, by, bz, h) {
 }
 
 /** Merge, renormal, drop the uv. Every factory above ends the same way. */
-function finish(parts) {
+function finish(parts, keepUV = false) {
   const g = mergeGeometries(parts, false);
   for (const p of parts) p.dispose();
   g.computeVertexNormals();
-  g.deleteAttribute('uv');
+  if (!keepUV) g.deleteAttribute('uv');
   return g;
+}
+
+// The negative UV marks bark, so one instanced tree draw can keep its trunk
+// opaque while cutting the photographic needle silhouette out of its boughs.
+// Install on both the color and depth material to make shadows agree.
+export function patchFoliageMaterial(material) {
+  material.onBeforeCompile = sh => {
+    sh.fragmentShader=sh.fragmentShader.replace('#include <map_fragment>', `
+      #ifdef USE_MAP
+      if(vMapUv.x >= 0.0) {
+        vec4 needles=texture2D(map,vMapUv);
+        diffuseColor.rgb=needles.rgb*0.85;
+        diffuseColor.a*=needles.a;
+      }
+      #endif
+    `);
+  };
+  material.customProgramCacheKey=()=> 'rrr-foliage-v1';
+  return material;
 }
 
 /** Triplanar rock surface injected into a standard material: no UVs needed on
     an arbitrary lump, world-space so neighbouring rocks never repeat, and
     faded with distance so a pebble at 80 m is not a pixel-sized noise
     generator. */
-export function rockMaterial(color, dustCol) {
+export function rockMaterial(color, dustCol, rockTex = null) {
   const m = new THREE.MeshStandardMaterial({ color, roughness: 0.93, metalness: 0.0 });
+  if(rockTex) m.defines={ROCK_TEXTURE:1};
   const dc = new THREE.Color(dustCol);
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uDustCol = { value: new THREE.Vector3(dc.r, dc.g, dc.b) };
+    sh.uniforms.uRockTex = { value: rockTex };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vRkW; varying vec3 vRkN;')
       // After <begin_vertex> both `transformed` and `objectNormal` exist. The
@@ -226,6 +262,9 @@ export function rockMaterial(color, dustCol) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vRkW; varying vec3 vRkN; uniform vec3 uDustCol;
+        #ifdef ROCK_TEXTURE
+        uniform sampler2D uRockTex;
+        #endif
         float rkH(vec2 p){ p = fract(p*vec2(0.1031,0.1030)); p += dot(p,p.yx+33.33); return fract((p.x+p.y)*p.x); }
         float rkN2(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
           return mix(mix(rkH(i),rkH(i+vec2(1,0)),f.x), mix(rkH(i+vec2(0,1)),rkH(i+vec2(1,1)),f.x), f.y); }
@@ -241,13 +280,28 @@ export function rockMaterial(color, dustCol) {
           float coarse = rkTri(vRkW, rn, 1.7);
           float fine   = mix(0.5, rkTri(vRkW, rn, 8.0), fade);
           diffuseColor.rgb *= 0.72 + 0.34*coarse + 0.16*fine;
+          // Sedimentary seams and mineral inclusions belong to the rock,
+          // rather than a repeated UV stamp. Basalt gets the same fractures
+          // through its own dark palette.
+          float strata = sin(vRkW.y*3.2 + rkF(vRkW.xz*0.16)*2.0);
+          float seam = smoothstep(0.72,0.98,strata);
+          diffuseColor.rgb *= 1.0 - 0.20*seam;
+          diffuseColor.rgb *= 0.88 + 0.20*smoothstep(0.24,0.70,fine);
           // dust settles on anything facing up
           float up = smoothstep(0.15, 0.85, rn.y);
           diffuseColor.rgb = mix(diffuseColor.rgb, uDustCol, up*(0.22 + 0.28*coarse));
+          #ifdef ROCK_TEXTURE
+          vec3 tw=pow(abs(rn),vec3(4.0));tw/=max(dot(tw,vec3(1.0)),0.001);
+          vec3 scan=texture2D(uRockTex,vRkW.zy*0.14).rgb*tw.x
+            +texture2D(uRockTex,vRkW.xz*0.14).rgb*tw.y
+            +texture2D(uRockTex,vRkW.xy*0.14).rgb*tw.z;
+          float mineral=dot(scan,vec3(0.2126,0.7152,0.0722));
+          diffuseColor.rgb*=clamp(mineral*4.0,0.25,1.6);
+          #endif
         }`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor *= 0.84 + 0.24*rkTri(vRkW, normalize(vRkN), 3.0);`);
   };
-  m.customProgramCacheKey = () => 'rrr-rock-' + color.toString(16);
+  m.customProgramCacheKey = () => 'rrr-rock-' + color.toString(16) + (rockTex ? '-scan' : '');
   return m;
 }

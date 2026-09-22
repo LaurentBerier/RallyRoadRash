@@ -187,7 +187,10 @@ async function loadLayers(base, spec) {
       g.drawImage(img, 0, 0, S, S);
       const h = S * 0.5;
       let k = 1;
-      for (const [ox, oy] of [[h, 0], [0, h], [h, h]]) {
+      // The authored gravel is already a tile; averaging four copies erases
+      // its aggregate and the relief that the terrain shader derives from it.
+      const offsets = spec.seamless?.includes(i) ? [] : [[h, 0], [0, h], [h, h]];
+      for (const [ox, oy] of offsets) {
         g.globalAlpha = 1 / ++k;
         g.drawImage(img, ox - S, oy - S, S, S);
         g.drawImage(img, ox, oy - S, S, S);
@@ -207,6 +210,7 @@ async function loadLayers(base, spec) {
   }
 
   const t = new THREE.DataArrayTexture(data, S, S, N);
+  t.anisotropy = 8;
   t.format = THREE.RGBAFormat;
   t.type = THREE.UnsignedByteType;
   t.colorSpace = THREE.SRGBColorSpace;

@@ -182,3 +182,7 @@ test('deep: asset loading waits for decode and bounds failures', () => {
 test('deep: garage inspection geometry, parked physics and disposal', () => {
   run(['--experimental-loader', './dev/loader.mjs', 'dev/garage-preview-check.mjs']);
 });
+
+test('deep: environment geometry, safe placement and quality tiers', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/environment-check.mjs']);
+});

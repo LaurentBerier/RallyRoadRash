@@ -75,7 +75,9 @@ const THEMES = Object.keys(SKY_THEMES);
    genuinely wants a new sun, the terrain has to be re-baked and this table
    updated in the same commit, deliberately. */
 const GOLDEN_SUN = {
-  training: [0.359631, 0.882948, 0.301773],
+  // Quarry art pass: deliberately moved the key to 38deg / -35deg;
+  // terrain uses this same direction before baking its shadow mask.
+  training: [0.645496, 0.615661, -0.451975],
   canyon: [0.723270, 0.469472, -0.506444],
   forest: [-0.435229, 0.374607, 0.818656],
   volcano: [-0.866729, 0.190809, -0.460847],

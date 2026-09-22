@@ -97,8 +97,15 @@ const THEME_BASE = {
     const r = Math.hypot(x, z);
     let h = (fbm(x * 0.0024, z * 0.0024, 3, 2.05, 0.5, 11) - 0.5) * 8;
     h -= 3.2 * sstep(300, 40, r);
-    h += 17 * sstep(300, 540, r) * (0.70 + 0.60 * fbm(x * 0.006, z * 0.006, 2, 2, 0.5, 5));
-    h += vista(x, z, r, 63, 120, 620);
+    // Excavated benches outside the tutorial's generous run-off. This lives
+    // in the shared bake, so geometry, tyres and shadows see the same banks.
+    const rim = r + (fbm(x * 0.011, z * 0.011, 3, 2, 0.5, 17) - 0.5) * 95;
+    const fracture=(ridged(x*.046,z*.046,3,2,.5,61)-.5)*8;
+    h += 11 * sstep(260, 272, rim) + 16 * sstep(350, 367, rim);
+    h += 23 * sstep(470, 491, rim);
+    h += sstep(215,250,r)*fracture;
+    h += sstep(215, 280, r) * plateaus(x, z, 95, 53, 5, 18, 0.48, 0.65);
+    h += vista(x, z, r, 63, 200, 620);
     return h;
   },
 

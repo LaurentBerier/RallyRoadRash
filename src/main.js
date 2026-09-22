@@ -531,7 +531,8 @@ function buildWorld(def, baked) {
   engine.setLightTheme(SKY_THEMES[theme]);
   syncSun(terrain, sky);
 
-  const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData);
+  const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData,
+    App.assets.get('foliage/spruce'), { scrub: App.assets.get('foliage/scrub'), cliff: App.assets.get('terrain/cliff') });
   const dust = new Dust(engine.scene, terrain, sky.sunDir, engine.quality.dust, theme);
   const vfx = new VFX(engine.scene, dust, engine.quality, theme);
   props.setVfx(vfx, dust);

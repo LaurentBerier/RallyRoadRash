@@ -4,6 +4,10 @@
      ?track=canyon|forest|volcano|training|thunder
      ?veh=hopper|ridgeback|redline   ?q=low|medium|high|ultra
      ?orbit=1   slow circle around the car instead of driving
+     ?still=1&s=60  hold the car at a repeatable track distance for art review
+     ?noassets=1    exercise procedural fallbacks without any asset requests
+     ?capture=name save a local canvas frame after 150 rendered frames;
+                   requires node server.js <port> --shots on localhost
      ?fx=1      run every world/vfx.js effect at once, around the car
      ?env=sky|image|none
                 the §8.5 environment-map A/B, on a real stage rather than the
@@ -45,7 +49,9 @@ let envNote = '';
 async function boot() {
   const def = TRACKS.find(t => t.id === trackId) || TRACKS[0];
   const engine = new Engine(document.getElementById('stage'), q.get('q') || 'high');
-  const assetsJob = loadAssets('../assets/manifest.json');
+  engine.renderer.info.autoReset = false;
+  const assetsJob = q.has('noassets') ? Promise.resolve(new Map()) : loadAssets('../assets/manifest.json');
+  let captured = false, renderedFrames = 0;
   setCarcassRenderer(engine.renderer);
 
   const gen = bakeTrack(def, (p, m) => { stats.textContent = `bake ${(p * 100) | 0}% ${m || ''}`; });
@@ -90,7 +96,8 @@ async function boot() {
       if (tex) { sky.setEnvImage(tex); envNote = 'image'; }
       else envNote = 'no env/' + def.theme + ' in the manifest — shader env';
   }
-  const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData);
+  const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData,
+    A.get('foliage/spruce'), { scrub: A.get('foliage/scrub'), cliff: A.get('terrain/cliff') });
   const dust = new Dust(engine.scene, terrain, terrain.uniforms.uSunDir, engine.quality.dust, def.theme);
   const vfx = new VFX(engine.scene, dust, engine.quality, def.theme);
   props.setVfx(vfx, dust);
@@ -102,6 +109,15 @@ async function boot() {
   const spline = terrain.spline, line = terrain.trackData.racingLine;
   const g0 = terrain.trackData.gridSlots[0];
   veh.placeAt(g0.x, g0.z, g0.yaw);
+  // Repeatable art-review camera; never affects the playable game's input.
+  if (q.has('s')) {
+    const s = Number(q.get('s')) || 0;
+    const p = spline.offsetPoint(spline.wrapS(s), 0, {});
+    const d = spline.dirAt(spline.wrapS(s), {});
+    veh.placeAt(p.x, p.z, Math.atan2(d.x,d.z));
+  }
+  terrain.sunDir.copy(sky.sunDir);
+  terrain.uniforms.uSunDir.value.copy(sky.sunDir);
 
   /* Debug handle. Everything the harness built, so a console (or an
      automation tool that cannot wait out a lap) can teleport the car to a
@@ -210,7 +226,7 @@ async function boot() {
     if (dt > 0.1) dt = 0.1;
     elapsed += dt;
 
-    const ctl = q.get('orbit') ? { throttle: 0, steer: 0, brake: 1, handbrake: 1 }
+    const ctl = q.get('orbit') || q.has('still') ? { throttle: 0, steer: 0, brake: 1, handbrake: 1 }
       : veh.airborne ? { throttle: 0.5, steer: 0, brake: 0, handbrake: 0 } : drive();
     veh.step(dt, ctl);
     veh.updateVisuals(dt);
@@ -219,7 +235,7 @@ async function boot() {
     for (const w of veh.wheels) {
       if (!w.contact) continue;
       const S = SURFACES[w.surface] || SURFACES[1];
-      if ((w.slipLong > 0.25 || w.slipLat > 0.3) && Math.random() < S.dust * 0.5) {
+      if (veh.speed > 1 && (w.slipLong > 0.25 || w.slipLat > 0.3) && Math.random() < S.dust * 0.5) {
         dust.spawn(1, w.worldPos.x, w.worldPos.y - 0.2, w.worldPos.z,
           0.4 + veh.speed * 0.03, 0.25, -veh.forward.x, -veh.forward.z,
           S.dustCol[0], S.dustCol[1], S.dustCol[2], 0);
@@ -242,6 +258,7 @@ async function boot() {
 
     if (fxOn) exerciseVfx(dt);
 
+    engine.renderer.info.reset();
     terrain.update(dt, engine.camera, sky.sunDir);
     sky.update(dt, engine.camera, elapsed);
     if (envMode === 'none') engine.scene.environment = null;
@@ -251,6 +268,15 @@ async function boot() {
     sky.projectSun(engine.camera, engine.final.uniforms.uSunUV.value);
     engine.aimShadow(veh.pos, sky.sunDir);
     engine.render(dt);
+    renderedFrames++;
+    if(!captured && q.has('capture') && renderedFrames>150
+      && ['localhost','127.0.0.1'].includes(location.hostname)) {
+      captured=true;
+      fetch('../__shot?n='+encodeURIComponent(q.get('capture')), {
+        method:'POST',body:engine.canvas.toDataURL('image/png'),
+      }).then(r=>{if(!r.ok) throw new Error('capture requires server.js --shots');})
+        .catch(e=>{err.textContent+=e.message+'\n';});
+    }
 
     frames++; ft += dt;
     ftMean = ftMean * 0.92 + dt * 0.08;
@@ -262,7 +288,8 @@ async function boot() {
       `speed ${(veh.speed * 3.6).toFixed(0)} km/h  gear ${veh.gear ?? '-'}  rpm ${(veh.rpmNorm ?? 0).toFixed(2)}\n` +
       `s ${n.s.toFixed(0)}/${spline.length.toFixed(0)}  d ${n.d.toFixed(1)}  surf ${SURFACES[veh.surfaceId]?.name}\n` +
       `air ${veh.airborne} ${veh.airTime.toFixed(1)}s  hardHit ${veh.hardHit.toFixed(1)}\n` +
-      `drawcalls ${engine.renderer.info.render.calls}  tris ${(engine.renderer.info.render.triangles / 1000).toFixed(0)}k`;
+      `drawcalls ${engine.renderer.info.render.calls}  tris ${(engine.renderer.info.render.triangles / 1000).toFixed(0)}k\n` +
+      `landmarks ${(props.landmarkStatus||[]).map(x=>x.id+':'+x.state+'@'+Math.round(x.site?.s||0)).join(' ')}`;
     window.__FL = { veh, terrain, engine, fps, s: n.s, d: n.d };
   }
   requestAnimationFrame(frame);

@@ -38,6 +38,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeRNG, clamp } from '../core/rng.js';
+import { buildEnvironmentDressing, setEnvironmentQuality, concreteBarrierGeo } from './environment-dressing.js';
+import { patchFoliageMaterial } from './props-shapes.js';
 import { PLAYABLE_EXT } from './terrain.js';
 import { DUST_KIND } from './dust.js';
 import { makeStreakSprite } from './textures.js';
@@ -95,10 +97,12 @@ const _dd = { x: 0, z: 0 };
    PROPS
    ============================================================ */
 export class Props {
-  constructor(scene, terrain, quality, trackDef, trackData) {
+  constructor(scene, terrain, quality, trackDef, trackData, foliageTexture = null, environmentAssets = {}) {
     this.scene = scene;
     this.terrain = terrain;
     this.quality = quality;
+    this.foliageTexture = foliageTexture;
+    this.environmentAssets = environmentAssets;
     this.def = trackDef;
     this.data = trackData;
     this.theme = trackDef.theme || 'training';
@@ -114,16 +118,17 @@ export class Props {
 
     this.palette = kitPalette(this.theme);
     this.plan = DRESSING[this.theme] || DRESSING.training;
-    this.rockMat = this._keepMat(rockMaterial(this.recipe.rock, this.recipe.dust));
+    this.rockMat = this._keepMat(rockMaterial(this.recipe.rock, this.recipe.dust, environmentAssets.cliff));
     /* One material for every vertex-coloured thing in the stage: scatter
        plants, junk, landmarks, poles, spectators. Adding a new kind of prop
        costs a geometry and nothing else. */
     this.dressMat = this._keepMat(new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.88, metalness: 0.05,
+      vertexColors: true, roughness: 0.88, metalness: 0.05, envMapIntensity: 0.4,
     }));
 
     this.buildScatter();
     this.buildFurniture();
+    buildEnvironmentDressing(this);
     this.setScatterDensity(quality.boulders);
     /* Last, because the pool holds references to the colliders the line above
        just finished assembling. Fixed size, allocated once: from here on the
@@ -197,9 +202,15 @@ export class Props {
       return g;
     };
 
-    const pineMat = this._keepMat(new THREE.MeshStandardMaterial({
-      color: 0xffffff, vertexColors: true, roughness: 0.94, metalness: 0
-    }));
+    const pineMat = this._keepMat(patchFoliageMaterial(new THREE.MeshStandardMaterial({
+      color: 0xffffff, vertexColors: true, roughness: 0.94, metalness: 0,
+      side: THREE.DoubleSide, envMapIntensity: 0.35,
+      map: this.foliageTexture, alphaTest: this.foliageTexture ? 0.42 : 0,
+    })));
+    const pineDepth = this.foliageTexture ? this._keepMat(patchFoliageMaterial(new THREE.MeshDepthMaterial({
+      depthPacking: THREE.RGBADepthPacking, map: this.foliageTexture, alphaTest: 0.42,
+      side: THREE.DoubleSide,
+    }))) : null;
     const woodMat = this._keepMat(new THREE.MeshStandardMaterial({
       color: 0x4a3524, roughness: 0.92, metalness: 0
     }));
@@ -224,8 +235,9 @@ export class Props {
       const per = Math.ceil(MAX_SCATTER * K.share);
       const geo = geoFor(K.id);
       const im = new THREE.InstancedMesh(geo, matFor(K.id), per);
+      if(K.id.startsWith('pine') && pineDepth) im.customDepthMaterial=pineDepth;
       im.castShadow = !!K.shadow;
-      im.receiveShadow = false;
+      im.receiveShadow = true;
       im.frustumCulled = false;
       const solids = [];
       this._scatterSolids.push(solids);
@@ -325,6 +337,7 @@ export class Props {
 
   setQuality(q) {
     this.quality = q;
+    setEnvironmentQuality(this, q);
     this.setScatterDensity(q.boulders);
     /* The crowd is the first thing to go. Spectators are ~60 instances of a
        12-primitive figure that nobody looks at directly, and dropping them
@@ -934,7 +947,7 @@ export class Props {
       const geo = this._kitGeo(id);
       const im = new THREE.InstancedMesh(geo, this.dressMat, sites.length);
       im.castShadow = true;
-      im.receiveShadow = false;
+      im.receiveShadow = true;
       im.frustumCulled = false;
       for (let i = 0; i < sites.length; i++) {
         const st = sites[i];
@@ -1095,7 +1108,7 @@ export class Props {
     const rTex = this._keepTex(railTex(accent));
     rTex.wrapS = THREE.RepeatWrapping;
     const railMat = this._keepMat(new THREE.MeshStandardMaterial({
-      map: rTex, roughness: 0.62, metalness: 0.25, side: THREE.DoubleSide
+      map: rTex, roughness: 0.92, metalness: 0.02, side: THREE.DoubleSide
     }));
     const postGeo = this._keepGeo(new THREE.BoxGeometry(0.18, 1.15, 0.18));
     const railStrips = [];
@@ -1114,10 +1127,12 @@ export class Props {
           const off = side * (sp.widthAt(s) * 1.32 + 0.7);
           const q = sp.offsetPoint(s, off, _pp);
           const y = this.terrain.heightAt(q.x, q.z);
-          posts.push([q.x, y, q.z]);
+          if(this.theme !== 'training') posts.push([q.x, y, q.z]);
           if (prev) {
             // rail quad from prev to here, 0.55 m tall, centred at 0.78 m
-            railStrips.push(railQuad(prev[0], prev[1] + 0.78, prev[2], q.x, y + 0.78, q.z, 0.55));
+            railStrips.push(this.theme === 'training'
+              ? concreteBarrierGeo(prev,[q.x,y,q.z])
+              : railQuad(prev[0], prev[1] + 0.78, prev[2], q.x, y + 0.78, q.z, 0.55));
             this.barriers.push({
               ax: prev[0], az: prev[2], bx: q.x, bz: q.z, r: 0.45, kind: 'barrier'
             });
@@ -1146,7 +1161,7 @@ export class Props {
       for (const g of railStrips) g.dispose();
       merged.computeVertexNormals();
       const m = new THREE.Mesh(this._keepGeo(merged), railMat);
-      m.castShadow = true; m.frustumCulled = false;
+      m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false;
       this.group.add(m);
       this.barrierMesh = m;
     }

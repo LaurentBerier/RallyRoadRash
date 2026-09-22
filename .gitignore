@@ -29,3 +29,7 @@ CLAUDE.md
 # Agent scratch: the sanctioned place for one-off bulk-edit scripts.
 # Working files, not deliverables.
 dev/tmp/
+
+# Generated environment masters remain local; runtime WebP copies are tracked.
+assets/ground/*-v2.png
+assets/foliage/*.png

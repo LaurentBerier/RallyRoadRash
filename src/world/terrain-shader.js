@@ -37,16 +37,19 @@ const SURF_BASE = [
 export const THEMES = {
   training: {
     name: 'PROVING GROUNDS',
-    sun: [0.38, 0.70, 0.60], sunCol: [1.34, 1.30, 1.20],
-    sky: [0.40, 0.53, 0.72], ground: [0.26, 0.24, 0.20], ambient: 0.62,
+    sun: [0.645496, 0.615661, -0.451975], sunCol: [1.40, 1.20, 0.95],
+    sky: [0.40, 0.53, 0.72], ground: [0.26, 0.24, 0.20], ambient: 0.44,
     haze: [0.66, 0.73, 0.83], hazeDensity: 0.00050, hazeStart: 90,
     tint: [1.00, 1.00, 1.00],
-    surf: { 0: [0.34, 0.32, 0.28], 2: [0.57, 0.47, 0.34] }
+    albedoScale: 0.62,
+    surf: { 0: [0.34, 0.28, 0.21], 2: [0.45, 0.35, 0.24],
+      4: [0.37, 0.30, 0.23], 5: [0.25, 0.27, 0.14] }
   },
   canyon: {
     // Late afternoon, sun low across the wash. Clear warm air: you can see the
     // far mesas, which is the whole point of a desert.
     name: 'SUNSTRIKE CANYON',
+    albedoScale: 0.68,
     sun: [0.74, 0.34, -0.58], sunCol: [1.62, 1.34, 1.02],
     sky: [0.46, 0.52, 0.70], ground: [0.38, 0.27, 0.18], ambient: 0.58,
     haze: [0.80, 0.68, 0.52], hazeDensity: 0.00032, hazeStart: 140,
@@ -65,6 +68,7 @@ export const THEMES = {
     // track description has always claimed it is. The road stays legible: it
     // is ROAD/DIRT at 0.40-plus and now has something dark to contrast with.
     name: 'TIMBERLINE CLIMB',
+    albedoScale: 0.70,
     sun: [-0.30, 0.76, 0.58], sunCol: [1.14, 1.16, 1.12],
     sky: [0.52, 0.58, 0.64], ground: [0.19, 0.21, 0.16], ambient: 0.72,
     haze: [0.66, 0.71, 0.72], hazeDensity: 0.00125, hazeStart: 45,
@@ -79,11 +83,12 @@ export const THEMES = {
   volcano: {
     // Low red sun through smoke. Everything not lit by it is lit by the ground.
     name: 'CALDERA RUN',
+    albedoScale: 0.78,
     sun: [-0.62, 0.28, 0.73], sunCol: [1.50, 0.94, 0.62],
     // Ambient raised from 0.50 after QA: away-from-sun climbs read as a wall
     // of murk at 0.50, and this track needs its road legible at 130 km/h.
     sky: [0.34, 0.24, 0.23], ground: [0.28, 0.14, 0.09], ambient: 0.64,
-    haze: [0.36, 0.20, 0.17], hazeDensity: 0.00115, hazeStart: 70,
+    haze: [0.14, 0.095, 0.085], hazeDensity: 0.00085, hazeStart: 90,
     tint: [1.02, 0.90, 0.86],
     surf: { 4: [0.25, 0.23, 0.23], 1: [0.31, 0.24, 0.19] }
   },
@@ -94,6 +99,7 @@ export const THEMES = {
     // sun MUST equal SKY_THEMES.thunder.sunDir: the occlusion mask is baked
     // against exactly this vector.
     name: 'THUNDER MESA',
+    albedoScale: 0.68,
     sun: [-0.463692, 0.156434, -0.872076], sunCol: [1.56, 1.10, 0.76],
     sky: [0.30, 0.28, 0.46], ground: [0.40, 0.26, 0.18], ambient: 0.60,
     haze: [0.86, 0.55, 0.32], hazeDensity: 0.00042, hazeStart: 110,
@@ -108,7 +114,10 @@ export function themePalette(theme) {
   const out = [];
   for (let i = 0; i < 7; i++) {
     const o = T.surf[i] || SURF_BASE[i];
-    out.push([o[0] * T.tint[0], o[1] * T.tint[1], o[2] * T.tint[2]]);
+    // These are linear reflectances, not display RGB. Keep earth below the
+    // bright shoulder of ACES so grain and the key/fill ratio remain visible.
+    const k = T.albedoScale || 1;
+    out.push([o[0] * T.tint[0] * k, o[1] * T.tint[1] * k, o[2] * T.tint[2] * k]);
   }
   return out;
 }
@@ -384,7 +393,7 @@ export function buildTerrainMaterial(t) {
         // ROAD — hardpack. The wheel tracks come from latF() below, which
         // knows where the road EDGE is; all this branch does is the base.
         albedo *= 0.86 + 0.30*fb(vW.xz*0.22);
-        rough = 0.82; gritK = 0.22;
+        rough = 0.91; gritK = 0.52;
       } else if (sid == 1) {
         albedo *= 0.84 + 0.34*varN + 0.16*g0;              // DIRT: clods
         albedo *= 0.92 + 0.20*speck;
@@ -413,7 +422,7 @@ export function buildTerrainMaterial(t) {
         // GRASS: green broken with brown, at two scales, or it reads as felt
         // 'patch' is reserved in ESSL 3.00 (tessellation) — hence the terse name.
         float pch = fb(vW.xz*0.28);
-        albedo = mix(albedo, vec3(0.34,0.30,0.16), smoothstep(0.42,0.78,pch));
+        albedo = mix(albedo, uSurfCol[5]*1.15, smoothstep(0.42,0.78,pch));
         albedo *= 0.82 + 0.36*n2(vW.xz*2.7);
         gritK = 0.70;
       } else if (sid == 6) {
@@ -439,7 +448,7 @@ export function buildTerrainMaterial(t) {
          wavelength at plus or minus 12 % is enough to stop a stage reading
          as one flat swatch, and small enough never to be mistaken for a
          feature you could drive to. */
-      albedo *= 0.88 + 0.24*fb(vW.xz*0.018);
+      albedo *= 0.74 + 0.45*fb(vW.xz*0.018);
 
       /* ---- the road surface itself ----
          latF() is 0 on the crown and +-1 at the edge of the roadbed, so it
@@ -452,14 +461,14 @@ export function buildTerrainMaterial(t) {
       #ifndef FAR
       if (vRoad > 0.02 && sid != 6) {
         float onRoad = smoothstep(0.02, 0.30, vRoad) * dnear;
-        float al = abs(latF(vW.xz));
+        float al = abs(latF(vW.xz) + (fb(vW.xz*.065)-.5)*.16);
         float lane = smoothstep(0.24, 0.32, al) * (1.0 - smoothstep(0.48, 0.58, al));
         float shoulder = smoothstep(0.70, 0.98, al) * (1.0 - smoothstep(1.02, 1.22, al));
         float verge = smoothstep(1.00, 1.28, al);
         // wear is uneven along the lane: nobody drives exactly the same line
         lane *= 0.55 + 0.45*n2(vW.xz*0.55);
-        albedo *= mix(1.0, 0.88, lane*onRoad);
-        albedo *= 1.0 + 0.07*shoulder*onRoad;
+        albedo *= mix(1.0, 0.65, lane*onRoad);
+        albedo *= 1.0 + 0.19*shoulder*onRoad;
         albedo = mix(albedo, uSurfCol[1]*1.15, verge*onRoad*0.55);
         rough = mix(rough, rough*0.66, lane*onRoad);
       }
@@ -494,6 +503,11 @@ export function buildTerrainMaterial(t) {
       float steep = 1.0 - smoothstep(0.62, 0.86, N.y);
       if (sid != 6) {                              // lava keeps its glow
         vec3 scree = uSurfCol[4] * (0.62 + 0.30*fb(vW.xz*0.5) + 0.14*g0);
+        // Exposed cuts reveal strata and vertical water staining. This is
+        // material relief only; collision heights remain the shared bake.
+        float strata = fb(vec2(vW.y*0.72 + fb(vW.xz*0.07)*2.8, vW.x*0.013+vW.z*0.009));
+        float streak = fb(vW.xz*0.35 + vec2(vW.y*0.035));
+        scree *= 0.73 + 0.20*strata + 0.24*streak;
         albedo = mix(albedo, scree, steep * 0.85);
         rough = mix(rough, 0.8, steep);
       }
@@ -504,8 +518,10 @@ export function buildTerrainMaterial(t) {
          what makes a stage that stage, and a photo dropped straight on top
          would make all five look like the same quarry. Everything below runs
          identically with no assets at all — that is the contract. */
+      float photoRelief = 0.0;
       #ifdef GROUND
-      if (gnear > 0.004 && sid != 6) {
+      float cliffFade = (1.0-smoothstep(180.0,650.0,dist))*steep;
+      if ((gnear > 0.004 || cliffFade > 0.004) && sid != 6) {
         float lay = sid == 0 ? 5.0 : sid == 1 ? 0.0 : sid == 2 ? 1.0
                   : sid == 3 ? 3.0 : sid == 4 ? 2.0 : 4.0;
         /* 0.2158 is 50 % sRGB grey in linear: dividing by it keeps a
@@ -521,18 +537,27 @@ export function buildTerrainMaterial(t) {
            here once. Two stops of headroom either side is all a photograph
            needs, and the ground can never again be a light source. */
         // Project cliffs on their vertical axes instead of stretching XZ tiles.
-        // Flat roads retain one lookup; only steep close surfaces pay for three.
-        vec3 sampleGround = texture(uGround, vec3(vW.xz * 0.31, lay)).rgb;
+        // Flat roads use rotated layers; steep surfaces add triplanar cliff sampling.
+        // Two rotated scales break recognisable repetitions. No UV fract:
+        // implicit derivatives must stay continuous for the mip chain.
+        vec2 guv = vW.xz * 0.34;
+        vec3 sampleGround = mix(texture(uGround, vec3(guv, lay)).rgb,
+          texture(uGround, vec3(RA * guv * 0.73 + 0.37, lay)).rgb, 0.38);
+        // Packed quarry fines under loose, coarser stones. This also breaks
+        // the uniform sandpaper appearance of a single aggregate scale.
+        if(sid==0) sampleGround=mix(sampleGround,texture(uGround,vec3(guv*.8,1.0)).rgb,.55);
         if (steep > 0.02) {
           vec3 blend = pow(abs(N), vec3(4.0));
           blend /= max(dot(blend, vec3(1.0)), 0.001);
-          vec3 rockY = texture(uGround, vec3(vW.xz * 0.31, 2.0)).rgb;
-          vec3 rockX = texture(uGround, vec3(vW.zy * 0.31, 2.0)).rgb;
-          vec3 rockZ = texture(uGround, vec3(vW.xy * 0.31, 2.0)).rgb;
+          vec3 rockY = texture(uGround, vec3(vW.xz * 0.14, 2.0)).rgb;
+          vec3 rockX = texture(uGround, vec3(vW.zy * 0.14, 2.0)).rgb;
+          vec3 rockZ = texture(uGround, vec3(vW.xy * 0.14, 2.0)).rgb;
           sampleGround = mix(sampleGround, rockX*blend.x + rockY*blend.y + rockZ*blend.z, steep);
         }
         vec3 gt = clamp(sampleGround * (1.0 / 0.2158), 0.35, 1.70);
-        albedo *= mix(vec3(1.0), gt, gnear * uGroundOn * 0.70);
+        float detailFade=max(gnear,cliffFade);
+        albedo *= mix(vec3(1.0), gt, detailFade * uGroundOn * 0.95);
+        photoRelief = dot(sampleGround,vec3(0.2126,0.7152,0.0722)) * mix(0.045,0.45,steep) * detailFade * uGroundOn;
       }
       #endif
 
@@ -544,6 +569,16 @@ export function buildTerrainMaterial(t) {
         float gz = GRIT(vW.xz + vec2(0.0, e));
         Nr = normalize(N + vec3(-(gx-g0), 0.0, -(gz-g0)) * gritK * dnear);
       }
+      #endif
+
+      // Surface-gradient bump from the actual aggregate: the lighting follows
+      // the texture's stones, instead of unrelated procedural speckles.
+      #ifdef GROUND
+      vec3 dpdx = dFdx(vW), dpdy = dFdy(vW);
+      vec3 rx = cross(dpdy,Nr), ry = cross(Nr,dpdx);
+      float det = dot(dpdx,rx);
+      if(abs(det)>1e-7) Nr = normalize(abs(det)*Nr - sign(det)*
+        (dFdx(photoRelief)*rx + dFdy(photoRelief)*ry));
       #endif
 
       /* ---- freshly churned ground is DARKER and wetter, not brighter ----
@@ -636,9 +671,8 @@ export function buildTerrainMaterial(t) {
  * asynchronously and a stage is usually already on screen by the time they
  * arrive. Pass null to go back to the procedural grain.
  *
- * The clip levels at or beyond FAR are deliberately left alone: their inner
- * edge starts at 87 m and the detail is faded out by 60, so recompiling them
- * would cost a hitch to change nothing.
+ * Far rings retain cliff textures: a vertical quarry wall fills many pixels
+ * at 200 m even though horizontal gravel has already faded away.
  */
 export function setGroundTexture(t, tex) {
   if (!t || !t.material) return;
@@ -659,7 +693,10 @@ export function setGroundTexture(t, tex) {
   t.material.needsUpdate = true;
   for (const L of t.levels || []) {
     const m = L.mesh.material;
-    if (m && m.defines && !m.defines.FAR) m.needsUpdate = true;
+    if (m && m.defines) {
+      if(want) m.defines.GROUND=1; else delete m.defines.GROUND;
+      m.needsUpdate = true;
+    }
   }
 }
 
@@ -670,12 +707,12 @@ export function makeLevelMaterial(t, cell, i) {
      frame — every one of them at a grazing angle where the ground is four
      pixels tall and nobody can tell what it is made of. The near-field
      detail (grit albedo, the grit normal, the road lanes, the photographic
-     ground layer) is switched off there by define rather than by a branch:
+     ground layer on flat ground) is switched off there by define:
      it is not a saved instruction, it is a shorter programme. Everything it
-     drops has already faded to zero by 82 m, so there is no seam. */
+     drops has already faded to zero by 82 m, so there is no seam. Steep
+     cliff faces retain their triplanar material into the middle distance. */
   const far = i >= 4;
   const defines = far ? Object.assign({ FAR: 1 }, t.material.defines) : t.material.defines;
-  if (far) delete defines.GROUND;
   // Built directly rather than cloned: ShaderMaterial.clone() deep-copies the
   // uniforms, which warns on every render-target texture in the set and then
   // has its work thrown away by the three assignments below.

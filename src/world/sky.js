@@ -76,21 +76,21 @@ import { makeCloudSprite, makeSmokeSprite } from './textures.js';
    bounce both read it); so is everything else in here.
    ============================================================ */
 export const SKY_THEMES = {
-  /* clean noon over an empty airfield: flat light, nothing to misread */
+  /* Warm afternoon in the quarry: the lower key reveals the excavated banks. */
   training: {
-    sunEl: 62, sunAz: 40,
-    sunDir: { x: 0.359631, y: 0.882948, z: 0.301773 },
-    sunColor: 0xfff3e2, sunIntensity: 2.85,
-    hemiSky: 0xa8c8ff, hemiGround: 0x7a6a52, hemiIntensity: 0.60,
+    sunEl: 38, sunAz: -35,
+    sunDir: { x: 0.645496, y: 0.615661, z: -0.451975 },
+    sunColor: 0xffdeb6, sunIntensity: 2.70,
+    hemiSky: 0x9dbce7, hemiGround: 0x66533e, hemiIntensity: 0.42,
     zenith: 0x2b68c2, horizon: 0xcadef2, hazeColor: 0xc2d5e8,
-    turbidity: 2.2, rayleigh: 1.6, mie: 0.005, mieG: 0.80, skyExposure: 0.2668,
+    turbidity: 2.2, rayleigh: 1.6, mie: 0.005, mieG: 0.80, skyExposure: 0.3300,
     groundHaze: 0x9aa89a,
     cloudAmount: 0.55, cloudTint: 0xffffff, cloudShade: 0x93a8c2,
     cloudY: 1250, cirrus: 0.35,
     sunDiscColor: 0xfff8ee, sunAngDeg: 1.1, haloStrength: 0.55, sunGlow: 1.0,
     fogHint: 0.00050,
     grade: [0.88, 0.90, 0.93],
-    shaft: 0.10, sat: 1.06, con: 1.03,
+    shaft: 0.06, sat: 1.04, con: 1.08,
     vista: 'hills', vistaColor: 0x6c7a8c, vistaFade: 0.40
   },
 
@@ -103,12 +103,12 @@ export const SKY_THEMES = {
     zenith: 0x2f63ae, horizon: 0xf0c491, hazeColor: 0xe0b58a,
     turbidity: 7.0, rayleigh: 2.2, mie: 0.005, mieG: 0.80, skyExposure: 0.3048,
     groundHaze: 0xb08256,
-    cloudAmount: 0.62, cloudTint: 0xffe6cc, cloudShade: 0xa08498,
+    cloudAmount: 0.62, cloudTint: 0xf1e7d9, cloudShade: 0x727d8b,
     cloudY: 1500, cirrus: 0.55,
     sunDiscColor: 0xfff0d2, sunAngDeg: 1.6, haloStrength: 0.95, sunGlow: 1.25,
     fogHint: 0.00068,
     grade: [0.98, 0.90, 0.82],
-    shaft: 0.42, sat: 1.16, con: 1.07,
+    shaft: 0.20, sat: 1.04, con: 1.07,
     vista: 'mesas', vistaColor: 0x8a4832, vistaFade: 0.30
   },
 
@@ -135,7 +135,7 @@ export const SKY_THEMES = {
     sunDiscColor: 0xfff2d8, sunAngDeg: 1.4, haloStrength: 1.10, sunGlow: 1.15,
     fogHint: 0.00105,
     grade: [0.82, 0.86, 0.84],
-    shaft: 0.55, sat: 1.12, con: 1.06,
+    shaft: 0.28, sat: 1.04, con: 1.06,
     vista: 'peaks', vistaColor: 0x4a5c70, vistaFade: 0.58
   },
 
@@ -176,12 +176,12 @@ export const SKY_THEMES = {
        somebody has looked at it. */
     turbidity: 8.0, rayleigh: 2.6, mie: 0.012, mieG: 0.80, skyExposure: 0.3704,
     groundHaze: 0x8a5030,
-    cloudAmount: 0.78, cloudTint: 0xffd0a4, cloudShade: 0x5c3a56,
+    cloudAmount: 0.78, cloudTint: 0xeed4b5, cloudShade: 0x636471,
     cloudY: 1350, cirrus: 0.70,
     sunDiscColor: 0xffc078, sunAngDeg: 2.4, haloStrength: 1.25, sunGlow: 1.35,
     fogHint: 0.00058,
     grade: [1.02, 0.90, 0.80],
-    shaft: 0.62, sat: 1.20, con: 1.10,
+    shaft: 0.30, sat: 1.08, con: 1.08,
     vista: 'buttes', vistaColor: 0x5a2c30, vistaFade: 0.34
   }
 };
