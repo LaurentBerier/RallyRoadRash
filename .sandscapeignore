@@ -4,3 +4,5 @@
 .claude/
 .gitignore
 .sandscapeignore
+# Preserve downloaded texture masters locally; runtime uses optimized WebP.
+assets/garage/*.jpg

@@ -198,7 +198,7 @@ export class Props {
     };
 
     const pineMat = this._keepMat(new THREE.MeshStandardMaterial({
-      color: 0x2c4426, roughness: 0.94, metalness: 0
+      color: 0xffffff, vertexColors: true, roughness: 0.94, metalness: 0
     }));
     const woodMat = this._keepMat(new THREE.MeshStandardMaterial({
       color: 0x4a3524, roughness: 0.92, metalness: 0
@@ -247,11 +247,11 @@ export class Props {
            still fills the wide field, because a horizon with nothing on it
            reads as a bald patch from the top of a climb. */
         let x, z;
-        if (rng() < 0.74) {
+        if (rng() < (this.theme === 'forest' ? 0.90 : 0.74)) {
           const s = rng() * sp.length;
           const side = rng() < 0.5 ? -1 : 1;
           const q = sp.offsetPoint(s,
-            side * (sp.widthAt(s) * K.clear + 1.5 + Math.pow(rng(), 1.7) * 108), _pp);
+            side * (sp.widthAt(s) * K.clear + 1.5 + Math.pow(rng(), 1.7) * (this.theme === 'forest' ? 70 : 108)), _pp);
           x = q.x; z = q.z;
         } else {
           const a = rng() * 6.2831853;

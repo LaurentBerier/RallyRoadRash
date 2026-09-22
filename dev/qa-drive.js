@@ -165,7 +165,7 @@ export async function one(trackId, vehId, opts = {}) {
     track: trackId, veh: vehId, finished: false, dnf: false,
     position: null, total: null, bestLap: null, laps: 0,
     resets: 0, resetAt: {}, contacts: 0, maxAir: 0, worstY: 0, nan: false,
-    fieldStuck: 0, wallSeconds: 0, simSeconds: 0, ticks: 0, error: null,
+    fieldUnfinished: 0, wallSeconds: 0, simSeconds: 0, ticks: 0, error: null,
     /* Power-ups. The QA driver never FIRES one — it only copies the four
        driving axes off the AI — so `fired` is the field's doing and `hits`
        is what landed on anybody. A hits count that climbs while resets do
@@ -181,7 +181,7 @@ export async function one(trackId, vehId, opts = {}) {
     /* One row per car on the grid, player included (`rivals` excludes it).
        `why` is race.js's reset-cause tally: 'off' and 'noprog' mean the nets
        are firing on racing, 'flip' and 'wedged' mean the terrain is. */
-    cars: [], rivals: [], fieldResets: 0, fieldDnf: 0,
+    cars: [], rivals: [], fieldResets: 0, rivalsUnfinished: 0,
   };
   /* Per-car accumulators, indexed by grid slot. The player's are aliased into
      the flat fields at the end so nothing that read this file before moves. */
@@ -288,7 +288,7 @@ export async function one(trackId, vehId, opts = {}) {
       out.finished = out.finished || !!st.finished;
     }
     out.position = race.tracker.position(me.id) || out.position;
-    out.fieldStuck = race.racers.filter(r => !r.finished).length;
+    out.fieldUnfinished = race.racers.filter(r => !r.finished).length;
 
     const results = race.tracker.results() || [];
     out.cars = acc.map((a, i) => {
@@ -309,12 +309,12 @@ export async function one(trackId, vehId, opts = {}) {
     });
     out.rivals = out.cars.filter(c => !c.isPlayer);
     out.fieldResets = out.rivals.reduce((n, c) => n + c.resets, 0);
-    out.fieldDnf = out.rivals.filter(c => !c.finished).length;
-    if (race.items) {
-      out.itemsOn = race.items.enabled;
-      out.itemsTaken = race.items.stats.taken;
-      out.itemsFired = race.items.stats.fired;
-      out.itemHits = race.items.stats.hits;
+    out.rivalsUnfinished = out.rivals.filter(c => !c.finished).length;
+    if (race.arsenal) {
+      out.itemsOn = race.arsenal.enabled;
+      out.itemsTaken = race.arsenal.stats.taken;
+      out.itemsFired = race.arsenal.stats.fired;
+      out.itemHits = race.arsenal.stats.hits;
     }
   } catch (e) {
     out.error = String(e && e.message || e);
@@ -359,7 +359,7 @@ export async function sweep(tracks, vehicles, opts = {}) {
       rows.push(r);
       console.log(`[qa] ${t}/${v}`, r.finished ? `P${r.position} in ${r.simSeconds}s sim` : 'DNF',
         `resets ${r.resets} maxAir ${r.maxAir.toFixed(2)}s`,
-        `| field resets ${r.fieldResets} dnf ${r.fieldDnf}`, r.error || '');
+        `| field resets ${r.fieldResets} unfinished ${r.rivalsUnfinished}`, r.error || '');
       for (const c of r.rivals) printRival(c);
       // eslint-disable-next-line no-await-in-loop
       await new Promise(res => setTimeout(res, 120));
@@ -367,10 +367,10 @@ export async function sweep(tracks, vehicles, opts = {}) {
   }
   const bad = rows.filter(r => !r.finished || r.nan || r.error);
   const fieldResets = rows.reduce((n, r) => n + (r.fieldResets || 0), 0);
-  const fieldDnf = rows.reduce((n, r) => n + (r.fieldDnf || 0), 0);
+  const rivalsUnfinished = rows.reduce((n, r) => n + (r.rivalsUnfinished || 0), 0);
   console.log(`[qa] ${rows.length - bad.length}/${rows.length} completed` +
-    `  | rivals: ${fieldResets} resets, ${fieldDnf} DNF over ${rows.length * 5} starts`);
-  return { rows, bad, fieldResets, fieldDnf };
+    `  | rivals: ${fieldResets} resets, ${rivalsUnfinished} unfinished at player finish over ${rows.length * 5} starts`);
+  return { rows, bad, fieldResets, rivalsUnfinished };
 }
 
 export default { one, sweep, printRival };

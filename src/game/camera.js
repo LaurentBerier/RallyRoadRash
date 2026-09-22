@@ -103,7 +103,7 @@ const CH = {
                           //   camera dead astern, Math.PI restores pure rule 3.
   noseConeAir: Math.PI,   // rad — no cone at all once fully airborne.
 
-  yawHz: 1.91,            // Hz — critically damped boom yaw. See note in _chase().
+  yawHz: 1.80,            // Hz — a little rotational weight without losing turn-in.
   yawAirMul: 0.55,        // the same spring, softened while airborne.
 
   /* ---- the crash/spin gate ----
@@ -137,15 +137,14 @@ const CH = {
   tumbleReleaseOmega: 0.8,   // rad/s — "settled" is slow…
   tumbleReleaseContacts: 3,  // …and back on at least three wheels.
 
-  pivotXZ: 22,            // 1/s — pivot follow, horizontal. Near-rigid: horizontal lag
-                          //     reads as rubber-banding, not as weight.
+  pivotXZ: 22,            // 1/s — keep translation tight; weight comes from yaw/aim lag.
   pivotY: 13,             // 1/s — vertical follow on the ground. Loose enough that
                           //     suspension chatter never reaches the lens.
   pivotYAir: 3.4,         // 1/s — vertical follow in the air. THIS is what makes a jump
                           //     read: the car climbs out of the frame and drops back in.
                           //     Lowered further still: the car climbs even further out of
                           //     frame on a big jump, and that IS the jump reading bigger.
-  airBlend: 6,            // 1/s — how fast the airborne settings fade in and back out.
+  airBlend: 6.5,            // 1/s — how fast the airborne settings fade in and back out.
                           //     ~0.5 s of recovery after touchdown, which is the whole
                           //     "no snap on landing" requirement.
   airLo: 0.07,            // s of continuous air below which the blend stays at zero…
@@ -265,6 +264,8 @@ export class CameraRig {
     this._air = 0;                // 0..1 airborne blend
     this._tumble = 0;             // 0..1 crash/spin blend (see CH.tumble*)
     this._stableYaw = 0;          // rad, the boom heading from before the spin
+    this._holdYaw = false;
+    this._settledT = 0;
     this._slope = 0;              // rad, low-passed ground slope ahead
     this._avoid = 0;              // m, current terrain push-up
     this._hoodQ = new THREE.Quaternion();
@@ -338,6 +339,7 @@ export class CameraRig {
     this.lookYaw = 0; this.lookPitch = 0; this.lookIdle = 99;
     this._air = 0; this._slope = 0; this._avoid = 0;
     this._tumble = 0; this._stableYaw = this.yaw;
+    this._holdYaw = false; this._settledT = 0;
     this.shake = 0; this._rumbleS = 0;
     this.kickPitch = 0; this.kickYaw = 0; this.fovOffset = 0;
     this.rumble = 0; this.sway = 0;
@@ -390,9 +392,9 @@ export class CameraRig {
 
     /* ---- crash / spin blend ---------------------------------
        A latch, not a follower: it ENGAGES on the spin and only lets go once the
-       car is both slow in rotation and back on its wheels. In between — a car
+       car is upright and back on its wheels. In between — a car
        that has stopped spinning but is still in the air, still on its roof, or
-       still sliding on two wheels — it holds, because none of those are
+       still actively spinning — it holds, because none of those are
        "settled" either and the whole point is to not hand the shot back early.
 
        Every field here is read defensively. A vehicle-like that publishes none
@@ -410,21 +412,29 @@ export class CameraRig {
     const upv = vehicle.up;
     const upY = upv && typeof upv.y === 'number' ? upv.y : 1;
     const cts = typeof vehicle.contacts === 'number' ? vehicle.contacts : CH.tumbleReleaseContacts;
+    // Suspension pitch/roll rates and intermittent wheel contacts must not
+    // keep a landed, steerable car locked to its pre-jump heading. Require a
+    // short upright ground dwell; an actual yaw spin still owns the shot.
+    const grounded = !vehicle.airborne && cts >= 2 && upY > 0.72 &&
+      Math.abs(omY) < CH.tumbleOmega && !(vehicle.spinT > 0);
+    this._settledT = grounded ? this._settledT + dt : 0;
     let tumbleWant;
     if (omg && (Math.abs(omY) > CH.tumbleOmega || (vehicle.spinT || 0) > 0 || upY < CH.tumbleUpY)) {
       tumbleWant = 1;
-    } else if (omLen < CH.tumbleReleaseOmega && cts >= CH.tumbleReleaseContacts) {
+    } else if (this._settledT >= 0.12 ||
+      (!vehicle.airborne && omLen < CH.tumbleReleaseOmega && cts >= CH.tumbleReleaseContacts)) {
       tumbleWant = 0;
     } else {
-      tumbleWant = this._tumble > 0 ? 1 : 0;
+      tumbleWant = this._holdYaw ? 1 : 0;
     }
+    this._holdYaw = tumbleWant > 0;
     const tRate = tumbleWant > this._tumble ? CH.tumbleBlend : CH.tumbleFall;
     this._tumble += (tumbleWant - this._tumble) * (1 - Math.exp(-dt * tRate));
     if (tumbleWant === 0 && this._tumble < CH.tumbleZero) this._tumble = 0;
     /* The datum, taken BEFORE the per-mode pose runs, so it is always last
        frame's finished boom heading — i.e. the last one from before things went
        wrong, whichever frame that turns out to have been. */
-    if (this._tumble === 0) this._stableYaw = this.yaw;
+    if (!this._holdYaw) this._stableYaw = this.yaw;
 
     /* ---- per-mode pose -------------------------------------- */
     if (this.mode === CAM.HOOD) this._hood(dt, vehicle);
@@ -533,13 +543,15 @@ export class CameraRig {
     }
 
     /* …and none of that survives a spin. Nose and travel both sweep the full
-       circle in a crash, so while the tumble blend is up the target is the
+       circle in a crash, so while the heading latch is engaged the target is the
        heading the boom already had — a hard hold, not a weighted one, because
        any weight at all lets a 5 rad/s spin drag the frame round with it. The
        switch itself costs nothing: _stableYaw was this.yaw on the frame the
        latch closed, so the spring's error is zero going in and the error going
        out is absorbed the way every other heading change in this file is. */
-    if (this._tumble > 0) yawTarget = this._stableYaw;
+    // Release yaw independently of the cosmetic pull-back envelope. The yaw
+    // spring carries the whole recovery, preserving its position and velocity.
+    if (this._holdYaw) yawTarget = this._stableYaw;
 
     /* Critically damped, closed form — unconditionally stable at any dt, which
        matters because a tab-out hands us a 50 ms frame.
@@ -547,8 +559,8 @@ export class CameraRig {
        On the rate: the brief asked for "~4.5 Hz equivalent". A literal 4.5 Hz
        (ω = 28 rad/s) settles in 0.14 s and erases the lag that makes a corner
        read as a corner; a literal 4.5 rad/s lags 25° at the 2.0 rad/s yaw cap
-       and the car walks out of frame. 1.91 Hz (ω = 12) sits between them: ~7°
-       of lag in a hard corner, ~9.6° at the yaw cap. Tune with rig.yawHz. */
+       and the car walks out of frame. 1.80 Hz gives a modest follow delay while keeping the car readable.
+       Tune with rig.yawHz. */
     const w = TAU * this.yawHz * (this._air > 0 ? 1 - (1 - CH.yawAirMul) * this._air : 1);
     const err = wrapPi(this.yaw - yawTarget);
     const A = this._yawVel + w * err;
@@ -613,7 +625,7 @@ export class CameraRig {
 
     _aim.copy(this._pivot).addScaledVector(_dir, ahead).addScaledVector(_rgt, lat);
     if (this._first) this._aim.copy(_aim);
-    else this._aim.lerp(_aim, 1 - Math.exp(-dt * 10));
+    else this._aim.lerp(_aim, 1 - Math.exp(-dt * 8));
 
     /* ---- eye -------------------------------------------------- */
     let dist = this.dist * (1 + CH.distSpeed * sstep(0, CH.speedRef, vHoriz))

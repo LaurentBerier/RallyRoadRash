@@ -83,7 +83,7 @@ const SETTINGS_SPEC = [
      frames: at 0 the menu backdrop is a still picture instead of a live
      scene, which is the right default on a phone that is already deciding
      whether it can hold 30 fps in the race. */
-  { key: 'motionFx', label: 'MENU MOTION', hint: 'Live 3D behind the menus. Turn it off on a warm phone.',
+  { key: 'motionFx', label: '3D VEHICLE VIEW', hint: 'Drag to inspect the garage vehicle. OFF uses static artwork.',
     type: 'seg', opts: [[0, 'OFF'], [0.5, 'LOW'], [1, 'FULL']], def: 1 },
   { key: 'tips', label: 'FIRST-RUN TIPS', hint: 'One-line cards the first time something new happens.',
     type: 'seg', opts: [[false, 'OFF'], [true, 'ON']], def: true },
@@ -273,6 +273,10 @@ export class UI {
      all, leaves both exactly as they were. */
   setAssets(assets) {
     this.assets = assets && typeof assets.get === 'function' ? assets : null;
+    const backdrop = artImage(this.assets?.get('art/menu-garage'));
+    if (backdrop?.src) for (const screen of Object.values(this.scr)) {
+      screen?.style.setProperty('--menu-backdrop', `url("${backdrop.src}")`);
+    }
     if (this._cur === 'tracks') this._renderTracks(this._data.tracks || {});
     /* The garage too, and for a sharper reason than the stage cards: the
        manifest resolves AFTER boot, so a player who walks straight into the
@@ -347,7 +351,11 @@ export class UI {
        the player picked it on the tracks screen — so the lead does not have
        to pass one, and a `nextTrack` flow that does pass one still wins. */
     this.setLoadingArt(trackId || this._sel.trackId);
-    if (this.el.bootBar) this.el.bootBar.style.width = `${clamp01(+p01 || 0) * 100}%`;
+    if (this.el.bootBar) {
+      const percent = Math.round(clamp01(+p01 || 0) * 100);
+      this.el.bootBar.style.width = `${percent}%`;
+      this.el.bootBar.parentElement.setAttribute('aria-valuenow', String(percent));
+    }
     if (this.el.bootMsg && msg != null && msg !== this._bootMsg) {
       this._bootMsg = msg; this.el.bootMsg.textContent = String(msg);
     }
@@ -575,6 +583,7 @@ export class UI {
       if (src !== this._trackArtSrc) {
         this._trackArtSrc = src;
         el.style.backgroundImage = src ? `url("${src}")` : '';
+        this.scr.tracks?.style.setProperty('--menu-backdrop', src ? `url("${src}")` : 'none');
         el.classList.toggle('has-art', !!src);
       }
     }
@@ -595,7 +604,7 @@ export class UI {
       ? `<div class="pick-times">
            <span><em>BEST</em>${fmtTime(cur.best)}${cur.bestItems ? ITEM_FLAG : ''}</span>
            <span><em>LAP</em>${fmtTime(cur.bestLap)}${cur.bestLapItems ? ITEM_FLAG : ''}</span>
-         </div>` : '';
+         </div>` : '<div class="pick-times"></div>';
 
     host.innerHTML =
       `<div class="pick-top">
@@ -611,8 +620,19 @@ export class UI {
         ? `<div class="pick-meta"><span class="chip info">${esc(cur.lockHint)}</span></div>` : '');
 
     const cv = host.querySelector('.track-map');
+    this._trackMapObserver?.disconnect();
     if (cv && def) {
-      drawStage(cv, def, cur.locked, { elev: cur.elev || def.elev, mapOnly: true });
+      const redraw = () => {
+        const rect = cv.getBoundingClientRect();
+        cv.width = Math.max(1, Math.round(rect.width));
+        cv.height = Math.max(1, Math.round(rect.height));
+        drawStage(cv, def, cur.locked, { elev: cur.elev || def.elev, mapOnly: true });
+      };
+      if (typeof ResizeObserver !== 'undefined') {
+        this._trackMapObserver = new ResizeObserver(redraw);
+        this._trackMapObserver.observe(cv);
+      }
+      redraw();
     }
   }
 
@@ -1077,7 +1097,7 @@ export class UI {
       btns.push(['res-menu', 'MENU', 'ghost']);
       // Listeners are attached by _collectFocus(), which show() runs right
       // after this — binding here too would double-fire every press.
-      this.el.resultsBtns.innerHTML = btns
+      this.el.resultsBtns.innerHTML = (d.nextTrackId ? '' : '<span aria-hidden="true"></span>') + btns
         .map(([act, lab, cls]) => `<button class="btn ${cls}" data-focus data-act="${act}">${lab}</button>`).join('');
     }
   }

@@ -43,11 +43,13 @@
    +Z, right −X, origin at the centre of mass.
    ============================================================ */
 import * as THREE from 'three';
+import { wearUV } from './vehicle-wear.js';
 import { clamp } from '../core/rng.js';
 import { kitPalette } from '../world/kit.js';
 import { launcherGeo, rocketGeo } from '../world/kit-arsenal.js';
 import { LAUNCHERS } from './weapons.js';
 import { MODEL_FIT, carcassFit, wheelZones, inWheelZone } from './vehicle-fit.js';
+import { VehicleBodyLOD } from './vehicle-lod.js';
 
 /* Where the tube axis and the muzzle sit in launcherGeo's own frame. These
    mirror kit-arsenal.js (`AXIS` and `TL / 2`) — a rocket spawned anywhere
@@ -74,6 +76,8 @@ const RACK_DEFAULT = 6, RACK_MAX = 12;
    dev/garage.js from its own ?model flag. Until then there is no carcass, and
    no carcass means today's procedural body. */
 let _source = null;
+// Lookup receives (vehicleId, 'low' | 'high'); a legacy single-url lookup
+// remains supported and produces one level without a duplicate download.
 export function setCarcassSource(fn) { _source = typeof fn === 'function' ? fn : null; }
 
 /* The renderer, for one number: the maximum anisotropy this GPU will sample
@@ -116,21 +120,38 @@ const _stripped = new Map();
 export function attachCarcass(v, spec, M) {
   v.carcass = null;
   v._carcassInfo = null;
-  const url = (_source && typeof window !== 'undefined') ? _source(spec.id) : null;
+  const url = (_source && typeof window !== 'undefined') ? _source(spec.id, 'low') : null;
+  const highUrl = (_source && typeof window !== 'undefined') ? _source(spec.id, 'high') : null;
+  v._carcassLoading = !!url;
   if (!url) return;
   const gen = v._carcassGen = (v._carcassGen | 0) + 1;
-  models()
+  v._carcassReady = models()
     .then((mod) => (mod ? mod.loadModel(url) : null))
     .then((group) => {
       if (!group) return;
       // disposed, or rebuilt, while the file was in flight
       if (!v.root || v._carcassGen !== gen) { _models.disposeModel(group); return; }
       fitCarcass(v, spec, M, group, url);
+      if (v.carcass !== group || !highUrl || highUrl === url) return;
+      const lod = new VehicleBodyLOD(group, () => {
+        _models.loadModel(highUrl).then(high => {
+          if (!high) { lod.state = 'failed'; return; }
+          if (!v.root || v._carcassGen !== gen) { _models.disposeModel(high); return; }
+          const info = fitCarcass(v, spec, M, high, highUrl, true);
+          if (!info) { lod.state = 'failed'; return; }
+          lod.setHigh(high);
+        }).catch(err => {
+          lod.state = 'failed';
+          console.warn('[carcass] close LOD ' + spec.id + ': ' + err.message);
+        });
+      }, active => { v._carcassInfo = active.userData.carcassInfo; });
+      v.chassis.add(lod);
+      v.carcass = lod;
     })
     .catch((err) => {
       console.warn('[carcass] ' + spec.id + ': ' + ((err && err.message) || err) +
         ' — keeping the procedural body');
-    });
+    }).finally(() => { v._carcassLoading = false; });
 }
 
 /** Take the carcass off `v` (dispose path, and a rebuild guard). */
@@ -144,7 +165,7 @@ export function detachCarcass(v) {
   v._carcassInfo = null;
 }
 
-function fitCarcass(v, spec, M, group, url) {
+function fitCarcass(v, spec, M, group, url, secondary = false) {
   group.updateMatrixWorld(true);
   _box.setFromObject(group);
   if (_box.isEmpty()) { _models.disposeModel(group); return; }
@@ -177,12 +198,24 @@ function fitCarcass(v, spec, M, group, url) {
        that produces body y. */
     const e = _m.elements;
     const row = new THREE.Vector4(e[1], e[5], e[9], e[13]);
+    // Preserve the authored maps while giving painted panels a coat response.
+    // Standard.copy avoids reading Physical-only fields from a glTF material.
+    const upgrade = (old) => {
+      if (!old?.isMeshStandardMaterial || old.isMeshPhysicalMaterial) return old;
+      const mat = new THREE.MeshPhysicalMaterial();
+      THREE.MeshStandardMaterial.prototype.copy.call(mat, old);
+      mat.defines = { STANDARD: '', PHYSICAL: '' };
+      mat.clearcoat = 0.32; mat.clearcoatRoughness = 0.24;
+      old.dispose();
+      return mat;
+    };
+    o.material = Array.isArray(o.material) ? o.material.map(upgrade) : upgrade(o.material);
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     for (const mat of mats) {
       if (!mat) continue;
       mat.envMapIntensity = 1;
       if (!mat.name) mat.name = 'carcass';
-      if (tint && (tintAll || F.tint.indexOf(mat.name) >= 0)) mat.color.multiply(tint);
+      const paintTint = tint && (tintAll || F.tint.indexOf(mat.name) >= 0) ? tint : _white;
       sharpen(mat, aniso);
       /* Both of the branches below are FOR THE FILE WE HAVE NOT BEEN SENT
          YET, and neither of them fires on the four carcasses in assets/
@@ -204,7 +237,7 @@ function fitCarcass(v, spec, M, group, url) {
           if (nm) { mat.normalMap = nm; mat.normalScale.set(0.6, 0.6); }
         }
       }
-      mudify(mat, v._uMud, row);
+      mudify(mat, v._uMud, row, paintTint);
       v._ghost.mats.push(mat);
       if (v._ghost.k > 0) { mat.transparent = true; mat.opacity = 1 - 0.58 * v._ghost.k; }
       mat.needsUpdate = true;
@@ -215,9 +248,12 @@ function fitCarcass(v, spec, M, group, url) {
   group.rotation.set(0, fit.yaw, 0);
   group.scale.setScalar(fit.s);
   group.name = 'carcass';
+  const info = group.userData.carcassInfo = { url, tris, kept, box: kbox, fit };
+  // Fitting a second LOD must not move lights, exhaust or the launcher twice.
+  if (secondary) return info;
   v.chassis.add(group);
   v.carcass = group;
-  v._carcassInfo = { url, tris, kept, box: kbox, fit };
+  v._carcassInfo = info;
 
   /* The frame the GLB resolves: the merged body panels go, and the lamp and
      brake panels go with them — a painted carcass draws its own headlights,
@@ -368,29 +404,36 @@ function stripGeometry(geo, m, zones) {
  * three keys its program cache on `onBeforeCompile.toString()`, so one
  * program serves every mudified panel and the uniforms do the varying.
  */
-export function mudify(mat, uMud, row = MUD_ROW_BODY) {
+export function mudify(mat, uMud, row = MUD_ROW_BODY, paintTint = null) {
   const uRow = { value: row };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uMud = uMud;
     sh.uniforms.uMudRow = uRow;
+    sh.uniforms.uPaintTint = { value: paintTint || _white };
+    sh.uniforms.uAtlasPaint = { value: paintTint ? 1 : 0 };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vMudP;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvMudP = position;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>',
-        '#include <common>\nuniform float uMud;\nuniform vec4 uMudRow;\nvarying vec3 vMudP;\n' +
+        '#include <common>\nuniform float uMud;\nuniform vec4 uMudRow;\nuniform vec3 uPaintTint;\nuniform float uAtlasPaint;\nvarying vec3 vMudP;\n' +
         'float mudMask(){\n' +
         // body space: height above the centre of mass, so low = dirty
-        '  float h = smoothstep(0.45, -0.35, dot(uMudRow, vec4(vMudP, 1.0)));\n' +
+        '  float h = 1.0 - smoothstep(-0.35, 0.45, dot(uMudRow, vec4(vMudP, 1.0)));\n' +
         '  float n = sin(vMudP.x * 13.0) * sin(vMudP.z * 9.0 + 1.7) * 0.5 + 0.5;\n' +
         '  return clamp(uMud * h * (0.40 + 0.80 * n), 0.0, 1.0);\n}')
       .replace('#include <color_fragment>',
         '#include <color_fragment>\n\tfloat _mud = mudMask();\n' +
+        '\tfloat _hi = max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b));\n' +
+        '\tfloat _lo = min(diffuseColor.r, min(diffuseColor.g, diffuseColor.b));\n' +
+        '\tfloat _paint = smoothstep(0.12, 0.38, (_hi-_lo)/max(_hi,0.01));\n' +
+        '\tdiffuseColor.rgb *= mix(vec3(1.0), uPaintTint, _paint*uAtlasPaint);\n' +
         '\tdiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.105, 0.078, 0.050), _mud);')
       .replace('#include <roughnessmap_fragment>',
         '#include <roughnessmap_fragment>\n\troughnessFactor = mix(roughnessFactor, 0.94, _mud);')
       .replace('#include <lights_physical_fragment>',
         '#include <lights_physical_fragment>\n\t#ifdef USE_CLEARCOAT\n' +
+        '\tmaterial.clearcoat *= mix(1.0, _paint, uAtlasPaint);\n' +
         '\tmaterial.clearcoat = mix(material.clearcoat, 0.02, _mud);\n' +
         '\tmaterial.clearcoatRoughness = mix(material.clearcoatRoughness, 0.85, _mud);\n\t#endif');
   };
@@ -428,7 +471,7 @@ export function buildArsenalRig(v, spec, M) {
   v.chassis.add(rig);
   v._arsenalRig = rig;
 
-  const lg = launcherGeo(P, seed, tubes);
+  const lg = wearUV(launcherGeo(P, seed, tubes));
   addPart(rig, lg, M.arsenal, v);
   if (L.base > 0) {
     const g = new THREE.BoxGeometry(plateW + 0.02, L.base, 0.36);
@@ -450,7 +493,7 @@ export function buildArsenalRig(v, spec, M) {
      LAUNCHERS (§8.2), with the instance field and a default behind it. */
   const launcher = LAUNCHERS[spec.id];
   const cap = clamp((launcher && launcher.ammoCap) || v.ammoCap || RACK_DEFAULT, 1, RACK_MAX);
-  const rg = rocketGeo(P, seed + 1);
+  const rg = wearUV(rocketGeo(P, seed + 1));
   v.geos.push(rg);
   v._rack = [];
   for (let i = 0; i < cap; i++) {

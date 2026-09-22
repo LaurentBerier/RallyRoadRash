@@ -96,12 +96,12 @@ export const MODEL_FIT = {
     // launcher's tubes come out of the middle of the roof panel
     launcher: { dx: 0, dy: 0.23, dz: 0 },
   },
-  /* bbox 1.895 × 0.714 × 0.820, 6,754 tris, nose at −X, the cab mid-front and
-     the bed behind. Wheels at x −0.588 / +0.507, z ±0.25..0.40 — a narrower
-     track than the spec, so the tyres stand proud of the arches. */
+  /* Regenerated Ridgeback: bbox 1.899 × 0.655 × 0.733, 6,992 tris.
+     Nose at −X; wheel contact clusters measured at −0.609 / +0.506.
+     Strip the narrower baked wheels before adding the live running gear. */
   ridgeback: {
     yaw: Math.PI / 2,
-    axles: { front: -0.588, rear: 0.507 }, lat: [0.253, 0.402], wheelR: 0.165,
+    axles: { front: -0.609, rear: 0.506 }, lat: [0.190, 0.370], wheelR: 0.175,
     dy: 0, dz: 0, tint: [],
     // the bed runs 0.24 m past the procedural tail, so the flare moves back
     flame: { x: 0, y: -0.08, z: -2.85 },
@@ -117,7 +117,7 @@ export const MODEL_FIT = {
       head: { dx: 0, dy: 0.24, dz: 0.52 },
       brake: { dx: 0, dy: 0.17, dz: -0.46 },
     },
-    launcher: { dx: 0, dy: 0.36, dz: 0 },       // cab roof, 1.416
+    launcher: { dx: 0, dy: 0.16, dz: 0 },       // regenerated cab roof, lower mount
   },
   /* bbox 1.895 × 0.562 × 0.841, 7,229 tris, nose at −X with the wing at +X.
      Wheels at x −0.507 / +0.570, z ±0.22..0.41, and bigger than the spec's

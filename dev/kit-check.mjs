@@ -489,7 +489,7 @@ head('8. THE TABLES — shares, ids, colliders, facings');
     const D = DRESSING[theme];
     for (const L of D.landmarks) kitUsed.add(L.id);
     for (const W of (D.wasteland || [])) kitUsed.add(W.id);
-    for (const H of (D.heroModels || [])) kitUsed.add(H.fallback);
+    for (const H of [...(D.heroModels || []), ...(D.centerpieces || [])]) kitUsed.add(H.fallback);
   }
 
   /* _kitGeo has a `default` that hands back a crate, so a typo in a table is
@@ -560,7 +560,7 @@ head('9. HERO MODELS — §8.9 entries, and a fallback for every one of them');
 
   let n = 0;
   for (const theme of Object.keys(DRESSING)) {
-    for (const h of (DRESSING[theme].heroModels || [])) {
+    for (const h of [...(DRESSING[theme].heroModels || []), ...(DRESSING[theme].centerpieces || [])]) {
       n++;
       ok(`${theme}/${h.id}: relative url under assets/models/heroes`,
         typeof h.url === 'string' && h.url.startsWith('assets/models/heroes/') &&
@@ -574,10 +574,12 @@ head('9. HERO MODELS — §8.9 entries, and a fallback for every one of them');
         h.scale >= 2 && h.scale <= 12, `${h.scale}`);
       ok(`${theme}/${h.id}: yaw is a road-relative angle`,
         Math.abs(h.yaw) <= Math.PI, `${h.yaw}`);
-      ok(`${theme}/${h.id}: collider radius is sane`, h.r > 1 && h.r < 8, `${h.r}`);
+      ok(`${theme}/${h.id}: collider radius is sane`, h.r > 1 && h.r <= 18, `${h.r}`);
+      if (h.size) ok(`${theme}/${h.id}: footprint covers target size`, h.r * 2 >= h.size * 0.66);
     }
   }
-  ok('one hero model per stage', n === Object.keys(DRESSING).length, `${n}`);
+  ok('one hero and one centerpiece per stage', n === Object.keys(DRESSING).length * 2 &&
+    Object.values(DRESSING).every(d => d.heroModels.length === 1 && d.centerpieces.length === 1), `${n}`);
 }
 
 console.log(`\n${failures ? '\x1b[31m' : '\x1b[32m'}${checks - failures}/${checks} checks passed\x1b[0m`);

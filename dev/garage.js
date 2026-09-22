@@ -42,7 +42,7 @@ import { Engine } from '../src/core/engine.js';
 import { Sky, SKY_THEMES } from '../src/world/sky.js';
 import { Vehicle } from '../src/game/vehicle.js';
 import { VEHICLES, VEHICLE_BY_ID } from '../src/game/vehicles.js';
-import { setGhostLook, setMudLook, setCarcassSource } from '../src/game/vehicle-art.js';
+import { setGhostLook, setMudLook, setCarcassSource, setCarcassRenderer } from '../src/game/vehicle-art.js';
 import { muzzleLocal } from '../src/game/vehicle-carcass.js';
 import { loadAssets, Assets } from '../src/core/assets.js';
 import { SURF } from '../src/world/surfaces.js';
@@ -73,11 +73,22 @@ const fixedAngle = q.has('ang') ? num('ang', 0) * Math.PI / 180 : null;
 const useModel = q.get('model') !== '0';
 const ammo = q.has('ammo') ? Math.max(0, num('ammo', 0) | 0) : null;
 const envMode = q.get('env') || 'sky';
+let viewDistance = num('distance', null);
+const lodControls = document.createElement('div');
+lodControls.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:10;display:flex;gap:8px';
+for (const [label, distance] of [['Close LOD', null], ['Far LOD', 90]]) {
+  const b = document.createElement('button');
+  b.textContent = label; b.onclick = () => { viewDistance = distance; };
+  lodControls.append(b);
+}
+document.body.append(lodControls);
 
 /* This page lives in dev/, so the served layout's 'assets/…' is one level
    up from here. Set BEFORE the Vehicle is built: the source is read at
    build time and the load starts there. */
-setCarcassSource(useModel ? (id) => '../assets/models/' + id + '-carcass.glb' : null);
+const garageAssets = new Assets(await loadAssets('../assets/manifest.json'));
+setCarcassSource(useModel ? (id, level) => garageAssets.url('models/' + id + '-carcass' +
+  (level === 'high' && q.get('lod') !== 'low' ? '-high' : '')) : null);
 
 /* A pad, not a terrain: the same four methods Vehicle is contracted to use. */
 const PAD = {
@@ -88,6 +99,7 @@ const PAD = {
 };
 
 const engine = new Engine(document.getElementById('stage'), q.get('q') || 'high');
+setCarcassRenderer(engine.renderer);
 const sky = new Sky(engine.renderer, engine.scene, engine.quality, skyId);
 engine.setLightTheme(SKY_THEMES[skyId] || SKY_THEMES.training);
 
@@ -195,7 +207,7 @@ function frame(now) {
   if (holdLean && veh.leanRoot) veh.leanRoot.rotation.z = holdLean;
 
   const a = fixedAngle != null ? fixedAngle : t / spinPeriod * Math.PI * 2;
-  const R = 3.0 + spec.dims.L * 0.85;
+  const R = viewDistance ?? (3.0 + spec.dims.L * 0.85);
   engine.camera.position.set(Math.cos(a) * R, 1.05 + spec.dims.H * 0.55, Math.sin(a) * R);
   engine.camera.lookAt(0, spec.dims.H * 0.28, 0);
   sky.update(dt, engine.camera);
@@ -208,6 +220,12 @@ function frame(now) {
   if (veh.carcass !== censusFor) { censusFor = veh.carcass; census = takeCensus(); }
 
   const ci = veh._carcassInfo;
+  const activeBody = veh.carcass?.active || veh.carcass;
+  let mapSize = 0;
+  activeBody?.traverse(o => {
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) mapSize = Math.max(mapSize, m?.map?.image?.width || 0);
+  });
   const carcassLine = !useModel ? 'model off — procedural body'
     : ci ? `carcass ${ci.url.replace(/^.*\//, '')}   ${ci.kept} of ${ci.tris} tris after the wheel strip` +
         `   scale ${ci.fit.s.toFixed(3)}   yaw ${(ci.fit.yaw * 180 / Math.PI).toFixed(0)}°` +
@@ -226,7 +244,7 @@ function frame(now) {
     `ride ${veh.rideHz.toFixed(2)} Hz   sag ${(veh.sag * 100).toFixed(1)} cm   comHeight ${spec.comHeight} m\n` +
     `boost ${boost.toFixed(2)}   ghost ${ghost.toFixed(2)}   mud ${mud.toFixed(2)}` +
     (veh.leanRoot ? `   bank ${(veh.leanRoot.rotation.z * 180 / Math.PI).toFixed(1)}°` : '') + '\n' +
-    `${carcassLine}\n${muzzleLine}\n` +
+    `${carcassLine}\nLOD ${veh.carcass?.state || 'single'} · ${veh.carcass?.active === veh.carcass?.high && veh.carcass?.high ? 'HIGH' : 'LOW'} · active map ${mapSize}px\n${muzzleLine}\n` +
     `${census.meshes} meshes + ${census.sprites} sprites   ${Math.round(census.total)} tris` +
     /* 3200, up from 2200: the tyre carcass went from three open shells (144)
        to one closed lathe (384), which is what stops you seeing through the

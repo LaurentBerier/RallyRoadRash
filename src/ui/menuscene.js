@@ -41,15 +41,12 @@
    thermal budget on a menu.
    ============================================================ */
 import * as THREE from 'three';
+import { GarageViewport } from './garage-viewport.js';
 import { Sky, SKY_THEMES } from '../world/sky.js';
-import { Dust } from '../world/dust.js';
 import { Vehicle } from '../game/vehicle.js';
 import { VEHICLES, VEHICLE_BY_ID } from '../game/vehicles.js';
 import { TRACKS, getTrack } from '../world/tracks/index.js';
 import { SURF } from '../world/surfaces.js';
-import {
-  kitPalette, canopyGeo, crateGeo, spareWheelGeo, poleGeo, wireGeo,
-} from '../world/kit.js';
 
 /* A pad, not a terrain: the same four methods Vehicle and Dust are
    contracted to use, and nothing else. Straight out of dev/garage.js. */
@@ -125,7 +122,6 @@ export const SHOWROOM = {
 };
 
 const _v = new THREE.Vector3();
-const _dummy = new THREE.Object3D();
 /* Scratch for _frameGarage. Module scope because this runs every frame and a
    fresh Vector3 sixty times a second is still an allocation in a loop. */
 const _fwd = new THREE.Vector3();
@@ -302,6 +298,7 @@ export class MenuScene {
 
   /** Stage select swaps the sky (and with it the light, dust and paddock). */
   setTrack(trackId) {
+    if (this.preview) { this.trackId = trackId || this.trackId; return; }
     if (trackId) this.trackId = trackId;
     const def = getTrack(this.trackId);
     const theme = (def && def.theme) || 'training';
@@ -323,6 +320,7 @@ export class MenuScene {
    * here, so this is the explicit way to ask for the work again.
    */
   rebuildVehicle() {
+    if (this.preview) { this.preview.dropVehicle(); this.setVehicle(this.vehicleId); return; }
     const id = this.vehicleId;
     /* _dropVehicle FIRST, and no nulling before it.
        This used to null `this.vehicle` to defeat setVehicle's unchanged-spec
@@ -341,6 +339,7 @@ export class MenuScene {
 
   /** The garage swaps the machine on the pad. */
   setVehicle(vehicleId) {
+    if (this.preview) { this.vehicleId = vehicleId || this.vehicleId; this.preview.setVehicle(this.vehicleId); this.vehicle = this.preview.vehicle; return; }
     if (vehicleId) this.vehicleId = vehicleId;
     if (!this._live) return;
     const spec = VEHICLE_BY_ID[this.vehicleId] || VEHICLES[0];
@@ -349,6 +348,8 @@ export class MenuScene {
     try {
       this.vehicle = new Vehicle(this.turntable, PAD, spec, { livery: 0 });
       this.vehicle.placeAt(0, 0, 0);
+      this._previewDeadline = performance.now() + 15000;
+      document.getElementById('garageInset')?.classList.add('loading');
       this._makeContactShadow(spec);
     } catch (e) {
       // A menu backdrop must never be able to stop the game booting.
@@ -362,6 +363,7 @@ export class MenuScene {
    * itself while a menu screen is up — see the report's contract needs.
    */
   update(dt, elapsed) {
+    if (this.preview) { this.preview.update(dt); return; }
     if (!this._live) return;
     const d = dt > 0 && dt < 0.25 ? dt : 0.016;
     this._t += d;
@@ -375,6 +377,17 @@ export class MenuScene {
     if (this.vehicle) {
       this.vehicle.step(d, NO_CTL);
       this.vehicle.updateVisuals(d);
+      const v = this.vehicle, lod = v.carcass;
+      const pending = v._carcassLoading || (lod?.isLOD && (lod.state === 'idle' || lod.state === 'loading'));
+      if (pending && performance.now() > this._previewDeadline) {
+        // Freeze the available fallback so an overdue response cannot pop in.
+        v._carcassGen = (v._carcassGen | 0) + 1;
+        v._carcassLoading = false;
+        if (lod?.isLOD) lod.state = 'failed';
+      }
+      document.getElementById('garageInset')?.classList.toggle('loading',
+        !!pending && performance.now() <= this._previewDeadline);
+
     }
 
     /* The dolly. There is only one kind left that can be live — see
@@ -524,50 +537,23 @@ export class MenuScene {
     if (this.kind !== 'garage') return false;
     if (!(this.motionFx > 0)) return false;
     const q = this.engine.quality;
-    if (q && q.name === 'LOW') return false;
+    // Its own bounded pixel budget keeps this preview independent of race quality.
     return true;
   }
 
   _build() {
     if (this._live) return;
-    const scene = this.engine.scene;
-
-    this.group = new THREE.Group();
-    this.group.name = 'menuscene';
-    scene.add(this.group);
-
-    this.turntable = new THREE.Group();
-    this.group.add(this.turntable);
-
-    // Set before anything can fail, so _teardown below can undo a half-build.
-    this._live = true;
-
-    this._makePad();
-    this._makeSky();
-    /* No sky means no light theme and no IBL — the pad would be a black disc
-       and the machine an unlit silhouette. The DOM hero is a better answer
-       than a broken one, so unwind and let it take over. */
-    if (!this.sky) { this._teardown(); return; }
-
-    this._buildDressing();
-    this.rig = buildShowroomRig(this.group, this.engine, this.theme);
-
     try {
-      const cap = Math.min(420, (this.engine.quality && this.engine.quality.dust) || 500);
-      this.dust = new Dust(this.group, PAD, this.sky.sunDir, cap, this.theme);
-      // Points are sized in metres until the viewport height is known.
-      if (this.engine.renderer) {
-        const sz = new THREE.Vector2();
-        this.engine.renderer.getDrawingBufferSize(sz);
-        this.dust.setViewport(sz.y);
-      }
-    } catch (e) {
-      console.warn('[menuscene] dust unavailable', e);
-      this.dust = null;
+      this.preview = new GarageViewport(document.getElementById('garageInset'));
+      this._live = true;
+    } catch (error) {
+      this.preview?.dispose(); this.preview = null; this._live = false;
+      console.warn('[garage] WebGL preview unavailable', error);
     }
   }
 
   _teardown() {
+    if (this.preview) { this.preview.dispose(); this.preview=null; this.vehicle=null; this._live=false; this._syncDom(); return; }
     if (!this._live) { this._syncDom(); return; }
     this._live = false;
 
@@ -751,98 +737,18 @@ export class MenuScene {
      vertex colours; that is four small merges, not a bake. */
   _buildDressing() {
     if (!this.group) return;
-    if (this._dress) {
-      for (const m of this._dress) { this.group.remove(m); m.geometry.dispose(); }
+    if (this._dress) for (const mesh of this._dress) {
+      this.group.remove(mesh); mesh.geometry.dispose();
     }
-    this._dress = [];
-    if (!this.dressMat) {
-      this.dressMat = this._keepMat(new THREE.MeshStandardMaterial({
-        vertexColors: true, roughness: 0.88, metalness: 0.05,
-      }));
-    }
-    /* The layout is hand-placed, not scattered: five props around one pad is
-       a composition, and a seeded scatter over that area produces a car park.
-       Coordinates are metres, +Z toward the camera's home position. */
-    const P = kitPalette(this.theme);
-
-    const place = (geo, sites) => {
-      if (!sites.length) return;
-      const im = new THREE.InstancedMesh(geo, this.dressMat, sites.length);
-      im.castShadow = true;
-      im.receiveShadow = false;
-      im.frustumCulled = false;
-      for (let i = 0; i < sites.length; i++) {
-        const s = sites[i];
-        _dummy.position.set(s[0], s[1] || 0, s[2]);
-        _dummy.rotation.set(0, s[3] || 0, 0);
-        _dummy.scale.setScalar(s[4] == null ? 1 : s[4]);
-        _dummy.updateMatrix();
-        im.setMatrixAt(i, _dummy.matrix);
-      }
-      im.instanceMatrix.needsUpdate = true;
-      this.group.add(im);
-      this._dress.push(im);
-    };
-
-    /* THE SET IS COMPOSED AROUND ONE CAMERA and since wave 10 there is only
-       one: `_frameGarage` orbits a ≈ -0.55 ± 0.20 rad, so the machine's
-       BACKGROUND — the strip of pad the window frames behind it — sits at
-       roughly 148° in world terms, out past (+5, -8). Anything parked there
-       is not scenery, it is a hat on the car.
-
-       So in wave 10 the canopies went from two at r ≈ 7 to ONE at r ≈ 8.9,
-       moved round to 54° off the view axis — outside the 45° half-frustum, so
-       it frames from beyond the window's left edge and swings in only at the
-       end of the arc. The one that used to sit opposite it was 22° off axis:
-       a big flat quad of lit canvas directly behind the roll cage, reading as
-       a coloured ceiling on every stage and as a pink glare on the caldera.
-       The TYRE WALL backs the machine now, which is what a tyre wall is for,
-       and the floodlight on that side is a thin vertical that frames rather
-       than fills. */
-    place(canopyGeo(P, 11), [[-8.8, 0, -1.2, 0.9]]);
-    // crates under it, and out of the background strip with it
-    place(crateGeo(P, 23), [
-      [-7.4, 0, 0.2, 0.3], [-8.6, 0, 0.9, 1.1], [-6.6, 0, -2.4, 2.2],
-      [7.9, 0, 1.4, 0.2], [9.0, 0, 2.4, 0.9],
-    ]);
-    /* Tyre wall: an arc of spare wheels behind the machine. Two rows, the top
-       one offset half a wheel, which is how a real one is stacked and is also
-       what stops it reading as a dotted line. */
-    const tyres = [];
-    for (let row = 0; row < 2; row++) {
-      const n = row ? 9 : 10;
-      for (let i = 0; i < n; i++) {
-        const a = -2.35 + (i / (n - 1)) * 1.5 + (row ? 0.075 : 0);
-        const r = 9.6;
-        tyres.push([Math.cos(a) * r, row * 0.60, Math.sin(a) * r, a + Math.PI / 2, 1]);
-      }
-    }
-    place(spareWheelGeo(P, 37), tyres);
-    // floodlights
-    place(poleGeo(P, 53, 8.0, 2), [[-8.6, 0, 3.4, 0.9], [8.4, 0, 2.2, -0.9]]);
-
-    /* Bunting. wireGeo bakes its endpoints into the geometry, so these cannot
-       be instanced — one little mesh is the honest cost of a sagging line
-       between two poles.
-
-       THERE USED TO BE THREE SPANS, AND THE MIDDLE ONE RAN POLE TO POLE at
-       y = 2.5: a bright line straight across the window at exactly the height
-       the roll cage lives. It went with the canopy it was tied to. What is
-       left is the one span from the left floodlight down to the surviving
-       canopy, out at the window's edge, which says paddock without drawing on
-       the machine. */
-    const wireCol = P.canvasAlt;
-    const spans = [
-      [-8.6, 7.2, 3.4, -8.8, 2.5, -1.2],
-    ];
-    for (const s of spans) {
-      const g = wireGeo(wireCol, s[0], s[1], s[2], s[3], s[4], s[5], 0.9, 10, 0.05);
-      const m = new THREE.Mesh(g, this.dressMat);
-      m.castShadow = false;                 // a shadow-casting wire is acne
-      m.frustumCulled = false;
-      this.group.add(m);
-      this._dress.push(m);
-    }
+    if (!this.dressMat) this.dressMat = this._keepMat(new THREE.MeshStandardMaterial({
+      color: 0x19212c, roughness: 0.85, metalness: 0.05, side: THREE.BackSide,
+    }));
+    // A continuous studio wall frames the vehicle without silhouettes or
+    // scenery competing with its roll cage and wheel detail.
+    const wall = new THREE.Mesh(new THREE.CylinderGeometry(PAD_R, PAD_R, 12, 64, 1, true), this.dressMat);
+    wall.position.y = 5.9;
+    this.group.add(wall);
+    this._dress = [wall];
   }
 
   _dropVehicle() {

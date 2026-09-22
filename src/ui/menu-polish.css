@@ -1,0 +1,173 @@
+/* Fixed menu composition: benchmark in docs/ui/benchmark.webp. */
+.screen { --pad:clamp(18px,3vw,48px); --plate-w:100%; }
+.screen.sheet { padding:0; overflow:hidden; }
+.screen.sheet::before { width:100%; background:linear-gradient(115deg,rgba(11,16,19,.97),rgba(11,16,19,.87)); mask:none; }
+.screen.sheet::after { animation:none; }
+.screen.sheet > .scr-head { height:12vh; min-height:64px; box-sizing:border-box; padding:12px var(--pad); align-items:center; max-width:none; }
+.scr-head h2 { font-size:clamp(22px,2.5vw,34px); letter-spacing:.07em; }
+.scr-sub { font-size:12px; }
+.screen.sheet > .scr-body { min-height:0; max-width:none; padding:16px var(--pad); overscroll-behavior:contain; }
+.screen.sheet > .scr-foot { height:12vh; min-height:68px; box-sizing:border-box; padding:10px var(--pad); max-width:none; flex-wrap:nowrap; background:rgba(9,14,17,.97); }
+.scr-foot .foot-note { flex:0 1 40%; min-width:0; font-size:11px; }
+.btn { border-radius:2px; letter-spacing:.09em; box-shadow:none; }
+.btn.primary { background:linear-gradient(110deg,#ff8e29,#ed6514); }
+#scr-tracks::before,#scr-garage::before { display:block; z-index:-2; }
+#scr-tracks > .scr-body,#scr-garage > .scr-body { display:grid; grid-template-rows:minmax(0,1fr) 18vh; gap:16px; overflow:hidden; }
+#tracksDetail,#garageDetail { width:46%; height:100%; min-height:0; padding:14px 18px; box-sizing:border-box; justify-content:start; align-items:stretch; text-align:left; background:rgba(10,16,20,.94); border:1px solid #52606b55; overflow:auto; gap:10px; }
+#tracksDetail .pick-top,#garageDetail .pick-top { display:flex; flex-direction:column; align-items:flex-start; justify-content:start; flex:none; min-height:92px; height:92px; gap:6px; }
+#tracksDetail .pick-name,#garageDetail .pick-name { font-size:clamp(24px,3vw,42px); line-height:1; height:2em; display:block; flex:none; }
+#tracksDetail .pick-tag,#garageDetail .pick-tag { height:2.6em; min-height:2.6em; font-size:13px; line-height:1.3; margin:0; }
+#tracksDetail .pick-meta { margin:0; min-height:46px; align-content:start; gap:5px; }
+#tracksDetail .chip { font-size:10px; padding:4px 6px; }
+#tracksDetail .track-map { width:100%; height: min(17vh,130px); object-fit:contain; flex:none; margin:0; }
+#tracksDetail .pick-times { min-height:24px; margin:0; }
+#garageDetail .stats { width:100%; margin:16px 0 0; gap:14px; }
+#garageDetail .bar i { animation:none; transition:width .2s; }
+#tracksHero { inset:12vh var(--pad) 34vh 50%; border:1px solid #8896a555; background-size:cover; background-position:center; opacity:1; z-index:-1; }
+#tracksHero::after { background:linear-gradient(0deg,#0b111944,transparent 50%); }
+#garageHero { inset:12vh 0 34vh 50%; background-position:center; background-size:cover; border:1px solid #8896a555; }
+#garageHero::after { background:linear-gradient(0deg,#0b111966,transparent); }
+body.menu3d #scr-garage .garage-hero { opacity:0; border:0; clip-path:none; }
+#garageInset { pointer-events:none; border:1px solid #8896a555; box-shadow:inset 0 0 60px #0008; }
+#garageInset::before { font-size:9px; letter-spacing:.2em; background:#10181de0; padding:7px 12px; }
+.preview-loading { display:none; position:absolute; inset:0; background:#10171c; place-content:center; text-align:center; color:#ff8e29; font-size:13px; letter-spacing:.15em; }
+.preview-loading span { display:block; color:#a6b0b8; font-size:11px; margin-top:12px; letter-spacing:.04em; }
+#garageInset.loading .preview-loading { display:grid; }
+#trackGrid,#garageGrid { width:100%; max-width:none; height:100%; min-height:0; gap:12px; grid-auto-columns:minmax(0,1fr); align-items:stretch; }
+#trackGrid .card,#garageGrid .card { min-height:0; overflow:hidden; border-radius:0; }
+#trackGrid button,#garageGrid button { min-width:0; min-height:0; overflow:hidden; padding:0; border-radius:0; background:#0d141b; }
+#trackGrid canvas,#garageGrid canvas { width:100%; height:calc(18vh - 42px); object-fit:cover; aspect-ratio:auto; }
+#trackGrid .sel,#garageGrid .sel { border-color:#ff8524; box-shadow:inset 0 -3px #ff8524; transform:none; }
+#scr-playbook > .scr-body { display:flex; flex-direction:column; overflow:hidden; }
+#playbookTabs { flex:none; margin:0 0 16px; }
+#playbookBody { flex:1; min-height:0; overflow:auto; scrollbar-gutter:stable; padding-right:12px; }
+#scr-settings .scr-body,#scr-results .scr-body { scrollbar-gutter:stable; }
+.set-row,.pb-section,.controls-ref { border-color:#61707c44; border-radius:2px; background:#101820c9; }
+#scr-main .main-wrap { height:88%; max-height:740px; display:grid; grid-template-rows:minmax(0,1fr) 180px 32px; gap:18px; }
+#scr-main .main-brand { margin:0; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+#scr-main .badge-slot { height:32px; min-height:32px; }
+#scr-main .main-progress { height:36px; min-height:36px; margin:14px 0 0; }
+#scr-main .main-actions { display:grid; grid-template-rows:repeat(3,1fr); gap:10px; }
+#scr-main .main-actions .btn { min-height:0; }
+#scr-main .hintline { margin:0; }
+.pause-card { width:min(480px,90vw); box-sizing:border-box; border:1px solid #7d8a9655; background:linear-gradient(135deg,#18232df5,#090e13fa); border-radius:2px; }
+.pause-ctx { min-height:48px; }
+.boot-inner { width:min(560px,86vw); }
+.loadbar { height:5px; border-radius:0; }
+.loadmsg { height:32px; font-size:12px; letter-spacing:.13em; }
+@media (max-height:650px) and (min-width:701px) {
+ #tracksDetail,#garageDetail { padding:8px 14px; gap:6px; }
+ #tracksDetail .pick-top,#garageDetail .pick-top { height:60px; min-height:60px; }
+ #tracksDetail .pick-name,#garageDetail .pick-name { font-size:24px; height:1em; }
+ #tracksDetail .track-map { height:12vh; }
+ #garageDetail .stats { margin:0; gap:8px; }
+ #scr-main .main-wrap { grid-template-rows:minmax(0,1fr) 150px 20px; gap:8px; }
+ #scr-main .logo { max-height:20vh; object-fit:contain; }
+}
+@media (max-width:700px) {
+ .screen.sheet > .scr-head { height:10vh; min-height:58px; }
+ .screen.sheet > .scr-foot { height:12vh; padding:8px 14px; gap:8px; }
+ .scr-foot .foot-note,.scr-head-right { display:none; }
+ .screen.sheet > .scr-body { padding:8px 14px; }
+ #scr-tracks > .scr-body,#scr-garage > .scr-body { grid-template-rows:minmax(0,1fr) 17vh; gap:10px; }
+ #tracksDetail,#garageDetail { width:100%; margin-top:26vh; height:calc(100% - 26vh); padding:10px; }
+ #tracksHero,#garageHero { inset:11vh 14px auto; height:24vh; }
+ #tracksDetail .pick-top,#garageDetail .pick-top { height:56px; min-height:56px; }
+ #tracksDetail .pick-name,#garageDetail .pick-name { font-size:24px; height:1em; }
+ #tracksDetail .track-map { height:90px; }
+ #trackGrid,#garageGrid { display:grid; grid-auto-flow:column; grid-auto-columns:140px; overflow-x:auto; }
+ #trackGrid canvas,#garageGrid canvas { height:calc(17vh - 42px); }
+ body.menu3d #scr-garage .garage-hero { opacity:1; }
+ #garageInset { display:none!important; }
+ #scr-main .main-wrap { width:90%; }
+ .settings-cols { grid-template-columns:1fr; }
+}
+@media (prefers-reduced-motion:reduce) { .screen,.bar i { animation:none!important; transition:none!important; } }
+#tracksDetail,#garageDetail { gap:6px; padding:12px 18px; }
+#tracksDetail .pick-top,#garageDetail .pick-top { position:relative; height:76px; min-height:76px; }
+#tracksDetail .pick-name,#garageDetail .pick-name { font-size:clamp(24px,2.7vw,36px); height:2em; }
+#tracksDetail .pick-top > :last-child:not(.pick-name),#garageDetail .pick-top > :last-child:not(.pick-name) { position:absolute; right:0; bottom:0; flex-shrink:0; }
+#tracksDetail .track-map { height: min(14vh,100px); }
+#tracksDetail .pick-meta { flex-shrink:0; }
+@media (max-width:700px) { #tracksDetail .pick-top,#garageDetail .pick-top { height:76px; min-height:76px; } }
+#tracksDetail { display:grid; grid-template-rows:76px 34px 52px minmax(60px,1fr) 24px; }
+#tracksDetail .track-map { height:100%; min-height:0; max-height:120px; }
+#garageDetail { display:grid; grid-template-rows:76px 34px 132px; align-content:start; }
+#garageDetail .stats { margin:12px 0 0; }
+body.menu3d #scr-garage::before { background:#0c1217; clip-path:polygon(0 0,100% 0,100% 12%,50% 12%,50% 66%,100% 66%,100% 100%,0 100%); }
+@media (max-width:700px) {
+ #tracksDetail { grid-template-rows:76px 34px 52px 90px 24px; }
+}
+.screen.sheet::after { display:none; }
+#garageDetail .pick-top,#garageDetail .pick-tag,#garageDetail .stats { width:100%; max-width:none; }
+#scr-settings .scr-body { overflow:hidden; }
+#scr-settings .settings-cols { height:100%; min-height:0; }
+#settingsBody,#controlsBody { overflow:auto; height:100%; min-height:0; scrollbar-gutter:stable; box-sizing:border-box; }
+@media(max-width:700px) { #scr-settings .scr-body { overflow:auto; } #scr-settings .settings-cols { height:auto; } #settingsBody,#controlsBody { height:auto; } }
+
+@media(max-width:700px) { body.menu3d #scr-garage::before { clip-path:none; } }
+#resultsBtns { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+#resultsBtns .btn { min-width:0; padding:10px; }
+#scr-results .results-grid { min-height:280px; }
+#resultsRecord { min-height:32px; }
+#resultsRecord.hidden { display:block!important; visibility:hidden; }
+#unlockList { height:64px; overflow:auto; }
+#scr-results .unlocks .unlock { animation:none; }
+@media(max-width:700px) { #resultsBtns { gap:6px; } #resultsBtns .btn { font-size:10px; padding:6px; } }
+#tracksDetail .pick-meta { overflow:auto; }
+.screen * { scrollbar-width:thin; scrollbar-color:#5d6b77 #11191f; }
+@media(max-width:700px) {
+ #tracksDetail .pick-meta { min-height:52px; }
+ #trackGrid,#garageGrid { grid-auto-columns:180px; }
+}
+@media(max-height:520px) and (min-width:701px) {
+ #tracksDetail,#garageDetail { overflow:auto; }
+ #tracksDetail { grid-template-rows:58px 34px 52px 70px 24px; }
+ #garageDetail { grid-template-rows:58px 34px 110px; }
+ #tracksDetail .pick-top,#garageDetail .pick-top { height:58px; min-height:58px; }
+ .pause-card { max-height:94vh; overflow:auto; }
+}
+#trackGrid,#garageGrid { display:grid; grid-auto-flow:column; grid-template-columns:none; grid-template-rows:minmax(0,1fr); align-content:stretch; }
+#tracksDetail .pick-tag,#garageDetail .pick-tag { display:block; }
+@media(max-height:520px) and (min-width:701px) {
+ #tracksHero,#garageHero { top:80px; bottom:calc(68px + 18vh + 32px); }
+ #trackGrid .pick-name,#garageGrid .pick-name { font-size:9px; }
+ #trackGrid .pick-top,#garageGrid .pick-top { padding:4px; }
+ #trackGrid .chip,#garageGrid .chip,#trackGrid .lock,#garageGrid .lock { display:none; }
+ #trackGrid canvas,#garageGrid canvas { height:calc(18vh - 22px); }
+}
+#tracksDetail,#garageDetail { grid-template-columns:minmax(0,1fr); }
+@media(max-height:520px) and (min-width:701px) { #trackGrid .lock,#garageGrid .lock { display:inline-flex; font-size:8px; } }
+/* Isolated garage canvas: native viewport resolution, no race grain or blur. */
+body.menu3d #scr-garage::before { clip-path:none; }
+#garageInset { pointer-events:auto; overflow:hidden; background:#10151c; z-index:1; }
+#garageInset::before { content:'INSPECT VEHICLE'; z-index:3; pointer-events:none; }
+.garage-canvas { width:100%; height:100%; display:block; touch-action:none; cursor:grab; outline:none; }
+.garage-canvas:active { cursor:grabbing; }
+.garage-canvas:focus-visible { outline:2px solid #ff8d32; outline-offset:-3px; }
+.garage-camera-tools { position:absolute; bottom:0; left:0; right:0; display:flex; align-items:center; justify-content:flex-end; gap:6px; padding:8px; background:linear-gradient(transparent,#070c11dd); }
+.garage-camera-tools span { margin-right:auto; font:9px var(--mono); color:#dce5ec; letter-spacing:.04em; }
+.garage-camera-tools button { background:#101820db; border:1px solid #72808e; color:#e3e9ef; min-width:32px; min-height:30px; font:10px var(--mono); padding:5px 8px; cursor:pointer; }
+.garage-camera-tools button:focus-visible { outline:2px solid #ff8426; }
+#garageInset .preview-loading { z-index:4; }
+@media(max-width:700px) { body.menu3d #scr-garage #garageInset { display:block!important; left:14px; right:14px; top:11vh; bottom:auto; height:24vh; } .garage-camera-tools span { display:none; } }
+@media(max-height:520px) and (min-width:701px) { body.menu3d #scr-garage #garageInset { top:80px; bottom:calc(68px + 18vh + 32px); } .garage-camera-tools span { display:none; } }
+/* Cinematic backplates are decoded by the boot asset loader before reveal. */
+.screen.sheet::before,body.menu3d #scr-garage::before {
+ background-image:linear-gradient(100deg,rgba(6,12,17,.87),rgba(6,12,17,.52)),var(--menu-backdrop,none);
+ background-size:cover; background-position:center; clip-path:none;
+}
+#tracksDetail,#garageDetail { background:linear-gradient(135deg,#0b151bdc,#101820b8); border-color:#809ca44d; box-shadow:0 12px 40px #0004; }
+#tracksDetail .track-map { height:100%; max-height:none; width:100%; object-fit:fill; border:1px solid #74a7b544; box-sizing:border-box; }
+#tracksDetail { grid-template-rows:64px 34px 52px minmax(70px,1fr) 24px; }
+#tracksDetail .pick-top { height:64px; min-height:64px; }
+#tracksHero,#garageInset { box-shadow:0 18px 50px #0008; border-color:#b5c5c866; }
+#trackGrid .card,#garageGrid .card { transition:border-color .18s,box-shadow .18s; }
+#trackGrid .sel,#garageGrid .sel { box-shadow:inset 0 -3px #ff8524,0 0 22px #ef771b25; }
+#trackGrid .card:hover,#garageGrid .card:hover { border-color:#d7b793; }
+.screen.sheet > .scr-head { background:linear-gradient(#050a10b8,#050a1030); }
+.screen.sheet > .scr-foot { background:linear-gradient(#050a1066,#050a10e6); }
+@media(max-width:700px) {
+ #tracksDetail { grid-template-rows:64px 34px 52px minmax(100px,1fr) 24px; }
+}
+@media(prefers-reduced-motion:reduce) { #trackGrid .card,#garageGrid .card { transition:none; } }

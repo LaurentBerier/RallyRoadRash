@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>RALLY ROAD RASH — Off-Road Championship</title>
-<meta name="description" content="Arcade off-road rally: four machines, four procedural stages, big air. No downloads, no plugins — it all builds itself in your browser." />
+<meta name="description" content="Arcade off-road rally: four machines, five dramatic stages, rockets, drift boosts and big air. Race directly in your browser." />
 <meta name="theme-color" content="#0a0a0c" />
 <!-- Procedural favicon: tyre + chequer. Data URI so the game still ships with
      zero asset files (see docs/ARCHITECTURE.md hard rule 1). -->
@@ -13,6 +13,7 @@
      returning player keeps the old layout for ten minutes after a deploy.
      Bump this whenever styles.css changes in a way players must see. -->
 <link rel="stylesheet" href="src/ui/styles.css?v=12" />
+<link rel="stylesheet" href="src/ui/menu-polish.css?v=3" />
 <script type="importmap">
 {
   "imports": {
@@ -46,9 +47,9 @@
     <canvas class="logo" id="bootLogo" width="620" height="210"
             data-lines="RALLY ROAD|RASH" aria-label="RALLY ROAD RASH"></canvas>
     <p class="strap">OFF-ROAD CHAMPIONSHIP</p>
-    <div class="loadbar"><i id="bootBar"></i></div>
+    <div class="loadbar" role="progressbar" aria-label="Loading game assets" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bootBar"></i></div>
     <p class="loadmsg" id="bootMsg">warming up the engine…</p>
-    <p class="boot-legal">PROCEDURAL STAGES · SIX-CAR GRID · NO DOWNLOADS</p>
+    <p class="boot-legal">FIVE STAGES · SIX-CAR GRID · BUILT FOR THE BROWSER</p>
   </div>
 </div>
 
@@ -122,7 +123,7 @@
        shows through — it draws nothing when the 3D is off. -->
   <section id="scr-garage" class="screen sheet hidden">
     <div class="garage-hero" id="garageHero" aria-hidden="true"></div>
-    <div class="garage-inset" id="garageInset" aria-hidden="true"></div>
+    <div class="garage-inset" id="garageInset" aria-hidden="true"><div class="preview-loading">PREPARING VEHICLE<span>Loading close-detail materials</span></div></div>
     <header class="scr-head">
       <div><h2>GARAGE</h2><p class="scr-sub" id="garageSub"></p></div>
       <div class="scr-head-right" id="garageTrack"></div>

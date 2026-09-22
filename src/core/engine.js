@@ -361,6 +361,7 @@ export class Engine {
       this.composer.dispose();
     }
     this.composer = new EffectComposer(this.renderer, rt);
+    this.composer.setPixelRatio(1);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     /* Threshold sits above sunlit white bodywork on purpose: any lower and
        bright panels bloom and veil the entire frame. In three's physical
@@ -415,16 +416,17 @@ export class Engine {
 
   resize() {
     const px = this._pixelRatio();
-    const w = window.innerWidth, h = window.innerHeight;
+    const w = Math.max(1, window.innerWidth), h = Math.max(1, window.innerHeight);
     this.renderer.setPixelRatio(px);
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     const bw = Math.max(2, Math.floor(w * px)), bh = Math.max(2, Math.floor(h * px));
     if (this.composer) {
-      this.composer.setSize(w, h);
+      // Explicit pixel dimensions avoid independent renderer/composer DPRs.
+      this.composer.setPixelRatio(1);
+      this.composer.setSize(bw, bh);
       this.final.uniforms.uRes.value.set(bw, bh);
-      if (this.bloom) this.bloom.setSize(bw, bh);
     }
   }
 

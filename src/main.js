@@ -140,41 +140,21 @@ async function boot() {
 
   applySettings();
   App.ui.on(onAction);
-  App.ui.boot(1, 'ready');
-  App.ui.bootDone();
-
+  // Resolve and decode the image set behind the loading screen. Failed files
+  // settle to the procedural fallback; they cannot repaint a visible menu.
+  const map = await loadAssets('assets/manifest.json', p =>
+    App.ui.boot(0.08 + p * 0.88, 'preparing menu assets'));
+  App.assets = new Assets(map);
+  App.ui.setAssets(App.assets);
+  App.menuScene.assets = App.assets;
+  setCarcassSource((id, level) => App.assets.url('models/' + id + '-carcass' + (level === 'high' ? '-high' : '')));
+  setCarcassRenderer(App.engine.renderer);
+  setHeroSource(key => App.assets.url(key));
   wireLifecycle();
   showScreen('main');
-
-  /* Optional images, loaded AFTER the menu is up and deliberately not
-     awaited: the game is fully playable with assets/ empty, and blocking
-     the boot on a set of JPEGs that may not exist would trade a certain
-     delay for an uncertain gain. Consumers pick them up at their next
-     material rebuild — which for a race is buildWorld(), and for the menu
-     is the next card paint. */
-  loadAssets('assets/manifest.json').then((map) => {
-    App.assets = new Assets(map);
-    App.ui.setAssets(App.assets);
-    App.menuScene.assets = App.assets;
-    /* Where a vehicle's carcass GLB lives (contract 8.6). The manifest is the
-       only source — no guessed path, so an entry that is absent really does
-       mean "draw the procedural body" instead of "fetch it anyway and 404".
-       The lookup is lazy, so it is correct to install it before the manifest
-       exists; it simply answers null until then. */
-    setCarcassSource((id) => App.assets.url('models/' + id + '-carcass'));
-    // …and the one capability a carcass's textures need: max anisotropy.
-    setCarcassRenderer(App.engine.renderer);
-    // Same rule for the stages' hero landmarks (8.9): manifest or nothing.
-    setHeroSource((key) => App.assets.url(key));
-    /* The menu scene built its machine at boot, when that lookup still said
-       null. Nothing about the CHOICE of machine has changed, so setVehicle
-       would short-circuit — ask for the rebuild explicitly. */
-    if (App.menuScene && App.menuScene.rebuildVehicle) App.menuScene.rebuildVehicle();
-    // Repaint whatever is on screen so art that arrived late is used.
-    if (App.state === AS.MENU || App.state === AS.TRACKS || App.state === AS.GARAGE) {
-      showScreen(App.state === AS.TRACKS ? 'tracks' : App.state === AS.GARAGE ? 'garage' : 'main');
-    }
-  }).catch(() => { /* stays NO_ASSETS; nothing downstream cares */ });
+  App.ui.boot(1, 'ready');
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  App.ui.bootDone();
 
   App.tick = tick;
   App.showScreen = showScreen;
@@ -629,7 +609,7 @@ function tick(dt) {
   if (App.world) App.world.sky.projectSun(App.engine.camera, uv);
   else uv.z = 0;
 
-  App.engine.render(dt);
+  if (!App.menuScene?.preview) App.engine.render(dt);
   input.endFrame();
 }
 

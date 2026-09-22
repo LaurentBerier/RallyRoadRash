@@ -10,9 +10,8 @@
 
    Rules that make that promise keepable:
 
-     • Nothing here blocks. Boot fires loadAssets() and carries on; textures
-       appear when they appear, and a consumer that has already drawn its
-       procedural fallback simply keeps it until the next material rebuild.
+     • Boot awaits decoded images with bounded requests. Failed assets settle
+       to procedural fallbacks before the menu is revealed.
      • Relative URLs only, and crossOrigin 'anonymous'. The game is served
        from Sandscape in production and from a static server locally; an
        absolute URL to either one is wrong on the other, and a texture that
@@ -55,7 +54,7 @@ const LAYER_SIZE = 512;      // every ground layer is resampled to this square
  * @param {string} manifestUrl  relative, e.g. 'assets/manifest.json'
  * @returns {Promise<Map<string, THREE.Texture|null>>} never rejects
  */
-export async function loadAssets(manifestUrl = 'assets/manifest.json') {
+export async function loadAssets(manifestUrl = 'assets/manifest.json', onProgress = () => {}) {
   const out = new Map();
   let manifest = null;
   try {
@@ -68,7 +67,7 @@ export async function loadAssets(manifestUrl = 'assets/manifest.json') {
        returning player looked them up in last week's manifest and got null.
        A conditional request that comes back 304 costs nothing. The files the
        manifest POINTS at still cache normally; they are content, not index. */
-    const res = await fetch(manifestUrl, { cache: 'no-cache' });
+    const res = await fetch(manifestUrl, { cache: 'no-cache', signal: AbortSignal.timeout(15000) });
     if (res.ok) manifest = await res.json();
   } catch { /* no manifest is the normal case, not an error */ }
   if (!manifest || typeof manifest !== 'object') return out;
@@ -87,7 +86,9 @@ export async function loadAssets(manifestUrl = 'assets/manifest.json') {
       jobs.push(loadOne(base + spec.url, spec.kind).then(t => out.set(id, t)));
     }
   }
-  await Promise.all(jobs);
+  let completed = 0;
+  await Promise.all(jobs.map(job => job.finally(() => onProgress(++completed / jobs.length))));
+  onProgress(1);
   return out;
 }
 
@@ -98,8 +99,18 @@ function loadImage(url) {
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      img.onload = img.onerror = null;
+      resolve(value);
+    };
+    const timer = setTimeout(() => { finish(null); img.src = ''; }, 15000);
+    img.onload = async () => {
+      try { await img.decode(); finish(img); } catch { finish(null); }
+    };
+    img.onerror = () => finish(null);
     img.src = url;
   });
 }

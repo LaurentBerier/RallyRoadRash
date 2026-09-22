@@ -50,47 +50,57 @@ export function boulderGeo(seed, detail = 2, squash = 0.76) {
 /** A hoodoo: stacked resistant caps on a soft column, which is exactly how the
     real ones form and the only reason they read at 200 m. */
 export function hoodooGeo(seed) {
-  const rng = makeRNG((seed * 7919) | 1);
-  const parts = [];
-  let y = 0;
-  const n = 3 + Math.floor(rng() * 3);
-  let r = 0.9 + rng() * 0.5;
-  for (let i = 0; i < n; i++) {
-    const hgt = 0.7 + rng() * 1.5;
-    const rTop = r * (0.55 + rng() * 0.30);
-    const seg = new THREE.CylinderGeometry(rTop, r, hgt, 9, 1);
-    seg.translate((rng() - 0.5) * 0.18, y + hgt * 0.5, (rng() - 0.5) * 0.18);
-    parts.push(seg);
-    y += hgt;
-    // the cap: a wider slab that shelters the column beneath it
-    if (rng() < 0.6 && i < n - 1) {
-      const cap = new THREE.CylinderGeometry(rTop * 1.35, rTop * 1.42, 0.26, 9, 1);
-      cap.translate(0, y + 0.13, 0);
-      parts.push(cap);
-      y += 0.26;
+  const rng = makeRNG((seed * 7919) | 1), parts=[];
+  const levels=5, step=1.0;
+  for(let i=0;i<levels;i++) {
+    const t=i/(levels-1), radius=1.15*(1-t*0.35);
+    const g=new THREE.CylinderGeometry(radius*(i===levels-1?1.15:0.91),radius,step*1.18,11,2);
+    const pos=g.attributes.position;
+    for(let j=0;j<pos.count;j++) {
+      const x=pos.getX(j),y=pos.getY(j),z=pos.getZ(j),a=Math.atan2(z,x);
+      const k=1+0.13*Math.sin(a*3+seed)+0.065*Math.sin(a*7+y*3+i);
+      pos.setXYZ(j,x*k,y+0.08*Math.sin(a*4+i),z*k);
     }
-    r = rTop;
+    g.translate(Math.sin(i*.8+seed)*.18,i*step+.45,Math.cos(i*.6)*.12);
+    parts.push(g);
   }
   return finish(parts);
 }
 
-/** Conifer: a trunk and three stacked skirts. Merged so one instanced draw
-    covers the whole tree. */
+/** Irregular branch whorls and a brown trunk, merged into one instanced draw. */
 export function pineGeo(seed) {
   const rng = makeRNG((seed * 104729) | 1);
-  const h = 5.5 + rng() * 5.0;
+  const h = 6.8 + rng() * 4.2;
   const parts = [];
-  const trunk = new THREE.CylinderGeometry(0.10, 0.20, h * 0.42, 6, 1);
-  trunk.translate(0, h * 0.21, 0);
-  parts.push(trunk);
-  const tiers = 3 + (rng() < 0.5 ? 1 : 0);
+  const paint = (g, base, variation) => {
+    const c = new THREE.Color(base), pos = g.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    for (let j = 0; j < pos.count; j++) {
+      const k = 0.80 + variation * (0.5 + 0.5 * Math.sin(pos.getX(j)*3 + pos.getY(j)*1.7 + pos.getZ(j)*5));
+      colors[j*3] = c.r*k; colors[j*3+1] = c.g*k; colors[j*3+2] = c.b*k;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    parts.push(g);
+  };
+  const trunk = new THREE.CylinderGeometry(0.065, 0.23, h * 0.85, 7, 1);
+  trunk.translate(0, h * 0.425, 0);
+  paint(trunk, 0x65513c, 0.22);
+  const tiers = 7;
   for (let i = 0; i < tiers; i++) {
-    const t = i / tiers;
-    const r = (1.55 - t * 0.85) * (0.85 + rng() * 0.3);
-    const ch = h * (0.42 - t * 0.09);
-    const cone = new THREE.ConeGeometry(r, ch, 7, 1);
-    cone.translate(0, h * (0.22 + t * 0.22) + ch * 0.5, 0);
-    parts.push(cone);
+    const t = i / (tiers - 1);
+    const r = (1.8 - t * 1.48) * (0.87 + rng()*0.23);
+    const ch = h * (0.26 - t*0.10);
+    const cone = new THREE.ConeGeometry(r, ch, 9, 1);
+    const pos = cone.attributes.position;
+    for (let j = 0; j < pos.count; j++) {
+      const x=pos.getX(j), y=pos.getY(j), z=pos.getZ(j);
+      const angle=Math.atan2(z,x);
+      const k=0.88 + 0.16*Math.sin(angle*5 + seed + i*1.7);
+      pos.setXYZ(j, x*k, y + (y < 0 ? Math.sin(angle*3+i)*ch*0.085 : 0), z*k);
+    }
+    cone.rotateY(i*2.4);
+    cone.translate(Math.sin(i+seed)*0.10, h*(0.19+t*0.70)+ch*0.5, Math.cos(i)*0.08);
+    paint(cone, i%2 ? 0x294730 : 0x36543b, 0.36);
   }
   const g = finish(parts);
   g.userData.height = h;

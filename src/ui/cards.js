@@ -234,6 +234,16 @@ export function drawStage(canvas, def, locked, opts) {
   for (const r of routes) all = all.concat(r);
   const P = fitter(all, W, H, 18);
 
+  if (o.mapOnly) {
+    // Survey grid and a translucent terrain wash give the route a readable
+    // colour identity without stretching its actual geographic proportions.
+    g.save();g.strokeStyle=skin.ink;g.globalAlpha=.12;g.lineWidth=1;
+    for(let x=0;x<W;x+=28){g.beginPath();g.moveTo(x,0);g.lineTo(x,H);g.stroke();}
+    for(let y=0;y<H;y+=28){g.beginPath();g.moveTo(0,y);g.lineTo(W,y);g.stroke();}
+    g.beginPath();loop.forEach((p,i)=>{const q=P(p);i?g.lineTo(q[0],q[1]):g.moveTo(q[0],q[1]);});
+    g.closePath();g.fillStyle=skin.ink;g.globalAlpha=.16;g.fill();g.restore();
+  }
+
   // contour rings behind the road: cheap, and it stops the card reading flat.
   // Skipped over key art, where they read as scratches on the photograph.
   if (!img) {
@@ -265,6 +275,7 @@ export function drawStage(canvas, def, locked, opts) {
   // 3 px line reads as a ROAD and not as a graph
   g.lineJoin = g.lineCap = 'round';
   trace(loop, true); g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 9; g.stroke();
+  if(o.mapOnly){trace(loop,true);g.strokeStyle=skin.ink;g.lineWidth=11;g.globalAlpha=.45;g.stroke();g.globalAlpha=1;}
   trace(loop, true); g.strokeStyle = 'rgba(255,255,255,.82)'; g.lineWidth = 4.5; g.stroke();
 
   for (const rp of routes) {

@@ -903,5 +903,30 @@ head('12. TUMBLE — a spin holds the boom yaw, pulls back, and lets go');
 }
 
 /* ============================================================ */
+head('13. LANDING — suspension motion releases the heading smoothly');
+for (const fps of [30, 60, 120]) {
+  const dt = 1 / fps, cam = makeCam(), rig = new CameraRig(cam, flat);
+  const v = new MockVehicle();
+  v.vel.set(0, 0, 20); v.step(dt, flat); rig.snapBehind(v);
+  v.airborne = true; v.rollAng = 1.8;
+  for (let i = 0; i < fps; i++) { v.step(dt, flat); rig.update(dt, v, look()); }
+  ok(`${fps} Hz: airborne roll holds the chase heading`, rig._holdYaw);
+  v.airborne = false; v.rollAng = 0; v.heading = Math.PI / 2;
+  // A rough landing: only two contacts and continuing pitch oscillation.
+  v.omega.set(1.6, 0, 0); v.vel.set(20, 0, 0);
+  let maxStep = 0;
+  for (let i = 0; i < fps; i++) {
+    v.step(dt, flat); v.contacts = 2;
+    const prev = rig.yaw;
+    rig.update(dt, v, look());
+    maxStep = Math.max(maxStep, Math.abs(Math.atan2(Math.sin(rig.yaw - prev), Math.cos(rig.yaw - prev))));
+  }
+  ok(`${fps} Hz: reacquires behind the landed car within one second`,
+    !rig._holdYaw && Math.abs(rig.yaw - v.heading) < 0.08, f(rig.yaw));
+  ok(`${fps} Hz: no landing heading cut`, maxStep < 0.20, f(maxStep, 3));
+  rig.snapBehind(v);
+  ok(`${fps} Hz: respawn clears landing recovery`, !rig._holdYaw && rig._tumble === 0);
+}
+
 console.log(`\n${failures ? '\x1b[31m' : '\x1b[32m'}${checks - failures}/${checks} checks passed\x1b[0m`);
 process.exit(failures ? 1 : 0);

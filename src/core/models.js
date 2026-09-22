@@ -44,7 +44,7 @@ const _templates = new Map();
 
 let _loader = null;
 function loader() {
-  return _loader || (_loader = new GLTFLoader());
+  return _loader || (_loader = new GLTFLoader().setCrossOrigin('anonymous'));
 }
 
 /**

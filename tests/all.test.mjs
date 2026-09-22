@@ -144,6 +144,10 @@ test('deep: model-check (carcass GLB container + fit budgets)', () => {
   run(['dev/model-check.mjs']);
 });
 
+test('deep: vehicle LOD selection and streaming fallback', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/vehicle-lod-check.mjs']);
+});
+
 test('deep: audio-check (manifest ↔ files, every cue has a fallback)', () => {
   run(['dev/audio-check.mjs']);
 });
@@ -169,4 +173,12 @@ test('deep: menu-check (showroom rig, the garage window, screen fallbacks)', () 
    behind it — see dev/trick-check.mjs. */
 test('deep: trick-check (air control + trick scoring)', () => {
   run(['--experimental-loader', './dev/loader.mjs', 'dev/trick-check.mjs']);
+});
+
+test('deep: asset loading waits for decode and bounds failures', () => {
+  run(['dev/assets-loading-check.mjs']);
+});
+
+test('deep: garage inspection geometry, parked physics and disposal', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/garage-preview-check.mjs']);
 });

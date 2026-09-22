@@ -39,6 +39,7 @@ import {
   totemGeo, ruinedBillboardGeo,
 } from './kit-wasteland.js';
 import { BOUNCE_FOR, WASTE_FACING } from './props-recipes.js';
+import { dressLandmarkSite } from './landmark-scenes.js';
 
 /* ---------------- module scratch (no per-frame allocation) ---------------- */
 /* ------------------------------------------------------------------
@@ -283,14 +284,24 @@ export function flushWasteland(p) {
    ============================================================ */
 export function planHeroModels(p) {
   p.heroModels = [];
-  const list = p.plan.heroModels;
+  p.landmarkStatus = [];
+  const list = [...(p.plan.heroModels || []), ...(p.plan.centerpieces || [])];
   if (!list || !list.length) return;
   const sp = p.data.spline;
   for (const h of list) {
     const site = heroModelSite(p, h);
-    if (!site) continue;
+    const status = { id: h.id, state: 'placing', site: null };
+    p.landmarkStatus.push(status);
+    if (!site) {
+      status.state = 'no-safe-site';
+      console.warn('[props] No safe landmark site: ' + h.id);
+      continue;
+    }
+    status.site = { ...site };
+    status.state = 'fallback';
     p._claimed.push({ x: site.x, z: site.z, r: h.r + 10 });
     p._fixedColliders.push({ x: site.x, z: site.z, r: h.r, kind: 'hero', bounce: 1.25 });
+    dressLandmarkSite(p, h, site);
 
     const fbGeo = p._kitGeo(h.fallback);
     let fb = null;
@@ -307,11 +318,19 @@ export function planHeroModels(p) {
     // No source, or no manifest entry: the fallback that just went in stands.
     const url = _heroSrc ? _heroSrc(heroKey(h.url)) : null;
     if (!url) continue;
+    status.state = 'loading';
     loadModel(url).then((g) => {
-      if (!g) return;                       // the fallback stays; nothing to do
+      if (!g) { status.state = 'failed'; return; }
       if (p._disposed) { disposeModel(g); return; }
       g.rotation.set(0, site.yaw, 0);
       g.scale.setScalar(h.scale);
+      if (h.size) {
+        g.scale.setScalar(1);
+        g.updateMatrixWorld(true);
+        _box.setFromObject(g);
+        const extent = Math.max(_box.max.x-_box.min.x, _box.max.y-_box.min.y, _box.max.z-_box.min.z);
+        g.scale.setScalar(h.size / Math.max(extent, 0.001));
+      }
       g.position.set(0, 0, 0);
       g.updateMatrixWorld(true);
       /* Measure, do not assume. The box these arrive in is CENTRED on the
@@ -322,16 +341,20 @@ export function planHeroModels(p) {
          kit shape gets, so a broad flat base never floats off the crown of
          a slope. */
       _box.setFromObject(g);
-      g.position.set(site.x, site.y - _box.min.y - 0.12, site.z);
+      g.position.set(site.x - (_box.min.x+_box.max.x)*0.5,
+        site.y - _box.min.y - 0.04, site.z - (_box.min.z+_box.max.z)*0.5);
+      g.name = h.id;
       g.traverse((o) => {
         if (!o.isMesh) return;
         o.castShadow = true;
-        o.receiveShadow = false;
+        o.receiveShadow = true;
       });
       p.group.add(g);
       p.heroModels.push(g);
+      status.state = 'loaded';
       if (fb) { p.group.remove(fb); fb = null; }
     }).catch((e) => {
+      status.state = 'failed';
       /* loadModel never rejects, so this only fires if the continuation above
          throws on a file that loaded but is not the shape we expect. The
          fallback is still standing at this point — it is only removed on the
@@ -348,8 +371,8 @@ export function planHeroModels(p) {
  * Pinned first and walked second. A landmark has to be in the same place on
  * every build or it is not a landmark — but the ground under it gets regraded
  * between waves, and a derrick standing in mid-air is worse than a derrick
- * eight metres further down the road. So the search is exhaustive and
- * DETERMINISTIC: the authored (s, lat), then ±8 m at a time out to ±64, then
+ * eight metres further down the road. Candidates are scored for approach visibility, elevation and footing. The search is
+ * DETERMINISTIC: the authored (s, lat), then ±8 m at a time out to ±192, then
  * the same walk mirrored to the other side of the road. No rng touches it, so
  * two builds of the same track agree about the answer.
  */
@@ -357,9 +380,10 @@ export function heroModelSite(p, h) {
   const sp = p.data.spline;
   const clear = h.clear === undefined ? 1.5 : h.clear;
   const maxSlope = h.slope === undefined ? 14 : h.slope;
+  let best = null, bestScore = -Infinity;
   for (let flip = 0; flip < 2; flip++) {
     const lat = flip ? -h.lat : h.lat;
-    for (let k = 0; k <= 16; k++) {
+    for (let k = 0; k <= 48; k++) {
       const ds = k === 0 ? 0 : (k & 1 ? 1 : -1) * Math.ceil(k / 2) * 8;
       const s = sp.wrapS(h.s + ds);
       const q = sp.offsetPoint(s, lat, _pp);
@@ -368,15 +392,40 @@ export function heroModelSite(p, h) {
       if (!p._canPlace(x, z, clear)) continue;
       if (p.terrain.slopeAt(x, z) > maxSlope) continue;
       if (!p._clearOfClaims(x, z, h.r + 8)) continue;
+      // Check the whole footprint, not just its centre. A level foundation
+      // then seats the model without changing the driving heightfield.
+      let low = p.terrain.heightAt(x, z), high = low, safe = true;
+      for (let j=0; j<8; j++) {
+        const a=j*Math.PI/4, xx=x+Math.cos(a)*h.r, zz=z+Math.sin(a)*h.r;
+        if (!p._canPlace(xx, zz, 1.12)) { safe=false; break; }
+        const yy=p.terrain.heightAt(xx,zz); low=Math.min(low,yy); high=Math.max(high,yy);
+      }
+      if (!safe || high-low > (h.relief || 5)) continue;
+      let visible = 0;
+      for (const approach of [-90,-45,0,45]) {
+        const eye=sp.posAt(sp.wrapS(s+approach), {});
+        const ey=p.terrain.heightAt(eye.x,eye.z)+3;
+        let blocked=false;
+        for(let j=1;j<10;j++) {
+          const t=j/10, xx=eye.x+(x-eye.x)*t, zz=eye.z+(z-eye.z)*t;
+          if(p.terrain.heightAt(xx,zz)>ey+(high+(h.height || 6)*0.55-ey)*t) {blocked=true;break;}
+        }
+        if(!blocked) visible++;
+      }
+      const road=sp.posAt(s, {});
+      const elevationGap=Math.abs(high-p.terrain.heightAt(road.x,road.z));
+      const score=visible*40-(high-low)*3-elevationGap*1.5-Math.abs(ds)*0.08-flip*6;
+      if(score<=bestScore) continue;
       const d = sp.dirAt(s, _dd);
-      return {
+      bestScore=score;
+      best = {
         s, x, z,
-        y: p.terrain.heightAt(x, z),
+        y: high + 0.12, low, visible,
         yaw: Math.atan2(d.x, d.z) + h.yaw,
       };
     }
   }
-  return null;
+  return best;
 }
 
 /**

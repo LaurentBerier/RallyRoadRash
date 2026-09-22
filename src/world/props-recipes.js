@@ -197,9 +197,13 @@ export const DRESSING = {
       { id: 'firedrum', n: 3, lat: [18, 28], r: 0.45, clear: 1.42, slope: 12, ember: true },
       { id: 'barricade', n: 3, r: 2.5, where: 'corner' },
     ],
+    centerpieces: [
+      { id: 'training-conveyor', url: 'assets/models/heroes/training-conveyor.glb',
+        s: 390, lat: 44, yaw: 1.5708, scale: 8, size: 16, height: 12, r: 12, fallback: 'container' },
+    ],
     heroModels: [
       { id: 'crusher', url: 'assets/models/heroes/training-hero.glb',
-        s: 300, lat: 34, yaw: -1.15, scale: 3.20, r: 3.2, fallback: 'container' },
+        s: 300, lat: 32, yaw: -1.15, scale: 3.20, size: 10, height: 9, r: 7.2, fallback: 'container' },
     ],
   },
   canyon: {
@@ -234,9 +238,13 @@ export const DRESSING = {
       { id: 'firedrum', n: 3, lat: [13, 24], r: 0.45, clear: 1.5, slope: 12, ember: true },
       { id: 'barricade', n: 3, r: 2.5, where: 'corner' },
     ],
+    centerpieces: [
+      { id: 'canyon-arch', url: 'assets/models/heroes/canyon-arch.glb',
+        s: 1030, lat: 58, yaw: 1.5708, scale: 8, size: 24, height: 20, r: 18, natural: true, fallback: 'ruinboard' },
+    ],
     heroModels: [
       { id: 'tailsection', url: 'assets/models/heroes/canyon-hero.glb',
-        s: 940, lat: 52, yaw: -1.27, scale: 4.60, r: 4.4, fallback: 'ruinboard' },
+        s: 940, lat: 38, yaw: -1.27, scale: 4.60, size: 18, height: 11, r: 12.8, fallback: 'ruinboard' },
     ],
   },
   forest: {
@@ -268,12 +276,16 @@ export const DRESSING = {
       { id: 'firedrum', n: 3, lat: [12, 22], r: 0.45, clear: 1.55, slope: 12, ember: true },
       { id: 'barricade', n: 3, r: 2.5, where: 'corner' },
     ],
+    centerpieces: [
+      { id: 'forest-trestle', url: 'assets/models/heroes/forest-trestle.glb',
+        s: 1450, lat: 46, yaw: 1.5708, scale: 8, size: 20, height: 14, r: 15, fallback: 'logstack' },
+    ],
     heroModels: [
       /* s 1320 is deliberately off the shelf (s 340–1015): the bench has a
          rock face outboard and air inboard, and neither is anywhere to leave
          a seven-metre machine. */
       { id: 'fellerbuncher', url: 'assets/models/heroes/forest-hero.glb',
-        s: 1320, lat: 30, yaw: -1.19, scale: 3.30, r: 2.8, fallback: 'pumpjack' },
+        s: 1320, lat: 30, yaw: -1.19, scale: 3.30, size: 8, height: 6, r: 5.7, fallback: 'pumpjack' },
     ],
   },
   volcano: {
@@ -307,9 +319,13 @@ export const DRESSING = {
       { id: 'firedrum', n: 4, lat: [13, 24], r: 0.45, clear: 1.5, slope: 12, ember: true },
       { id: 'barricade', n: 3, r: 2.5, where: 'corner' },
     ],
+    centerpieces: [
+      { id: 'volcano-pipe', url: 'assets/models/heroes/volcano-pipe.glb',
+        s: 1380, lat: 48, yaw: 1.5708, scale: 8, size: 18, height: 18, r: 13, fallback: 'pipework' },
+    ],
     heroModels: [
       { id: 'derrick', url: 'assets/models/heroes/volcano-hero.glb',
-        s: 700, lat: 58, yaw: 0.55, scale: 6.60, r: 2.8, fallback: 'watchtower' },
+        s: 1100, lat: 40, yaw: 0.55, scale: 6.60, size: 18, height: 18, r: 8.5, fallback: 'watchtower' },
     ],
   },
   /* THUNDER MESA. The one stage that is a VENUE rather than a place:
@@ -348,12 +364,16 @@ export const DRESSING = {
       { id: 'firedrum', n: 4, lat: [16, 26], r: 0.45, clear: 1.45, slope: 12, ember: true },
       { id: 'barricade', n: 3, r: 2.5, where: 'corner' },
     ],
+    centerpieces: [
+      { id: 'thunder-timing', url: 'assets/models/heroes/thunder-timing.glb',
+        s: 1020, lat: 44, yaw: 1.5708, scale: 8, size: 18, height: 18, r: 13, fallback: 'watchtower' },
+    ],
     heroModels: [
       /* The one hero model that FRONTS ONTO the road instead of lying along
          it: a trophy on a plinth faces the crowd, and on this stage the road
          is the crowd. */
       { id: 'monument', url: 'assets/models/heroes/thunder-hero.glb',
-        s: 900, lat: 30, yaw: 0.25, scale: 4.30, r: 3.6, fallback: 'ruinboard' },
+        s: 900, lat: 35, yaw: 0.25, scale: 4.30, size: 14, height: 10, r: 10, fallback: 'ruinboard' },
     ],
   },
 };

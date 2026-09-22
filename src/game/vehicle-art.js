@@ -36,6 +36,7 @@ import { clamp, makeRNG } from '../core/rng.js';
 import { G } from './config.js';
 import { liveryTexture, LAYOUTS } from './vehicle-livery.js';
 import { noiseCanvas } from '../world/textures.js';
+import { vehicleWear, tireWear } from './vehicle-wear.js';
 import { attachCarcass, detachCarcass, buildArsenalRig, updateArsenalRig, mudify }
   from './vehicle-carcass.js';
 export { setCarcassSource, setCarcassRenderer } from './vehicle-carcass.js';
@@ -185,7 +186,7 @@ export function buildVehicleVisuals(v, scene, spec) {
 function buildMaterials(v, paint, paint2, helmet) {
   const uMud = v._uMud = { value: 0 };
   const glow = glowTexture();
-  const dirt = tyreTextures();
+  const dirt = tireWear();
   const spriteMat = (color) => new THREE.SpriteMaterial({
     map: glow, color, transparent: true, opacity: 0,
     blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
@@ -208,13 +209,13 @@ function buildMaterials(v, paint, paint2, helmet) {
       map: v.tex.livery, color: 0xffffff, metalness: 0.18, roughness: 0.42,
       clearcoat: 0.85, clearcoatRoughness: 0.14, envMapIntensity: 1.05,
     }),
-    dark: new THREE.MeshStandardMaterial({ color: 0x1d1f24, metalness: 0.35, roughness: 0.74 }),
+    dark: new THREE.MeshStandardMaterial({ ...vehicleWear(), color: 0x41433e, metalness: 0.35, roughness: 0.86 }),
     // the cage, the bullbar, the pipes: chrome, and it wants the sky in it
     metal: new THREE.MeshStandardMaterial({
-      color: 0xc6ccd4, metalness: 0.95, roughness: 0.22, envMapIntensity: 1.60,
+      ...vehicleWear(), color: 0x92958d, metalness: 0.72, roughness: 0.68, envMapIntensity: 1.10,
     }),
     rim: new THREE.MeshStandardMaterial({
-      color: 0xb9c0c9, metalness: 0.92, roughness: 0.28, envMapIntensity: 1.35,
+      color: 0x9aa4ad, vertexColors: true, metalness: 0.82, roughness: 0.40, envMapIntensity: 0.90,
     }),
     /* The one flat black on the car, and four of them per machine. Bare, it
        is a silhouette with no surface in it at any distance; `dirt` gives it
@@ -223,11 +224,11 @@ function buildMaterials(v, paint, paint2, helmet) {
        let it through — and goes back to being the rubber itself if the
        texture could not be built, because white × nothing is a white tyre. */
     tyre: new THREE.MeshStandardMaterial({
-      map: dirt.map, roughnessMap: dirt.rough,
+      map: dirt.map, roughnessMap: dirt.roughnessMap,
       color: dirt.map ? 0xffffff : 0x121215, metalness: 0.02, roughness: 0.95,
     }),
     spring: new THREE.MeshStandardMaterial({
-      map: springTexture(), color: 0xe8eaee, metalness: 0.55, roughness: 0.48,
+      ...vehicleWear(), color: 0x68685f, metalness: 0.55, roughness: 0.78,
     }),
     glass: new THREE.MeshPhysicalMaterial({
       color: 0x0b1015, metalness: 0.20, roughness: 0.10,
@@ -254,7 +255,7 @@ function buildMaterials(v, paint, paint2, helmet) {
        material on the car. Deliberately no mud: it is the last thing bolted
        on and the first thing the eye has to read at 40 m. */
     arsenal: new THREE.MeshStandardMaterial({
-      vertexColors: true, metalness: 0.55, roughness: 0.50, envMapIntensity: 1.20,
+      ...vehicleWear(), vertexColors: true, color:0x99988d, metalness: 0.55, roughness: 0.78, envMapIntensity: 1.00,
     }),
   };
   for (const k in M) M[k].name = k;
@@ -367,12 +368,14 @@ function buildRunningGear(v, spec, M) {
        sliding around inside the arches. The buggy gets the full SxS set:
        upper + lower A-arm in body colour and a coilover with a visible
        spring; the others keep the single dark arm + strut. */
-    const armMat = sxs ? M.paint : M.dark;
+    const armMat = M.dark;
     w.arm = new THREE.Mesh(armGeo, armMat);
     w.coil = new THREE.Mesh(coilGeo, sxs ? M.spring : M.metal);
     v.wheelRoot.add(w.arm, w.coil);
     w.armRoot.set(w.side * spec.track * 0.20, w.mount.y - spec.suspRest * 0.90, w.mount.z);
-    w.coilRoot.set(w.side * spec.track * 0.30, w.mount.y + 0.20, w.mount.z - 0.06);
+    // Outboard upper pickup below the shell; the former tall diagonal cut
+    // straight through the generated hood. Physics mounts remain untouched.
+    w.coilRoot.set(w.side * spec.track * 0.43, w.mount.y - 0.08, w.mount.z - 0.06);
     if (sxs) {
       w.arm2 = new THREE.Mesh(armGeo, armMat);
       v.wheelRoot.add(w.arm2);
@@ -800,12 +803,16 @@ function buildRimGeometry(R, W, style, side) {
   const parts = [];
   const RR = R * 0.615;                    // flange, just over the tyre bead
   const face = side * W * 0.34;            // the spoke face, inside the dish
-  const push = (g) => parts.push(g);
+  const push = (g, hex = 0xffffff) => {
+    const c=new THREE.Color(hex), colors=new Float32Array(g.attributes.position.count*3);
+    for(let i=0;i<colors.length;i+=3){colors[i]=c.r;colors[i+1]=c.g;colors[i+2]=c.b;}
+    g.setAttribute('color',new THREE.BufferAttribute(colors,3));parts.push(g);
+  };
 
   // barrel runs a hair past the tyre bead at ±RIM_W so no grazing angle can
   // find a gap between rubber and rim
   const barrel = new THREE.CylinderGeometry(RR, RR, W * (RIM_W * 2 + 0.05), 20, 1, true);
-  barrel.rotateZ(Math.PI / 2); push(barrel);
+  barrel.rotateZ(Math.PI / 2); push(barrel, 0x747b82);
   /* Back of the dish, both ways. Every surface on a merged geometry is
      single-sided, so ONE disc here closes the wheel from outboard and leaves
      a hole through it from inboard. Two discs, 24 triangles, and the wheel is
@@ -814,11 +821,11 @@ function buildRimGeometry(R, W, style, side) {
     const back = new THREE.CircleGeometry(RR, 12);
     back.rotateY(s * Math.PI / 2);
     back.translate(-side * W * (RIM_W + 0.02) + s * 0.002, 0, 0);
-    push(back);
+    push(back, 0x272b31);
   }
   // brake disc: inboard of the face so it reads as being BEHIND the spokes
   const disc = new THREE.CylinderGeometry(R * 0.50, R * 0.50, W * 0.08, 14);
-  disc.rotateZ(Math.PI / 2); disc.translate(-side * W * 0.12, 0, 0); push(disc);
+  disc.rotateZ(Math.PI / 2); disc.translate(-side * W * 0.12, 0, 0); push(disc, 0x62676b);
   const hub = new THREE.CylinderGeometry(R * 0.17, R * 0.17, W * 0.76, 10);
   hub.rotateZ(Math.PI / 2); push(hub);
 
@@ -848,8 +855,9 @@ function buildRimGeometry(R, W, style, side) {
   };
 
   if (style === 'beadlock') {
-    // a solid plate with a bolted retaining ring — the SxS wheel, exactly
-    cap(RR, 0.005);
+    // Open beadlock face: dark brake hardware behind eight machined spokes.
+    cap(R * 0.23, 0.010);
+    for (let i = 0; i < 8; i++) spoke(W*0.13, RR*0.64, R*0.11, R*0.13, i*Math.PI/4, 0, 0.65);
     ring(RR * 0.74, RR * 0.96, 0.022);
     for (let i = 0; i < 8; i++) stud(R * 0.055, W * 0.055, RR * 0.85, i / 8 * Math.PI * 2);
   } else if (style === 'spoke6') {

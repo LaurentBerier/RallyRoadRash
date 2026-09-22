@@ -249,11 +249,8 @@ export class Audio {
     this.engDuck = ctx.createGain(); this.engDuck.gain.value = 1;   // clutch dips
     this.engBus.connect(this.engDuck); this.engDuck.connect(this.driveBus);
 
-    this.waves = {
-      truck: this._pulseWave(FAMILIES.truck.roll, FAMILIES.truck.odd),
-      buggy: this._pulseWave(FAMILIES.buggy.roll, FAMILIES.buggy.odd),
-      wedge: this._pulseWave(FAMILIES.wedge.roll, FAMILIES.wedge.odd),
-    };
+    this.waves = Object.fromEntries(Object.entries(FAMILIES).map(([name, f]) =>
+      [name, this._pulseWave(f.roll, f.odd)]));
     this.pOsc = ctx.createOscillator();
     this.pOsc.setPeriodicWave(this.waves.buggy);
     this.pOsc.frequency.value = 40;

@@ -115,7 +115,7 @@ function checkFile(name) {
   ok(`textures ≤ ${MAX_TEX_SIZE}²`, texOk, texNote.join(' '));
 
   // ---- fit ------------------------------------------------------------
-  const m = /^([a-z0-9]+)-carcass\.glb$/i.exec(name);
+  const m = /^([a-z0-9]+)-carcass(?:-high)?\.glb$/i.exec(name);
   const spec = m && VEHICLE_BY_ID[m[1]];
   if (!spec) { info('no spec for this name — fit not checked'); return; }
 

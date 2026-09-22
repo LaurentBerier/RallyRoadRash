@@ -41,7 +41,7 @@ export const THEMES = {
     sky: [0.40, 0.53, 0.72], ground: [0.26, 0.24, 0.20], ambient: 0.62,
     haze: [0.66, 0.73, 0.83], hazeDensity: 0.00050, hazeStart: 90,
     tint: [1.00, 1.00, 1.00],
-    surf: {}
+    surf: { 0: [0.34, 0.32, 0.28], 2: [0.57, 0.47, 0.34] }
   },
   canyon: {
     // Late afternoon, sun low across the wash. Clear warm air: you can see the
@@ -51,7 +51,7 @@ export const THEMES = {
     sky: [0.46, 0.52, 0.70], ground: [0.38, 0.27, 0.18], ambient: 0.58,
     haze: [0.80, 0.68, 0.52], hazeDensity: 0.00032, hazeStart: 140,
     tint: [1.08, 0.98, 0.88],
-    surf: { 4: [0.52, 0.27, 0.18], 1: [0.50, 0.35, 0.22] }   // red rock, red dirt
+    surf: { 4: [0.52, 0.27, 0.18], 1: [0.43, 0.27, 0.18], 2: [0.58, 0.40, 0.25] }
   },
   forest: {
     // Overcast-bright and misty: the haze is doing the work here, stacking the
@@ -70,7 +70,7 @@ export const THEMES = {
     haze: [0.66, 0.71, 0.72], hazeDensity: 0.00125, hazeStart: 45,
     tint: [0.94, 0.98, 0.94],
     surf: {
-      5: [0.24, 0.34, 0.16],    // GRASS
+      5: [0.17, 0.27, 0.13],    // GRASS — shaded forest floor
       3: [0.17, 0.13, 0.09],    // MUD
       1: [0.27, 0.21, 0.14],    // DIRT — forest loam, not desert hardpack
       4: [0.34, 0.35, 0.32],    // ROCK — damp grey granite, faintly green
@@ -458,8 +458,8 @@ export function buildTerrainMaterial(t) {
         float verge = smoothstep(1.00, 1.28, al);
         // wear is uneven along the lane: nobody drives exactly the same line
         lane *= 0.55 + 0.45*n2(vW.xz*0.55);
-        albedo *= mix(1.0, 0.70, lane*onRoad);
-        albedo *= 1.0 + 0.20*shoulder*onRoad;
+        albedo *= mix(1.0, 0.88, lane*onRoad);
+        albedo *= 1.0 + 0.07*shoulder*onRoad;
         albedo = mix(albedo, uSurfCol[1]*1.15, verge*onRoad*0.55);
         rough = mix(rough, rough*0.66, lane*onRoad);
       }
@@ -491,7 +491,7 @@ export function buildTerrainMaterial(t) {
          a 60° green wall reads as a hedge, a pale one as a snowdrift. Loose
          cover slides off a slope in reality; blend steep faces toward the
          ROCK palette (darkened raw substrate) regardless of painted id. */
-      float steep = smoothstep(0.86, 0.62, N.y);   // 0 flat .. 1 past ~38°
+      float steep = 1.0 - smoothstep(0.62, 0.86, N.y);
       if (sid != 6) {                              // lava keeps its glow
         vec3 scree = uSurfCol[4] * (0.62 + 0.30*fb(vW.xz*0.5) + 0.14*g0);
         albedo = mix(albedo, scree, steep * 0.85);
@@ -520,8 +520,18 @@ export function buildTerrainMaterial(t) {
            middle out. That is exactly what a mis-composited set of tiles did
            here once. Two stops of headroom either side is all a photograph
            needs, and the ground can never again be a light source. */
-        vec3 gt = clamp(texture(uGround, vec3(vW.xz * 0.31, lay)).rgb * (1.0 / 0.2158),
-                        0.25, 2.0);
+        // Project cliffs on their vertical axes instead of stretching XZ tiles.
+        // Flat roads retain one lookup; only steep close surfaces pay for three.
+        vec3 sampleGround = texture(uGround, vec3(vW.xz * 0.31, lay)).rgb;
+        if (steep > 0.02) {
+          vec3 blend = pow(abs(N), vec3(4.0));
+          blend /= max(dot(blend, vec3(1.0)), 0.001);
+          vec3 rockY = texture(uGround, vec3(vW.xz * 0.31, 2.0)).rgb;
+          vec3 rockX = texture(uGround, vec3(vW.zy * 0.31, 2.0)).rgb;
+          vec3 rockZ = texture(uGround, vec3(vW.xy * 0.31, 2.0)).rgb;
+          sampleGround = mix(sampleGround, rockX*blend.x + rockY*blend.y + rockZ*blend.z, steep);
+        }
+        vec3 gt = clamp(sampleGround * (1.0 / 0.2158), 0.35, 1.70);
         albedo *= mix(vec3(1.0), gt, gnear * uGroundOn * 0.70);
       }
       #endif

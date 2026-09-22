@@ -144,7 +144,7 @@ export const SKY_THEMES = {
     sunEl: 11, sunAz: -152,
     sunDir: { x: -0.866729, y: 0.190809, z: -0.460847 },
     sunColor: 0xff8c4e, sunIntensity: 1.55,
-    hemiSky: 0x5a3038, hemiGround: 0x2c1c16, hemiIntensity: 0.65,
+    hemiSky: 0x8793af, hemiGround: 0x48372c, hemiIntensity: 0.85,
     zenith: 0x241c2c, horizon: 0x8e3a18, hazeColor: 0x6e2c1c,
     turbidity: 20.0, rayleigh: 3.0, mie: 0.020, mieG: 0.85, skyExposure: 0.0775,
     groundHaze: 0x40201a,
@@ -153,7 +153,7 @@ export const SKY_THEMES = {
     sunDiscColor: 0xff9a52, sunAngDeg: 3.4, haloStrength: 1.35, sunGlow: 0.85,
     fogHint: 0.00130,
     grade: [1.00, 0.90, 0.86],
-    shaft: 0.38, sat: 1.14, con: 1.10,
+    shaft: 0.24, sat: 1.06, con: 1.04,
     vista: 'rim', vistaColor: 0x3a1e1c, vistaFade: 0.44,
     // ash + the thing making it: a plume off the caldera, downwind of the track
     ash: 0.85, ashColor: 0x3a2a2a, emberColor: 0xff4a12, emberGlow: 0.9,

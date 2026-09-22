@@ -29,6 +29,8 @@ import { Vehicle } from '../src/game/vehicle.js';
 import { VEHICLE_BY_ID } from '../src/game/vehicles.js';
 import { SURFACES } from '../src/world/surfaces.js';
 import { loadAssets, Assets } from '../src/core/assets.js';
+import { setCarcassSource, setCarcassRenderer } from '../src/game/vehicle-art.js';
+import { setGroundTexture } from '../src/world/terrain-shader.js';
 
 const stats = document.getElementById('stats');
 const err = document.getElementById('err');
@@ -43,6 +45,8 @@ let envNote = '';
 async function boot() {
   const def = TRACKS.find(t => t.id === trackId) || TRACKS[0];
   const engine = new Engine(document.getElementById('stage'), q.get('q') || 'high');
+  const assetsJob = loadAssets('../assets/manifest.json');
+  setCarcassRenderer(engine.renderer);
 
   const gen = bakeTrack(def, (p, m) => { stats.textContent = `bake ${(p * 100) | 0}% ${m || ''}`; });
   const baked = await new Promise((res) => {
@@ -65,28 +69,26 @@ async function boot() {
     schedule(pump);
   });
 
+  const A = new Assets(await assetsJob);
+  setHeroSource((key) => A.url(key));
+  setCarcassSource((id, level) => A.url('models/' + id + '-carcass' + (level === 'high' ? '-high' : '')));
   const terrain = new Terrain(engine.renderer, baked, engine.quality, engine.caps, def);
+  setGroundTexture(terrain, A.get('ground'));
   engine.scene.add(terrain.group);
   // The terrain samples the real shadow map; without this the cars hover.
   engine.attachTerrain(terrain);
   const sky = new Sky(engine.renderer, engine.scene, engine.quality, def.theme);
   engine.setLightTheme(SKY_THEMES[def.theme]);
+  if (A.get('sky/' + def.theme)) sky.setSkyline(A.get('sky/' + def.theme));
 
   /* ?env — the §8.5 A/B. Non-blocking on purpose: the stage is already up
      and racing, and the panorama arriving two seconds later is exactly what
      happens in the game. `none` is cleared every frame rather than once,
      because sky.update() rebuilds the env whenever it is marked dirty. */
   if (envMode === 'image') {
-    loadAssets('../assets/manifest.json').then((map) => {
-      /* The hero GLBs go through the manifest too, so their urls come out
-         based on '../assets/' and resolve from dev/ rather than against this
-         page. Set before the env texture below because it is the same map. */
-      const A = new Assets(map);
-      setHeroSource((key) => A.url(key));
-      const tex = new Assets(map).get('env/' + def.theme);
+      const tex = A.get('env/' + def.theme);
       if (tex) { sky.setEnvImage(tex); envNote = 'image'; }
       else envNote = 'no env/' + def.theme + ' in the manifest — shader env';
-    });
   }
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData);
   const dust = new Dust(engine.scene, terrain, terrain.uniforms.uSunDir, engine.quality.dust, def.theme);
