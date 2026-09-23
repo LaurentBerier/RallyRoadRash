@@ -886,12 +886,12 @@ export class Props {
     const span = w * 2.6 + 6;
     const origin=sp.posAt(s,{}),base=this.terrain.heightAt(origin.x,origin.z);
     const feet=[-1,1].map(side=>{const q=sp.offsetPoint(s,side*span*.5,{});return this.terrain.heightAt(q.x,q.z)-base;});
-    const H = this.theme==='forest'?Math.max(8.4,Math.max(...feet)+4.5):8.4;
+    const H = ['forest','volcano'].includes(this.theme)?Math.max(8.4,Math.max(...feet)+4.5):8.4;
     const g = new THREE.Group();
     const legGeo = this._keepGeo(new THREE.CylinderGeometry(0.22, 0.30, H, 9));
     for (const side of [-1, 1]) {
       const leg = new THREE.Mesh(legGeo, this.postMat);
-      const foot=this.theme==='forest'?feet[side<0?0:1]-.18:0;
+      const foot=['forest','volcano'].includes(this.theme)?feet[side<0?0:1]-.18:0;
       leg.scale.y=(H-foot)/H;
       leg.position.set(side * span * 0.5, (H+foot) * 0.5, 0);
       leg.castShadow = true;
@@ -1099,7 +1099,7 @@ export class Props {
       if (ds < 45) continue;
       const w = sp.widthAt(c.s);
       const span = w * 2 + 2.6;
-      const {left,right,lift}=['canyon','forest'].includes(this.theme)
+      const {left,right,lift}=['canyon','forest','volcano'].includes(this.theme)
         ?gateTerrainProfile(this.terrain,sp,c,span):{left:0,right:0,lift:0};
       const g = new THREE.Group();
       for (const s of [-1, 1]) {

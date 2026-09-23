@@ -200,6 +200,8 @@ const THEME_BASE = {
     h += cone * (74 + 20 * ridged(x * 0.016, z * 0.016, 3, 2.1, 0.5, 73));
     h -= Math.exp(-Math.pow(r / 34, 2)) * 34;
     h += crevices(x, z, 0.0062, 79, 26);
+    // Broken outer lava ridges, outside the protected racing corridor.
+    h += sstep(420,640,r)*ridged(x*.011,z*.011,4,2.1,.55,193)*42;
     h += 92 * sstep(430, 620, r) * (0.45 + 0.95 * ridged(x * 0.0044, z * 0.0044, 4, 2.1, 0.5, 89));
     h += vista(x, z, r, 97, 230, 610);
     return h;

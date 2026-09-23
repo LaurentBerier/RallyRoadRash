@@ -190,3 +190,7 @@ test('deep: environment geometry, safe placement and quality tiers', () => {
 test('deep: canyon vista foundations against baked terrain', () => {
   run(['--experimental-loader', './dev/loader.mjs', 'dev/canyon-foundation-check.mjs']);
 });
+
+test('deep: volcanic geology foundations and course clearance', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/volcano-foundation-check.mjs']);
+});

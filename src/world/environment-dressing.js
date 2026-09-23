@@ -1,4 +1,5 @@
 import { buildForestUnderstory, fernGeometry } from './forest-understory.js';
+import { buildVolcanoGeology } from './volcano-geology.js';
 import { buildCanyonVista } from './canyon-vista.js';
 import * as THREE from 'three';
 import { makeRNG } from '../core/rng.js';
@@ -103,7 +104,7 @@ export function buildEnvironmentDressing(p) {
     mesh.userData.fullCount=count;
   }
 
-  const groundFoot=(x,z,r)=>{let h=p.terrain.heightAt(x,z);if(['canyon','forest'].includes(p.theme))for(let i=0;i<12;i++){const a=i*Math.PI/6;h=Math.min(h,p.terrain.heightAt(x+Math.cos(a)*r,z+Math.sin(a)*r));}return h;};
+  const groundFoot=(x,z,r)=>{let h=p.terrain.heightAt(x,z);if(['canyon','forest','volcano'].includes(p.theme))for(let i=0;i<12;i++){const a=i*Math.PI/6;h=Math.min(h,p.terrain.heightAt(x+Math.cos(a)*r,z+Math.sin(a)*r));}return h;};
   let count=0;
   for(let i=0;i<b.outcrops;i++) {
     const s=(i+0.2+rng()*0.6)/b.outcrops*sp.length;
@@ -165,7 +166,7 @@ export function buildEnvironmentDressing(p) {
     bank.count=bn;bank.instanceMatrix.needsUpdate=true;bank.receiveShadow=true;
     bank.computeBoundingSphere();p.group.add(bank);p.quarryMediumRocks=bank;
   }
-  if(p.theme==='training' || p.theme==='forest') {
+  if(['training','forest','volcano'].includes(p.theme)) {
     const crags=new THREE.InstancedMesh(p._keepGeo(boulderGeo(93,2)),p.rockMat,140);
     let n=0;
     // Embed complete scanned forms in the quarry's actual escarpments.
@@ -247,6 +248,7 @@ export function buildEnvironmentDressing(p) {
   }
   if(p.theme==='canyon') buildCanyonVista(p);
   if(p.theme==='forest') buildForestUnderstory(p);
+  if(p.theme==='volcano') buildVolcanoGeology(p);
   setEnvironmentQuality(p,p.quality);
 }
 
@@ -306,7 +308,7 @@ async function upgradeQuarryRocks(p,nearRocks) {
         :Math.floor(a[offset+12]/128)+','+Math.floor(a[offset+14]/128);
       if(!buckets.has(bucket))buckets.set(bucket,[]);
       const transform=a.slice(offset,offset+16);
-      if(p.theme==='forest') {
+      if(p.theme==='forest' || p.theme==='volcano') {
         // Scan silhouettes differ from their procedural placeholders. Seat
         // the lower third of the actual mesh, including its sloping footprint.
         g.computeBoundingBox();const lo=g.boundingBox.min.y,hi=g.boundingBox.max.y;

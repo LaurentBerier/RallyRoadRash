@@ -87,8 +87,8 @@ export const THEMES = {
     sun: [-0.62, 0.28, 0.73], sunCol: [1.50, 0.94, 0.62],
     // Ambient raised from 0.50 after QA: away-from-sun climbs read as a wall
     // of murk at 0.50, and this track needs its road legible at 130 km/h.
-    sky: [0.34, 0.28, 0.32], ground: [0.28, 0.14, 0.09], ambient: 0.72,
-    haze: [0.14, 0.095, 0.085], hazeDensity: 0.00085, hazeStart: 90,
+    sky: [0.42, 0.46, 0.55], ground: [0.18, 0.17, 0.18], ambient: 0.76,
+    haze: [0.27, 0.28, 0.33], hazeDensity: 0.0004, hazeStart: 90,
     tint: [0.88, 0.96, 1.03],
     surf: { 4: [0.19, 0.20, 0.22], 1: [0.25, 0.23, 0.22], 2: [0.25,0.25,0.27] }
   },
@@ -447,12 +447,13 @@ export function buildTerrainMaterial(t) {
            of a lava channel from a car is the glow catching the lip of the
            crust at a grazing angle, not the floor of the crack. */
         float crack = fb(vW.xz*0.85 + vec2(0.0, uTime*0.035));
-        float glow = smoothstep(0.44, 0.78, crack);
+        float glow = smoothstep(0.54, 0.80, crack);
+        glow*=glow; // cooled crust surrounds the molten channels
         float pulse = 0.58 + 0.52*sin(uTime*0.9 + vW.x*0.05 + vW.z*0.031)
                            + 0.16*sin(uTime*2.7 + vW.z*0.11);
         float rim = pow(1.0 - max(dot(N, V), 0.0), 2.6);
         albedo *= 0.50 + 0.30*crack;
-        emis = vec3(3.4, 0.92, 0.16) * glow * pulse * (1.0 + 1.3*rim);
+        emis = vec3(2.5, 0.60, 0.08) * glow * pulse * (1.0 + 1.3*rim);
         emis += vec3(1.9, 0.36, 0.05) * rim * 0.40 * smoothstep(0.28, 0.60, crack);
         rough = 0.55; gritK = 0.45;
       }
@@ -534,6 +535,14 @@ export function buildTerrainMaterial(t) {
          ROCK palette (darkened raw substrate) regardless of painted id. */
       float steep = 1.0 - smoothstep(0.62, 0.86, N.y);
       float rockCoverage = steep;
+      #ifdef VOLCANIC_GROUND
+      rockCoverage=max(steep,(1.-smoothstep(.72,.95,N.y))*(1.-smoothstep(.02,.2,vRoad)));
+      if(sid!=6) {
+        float ash=fb(vW.xz*.045);
+        albedo=mix(albedo,vec3(.145,.155,.18),.48*(1.-vRoad));
+        albedo*=.8+.35*ash;
+      }
+      #endif
       #ifdef FOREST_GROUND
       rockCoverage=max(rockCoverage,(1.-smoothstep(.70,.94,N.y))*(1.-smoothstep(.02,.20,vRoad)));
       albedo=mix(albedo,vec3(.29,.31,.29),rockCoverage*.72);
@@ -690,6 +699,10 @@ export function buildTerrainMaterial(t) {
       albedo *= 1.0 - 0.30 * churn;
       rough = mix(rough, rough*0.72, churn);
 
+      #ifdef VOLCANIC_GROUND
+      if(sid!=6) albedo*=mix(.52+.23*fb(vW.xz*.08),1.,smoothstep(.03,.7,vRoad));
+      #endif
+
       /* ---- tyre marks ----
          Sampled per PIXEL, not per vertex: a 0.35 m mark across a 0.30 m
          clipmap cell would otherwise be smeared into nothing. */
@@ -791,6 +804,7 @@ export function setGroundTexture(t, tex, quarry = null, normal = null, cliff = n
   const D = t.material.defines;
   if(t.theme==='training') D.QUARRY_PROFILE=1;
   if(t.theme==='forest') D.FOREST_GROUND=1;
+  if(t.theme==='volcano') D.VOLCANIC_GROUND=1;
   if(t.theme==='canyon') D.CANYON_STRATA=1;
   const cliffOn=!!(cliff&&cliffNormal);
   const quarryChanged=!!D.QUARRY_GROUND!==!!quarry || !!D.QUARRY_NORMAL!==!!normal || !!D.QUARRY_CLIFF!==cliffOn;
@@ -817,6 +831,7 @@ export function setGroundTexture(t, tex, quarry = null, normal = null, cliff = n
       if(cliffOn) m.defines.QUARRY_CLIFF=1; else delete m.defines.QUARRY_CLIFF;
       if(t.theme==='training') m.defines.QUARRY_PROFILE=1;
       if(t.theme==='forest') m.defines.FOREST_GROUND=1;
+      if(t.theme==='volcano') m.defines.VOLCANIC_GROUND=1;
       if(t.theme==='canyon') m.defines.CANYON_STRATA=1;
       m.needsUpdate = true;
     }

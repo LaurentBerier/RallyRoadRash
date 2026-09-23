@@ -160,7 +160,7 @@ async function boot() {
   if(q.has('review')) {
     const select=document.createElement('select');select.setAttribute('aria-label','Review position');
     select.style.cssText='position:fixed;right:12px;bottom:16px;padding:10px;background:#162029;color:white;z-index:9';
-    for(const s of (def.id==='forest'?[0,140,280,420,560,700,790,930,1080,1230,1380,1530,1690]:[0,130,265,400,530,660,790,920,1050,1180,1310,1440,1560])) {
+    for(const s of (def.id==='volcano'?[0,150,300,450,550,710,850,1000,1150,1300,1450,1620,1770,1920]:def.id==='forest'?[0,140,280,420,560,700,790,930,1080,1230,1380,1530,1690]:[0,130,265,400,530,660,790,920,1050,1180,1310,1440,1560])) {
       const option=document.createElement('option');option.value=s;option.textContent='Course '+s+' m';select.append(option);
     }
     select.value=String(Number(q.get('s'))||0);
