@@ -55,6 +55,7 @@ async function boot() {
   engine.renderer.info.autoReset = false;
   const assetsJob = q.has('noassets') ? Promise.resolve(new Map()) : loadAssets('../assets/manifest.json',()=>{},engine.quality.name);
   let captured = false, renderedFrames = 0, qualitySwaps = 0;
+  let captureName=q.get('capture'),captureNote='';
   setCarcassRenderer(engine.renderer);
 
   const gen = bakeTrack(def, (p, m) => { stats.textContent = `bake ${(p * 100) | 0}% ${m || ''}`; });
@@ -156,6 +157,16 @@ async function boot() {
     frameMs() { return ftMean * 1000; },
   };
 
+  if(q.has('review')) {
+    const select=document.createElement('select');select.setAttribute('aria-label','Review position');
+    select.style.cssText='position:fixed;right:12px;bottom:16px;padding:10px;background:#162029;color:white;z-index:9';
+    for(const s of [0,130,265,400,530,660,790,920,1050,1180,1310,1440,1560]) {
+      const option=document.createElement('option');option.value=s;option.textContent='Course '+s+' m';select.append(option);
+    }
+    select.value=String(Number(q.get('s'))||0);
+    select.addEventListener('change',()=>{window.FL.at(Number(select.value));captureName='canyon-route-'+select.value+'-'+engine.quality.name.toLowerCase();captured=false;renderedFrames=85;captureNote='';});
+    document.body.append(select);
+  }
   const _out = {}, _v = new THREE.Vector3();
   let elapsed = 0, last = performance.now(), frames = 0, ft = 0, fps = 0;
   let ftMean = 1 / 60;
@@ -286,12 +297,13 @@ async function boot() {
     engine.aimShadow(veh.pos, sky.sunDir);
     engine.render(dt);
     renderedFrames++;
-    if(!captured && q.has('capture') && renderedFrames>150
+    if(!captured && captureName && renderedFrames>90
       && ['localhost','127.0.0.1'].includes(location.hostname)) {
       captured=true;
-      fetch('../__shot?n='+encodeURIComponent(q.get('capture')), {
+      const savingName=captureName;
+      fetch('../__shot?n='+encodeURIComponent(captureName), {
         method:'POST',body:engine.canvas.toDataURL('image/png'),
-      }).then(r=>{if(!r.ok) throw new Error('capture requires server.js --shots');})
+      }).then(r=>{if(!r.ok) throw new Error('capture requires server.js --shots');captureNote='saved '+savingName;})
         .catch(e=>{err.textContent+=e.message+'\n';});
     }
 
@@ -307,7 +319,7 @@ async function boot() {
       `air ${veh.airborne} ${veh.airTime.toFixed(1)}s  hardHit ${veh.hardHit.toFixed(1)}\n` +
       `drawcalls ${engine.renderer.info.render.calls}  tris ${(engine.renderer.info.render.triangles / 1000).toFixed(0)}k\n` +
       `landmarks ${(props.landmarkStatus||[]).map(x=>x.id+':'+x.state+'@'+Math.round(x.site?.s||0)).join(' ')}\n` +
-      `quarry rocks ${props.quarryNearRocks?.count||0}+${props.quarryMediumRocks?.count||0}  crags ${props.quarryCrags?.count||0}  AO ${engine.contactAO.enabled?'on':'off'}  ${engine.quality.name} ${props.quarryScanStatus||'fallback'}  swaps ${qualitySwaps}`;
+      `quarry rocks ${props.quarryNearRocks?.count||0}+${props.quarryMediumRocks?.count||0}  crags ${props.quarryCrags?.count||0}  AO ${engine.contactAO.enabled?'on':'off'}  ${engine.quality.name} ${props.quarryScanStatus||'fallback'}  swaps ${qualitySwaps}\n${captureNote}`;
     window.__FL = { veh, terrain, engine, fps, s: n.s, d: n.d };
   }
   requestAnimationFrame(frame);

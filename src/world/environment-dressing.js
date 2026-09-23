@@ -102,6 +102,7 @@ export function buildEnvironmentDressing(p) {
     mesh.userData.fullCount=count;
   }
 
+  const groundFoot=(x,z,r)=>{let h=p.terrain.heightAt(x,z);if(p.theme==='canyon')for(let i=0;i<12;i++){const a=i*Math.PI/6;h=Math.min(h,p.terrain.heightAt(x+Math.cos(a)*r,z+Math.sin(a)*r));}return h;};
   let count=0;
   for(let i=0;i<b.outcrops;i++) {
     const s=(i+0.2+rng()*0.6)/b.outcrops*sp.length;
@@ -125,7 +126,7 @@ export function buildEnvironmentDressing(p) {
       // Conservative footprint covers the displaced boulder, including its
       // nonuniform scale. Claim it before the next cluster can overlap.
       const h=radius*(0.8+rng()*0.65);
-      put(rocks,count++,x,p.terrain.heightAt(x,z)+h*0.25,z,radius,h,radius*0.8);
+      put(rocks,count++,x,groundFoot(x,z,radius)+h*0.25,z,radius,h,radius*0.8);
       p._fixedColliders.push({x,z,r:extent,kind:'rock0',bounce:0.55});
       p._claimed.push({x,z,r:extent});
     }
@@ -155,7 +156,7 @@ export function buildEnvironmentDressing(p) {
         const a=rng()*Math.PI*2,dist=j===0?0:rng()*(extent-radius*1.5);
         const rx=x+Math.cos(a)*dist,rz=z+Math.sin(a)*dist;
         const h=radius*(j===0?1.65+rng()*.45:.8+rng()*.65);
-        put(bank,bn++,rx,p.terrain.heightAt(rx,rz)+h*.28,rz,radius,h,radius*(.65+rng()*.3));
+        put(bank,bn++,rx,groundFoot(rx,rz,radius)+h*.28,rz,radius,h,radius*(.65+rng()*.3));
       }
       p._fixedColliders.push({x,z,r:extent,kind:'quarry-boulder',bounce:.55});
       p._claimed.push({x,z,r:extent});

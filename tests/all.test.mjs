@@ -186,3 +186,7 @@ test('deep: garage inspection geometry, parked physics and disposal', () => {
 test('deep: environment geometry, safe placement and quality tiers', () => {
   run(['--experimental-loader', './dev/loader.mjs', 'dev/environment-check.mjs']);
 });
+
+test('deep: canyon vista foundations against baked terrain', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/canyon-foundation-check.mjs']);
+});

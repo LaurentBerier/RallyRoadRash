@@ -98,17 +98,17 @@ export const SKY_THEMES = {
   canyon: {
     sunEl: 28, sunAz: -35,
     sunDir: { x: 0.723270, y: 0.469472, z: -0.506444 },
-    sunColor: 0xffd2a0, sunIntensity: 2.95,
-    hemiSky: 0x9dbde8, hemiGround: 0x8c6444, hemiIntensity: 0.55,
-    zenith: 0x2f63ae, horizon: 0xf0c491, hazeColor: 0xe0b58a,
+    sunColor: 0xffe3c1, sunIntensity: 2.60,
+    hemiSky: 0xa2bfe2, hemiGround: 0x827466, hemiIntensity: 0.72,
+    zenith: 0x2f63ae, horizon: 0xf0c491, hazeColor: 0xb7bac4,
     turbidity: 7.0, rayleigh: 2.2, mie: 0.005, mieG: 0.80, skyExposure: 0.3048,
     groundHaze: 0xb08256,
     cloudAmount: 0.62, cloudTint: 0xf1e7d9, cloudShade: 0x727d8b,
     cloudY: 1500, cirrus: 0.55,
     sunDiscColor: 0xfff0d2, sunAngDeg: 1.6, haloStrength: 0.95, sunGlow: 1.25,
     fogHint: 0.00068,
-    grade: [0.98, 0.90, 0.82],
-    shaft: 0.20, sat: 1.04, con: 1.07,
+    grade: [0.96, 0.97, 1.00],
+    shaft: 0.15, sat: 0.90, con: 1.04,
     vista: 'mesas', vistaColor: 0x8a4832, vistaFade: 0.30
   },
 

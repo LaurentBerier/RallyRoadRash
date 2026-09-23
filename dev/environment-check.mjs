@@ -62,7 +62,8 @@ function build(theme) {
     else {
       assert([...m.geometry.attributes.position.array,...m.geometry.attributes.normal.array].every(Number.isFinite));
       m.geometry.computeBoundingSphere();
-      const radius=m.geometry.boundingSphere.radius*Math.max(m.scale.x,m.scale.y,m.scale.z);
+      const points=m.geometry.attributes.position;let radius=0;
+      for(let i=0;i<points.count;i++)radius=Math.max(radius,Math.hypot(points.getX(i)*m.scale.x,points.getZ(i)*m.scale.z));
       assert(Math.hypot(m.position.x,m.position.z)-radius>450,'distant mesas stay outside the race terrain');
     }
   }

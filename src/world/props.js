@@ -1,3 +1,4 @@
+import { gateTerrainProfile } from './grounding.js';
 /* ============================================================
    THINGS BESIDE THE ROAD
    ------------------------------------------------------------
@@ -188,7 +189,7 @@ export class Props {
       if (id === 'rock0') g = boulderGeo(1.7, 2);
       else if (id === 'rock1') g = boulderGeo(5.3, 1);
       else if (id === 'rock2') g = boulderGeo(9.1, 0);
-      else if (id === 'hoodoo') g = hoodooGeo(3);
+      else if (id === 'hoodoo') g = hoodooGeo(3,this.theme==='canyon');
       else if (id === 'pine0') g = pineGeo(1);
       else if (id === 'pine1') g = pineGeo(2);
       else if (id === 'pine2') g = pineGeo(3);
@@ -538,6 +539,24 @@ export class Props {
     this.group.add(m);
     this.archMesh = m;
     m.receiveShadow=true;
+    if(this.theme==='canyon') {
+      // Fit the downhill and uphill feet independently to their full footprint.
+      const feet={};m.updateMatrixWorld(true);
+      for(const side of [-1,1]) {
+        let low=Infinity;
+        for(let ix=-3;ix<=3;ix++)for(let iz=-3;iz<=3;iz++) {
+          const v=new THREE.Vector3(side*13+ix,0,iz).applyMatrix4(m.matrixWorld);
+          low=Math.min(low,this.terrain.heightAt(v.x,v.z));
+        }
+        feet[side]=Math.min(0,(low-m.position.y)/scale-.4);
+      }
+      const a=geo.attributes.position;
+      for(let i=0;i<a.count;i++) {
+        const y=a.getY(i);if(y>3)continue;
+        const t=Math.max(0,1-y/3);a.setY(i,y+feet[a.getX(i)<0?-1:1]*t*t);
+      }
+      a.needsUpdate=true;geo.computeVertexNormals();geo.computeBoundingSphere();
+    }
     // two leg colliders, exactly as _buildJumpArch does it
     for (const side of [-1, 1]) {
       const q = sp.offsetPoint(s, side * 13 * scale, _pp2);
@@ -1076,15 +1095,19 @@ export class Props {
       if (ds < 45) continue;
       const w = sp.widthAt(c.s);
       const span = w * 2 + 2.6;
+      const {left,right,lift}=this.theme==='canyon'
+        ?gateTerrainProfile(this.terrain,sp,c,span):{left:0,right:0,lift:0};
       const g = new THREE.Group();
       for (const s of [-1, 1]) {
         const post = new THREE.Mesh(postGeo, this.postMat);
-        post.position.set(s * span * 0.5, 2.2, 0);
+        post.position.set(s * span * 0.5, (s<0?left:right)+2.2+lift*.5, 0);
+        post.scale.y=1+lift/4.4;
         post.castShadow = true;
         g.add(post);
       }
-      const bn = new THREE.Mesh(this._keepGeo(new THREE.PlaneGeometry(span, 0.9)), gateMat);
-      bn.position.y = 4.0;
+      const bn = new THREE.Mesh(this._keepGeo(new THREE.PlaneGeometry(Math.hypot(span,right-left), 0.9)), gateMat);
+      bn.position.y = (left+right)*.5+4.0+lift;
+      bn.rotation.z = -Math.atan2(right-left,span);
       bn.rotation.y = Math.PI;          // face oncoming traffic, not the exit
       g.add(bn);
       const d = sp.dirAt(c.s, _dd);

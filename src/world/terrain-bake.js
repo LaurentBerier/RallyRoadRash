@@ -76,8 +76,8 @@ function plateaus(x, z, cell, seed, hMin, hMax, prob, skirt, eroded = false) {
     const fan = (1 - sstep(1.0, 1 + skirt, d)) * 0.14;
     if(eroded) {
       // Several narrow cliff risers and broad benches replace smooth cones.
-      const terraces=.40*(1-sstep(.69,.75,d))+.29*(1-sstep(.83,.88,d))
-        +.20*(1-sstep(.97,1.015,d))+.11*(1-sstep(1.05,1+skirt,d));
+      const terraces=.62*(1-sstep(.76,.81,d))+.18*(1-sstep(.90,.925,d))
+        +.08*(1-sstep(1.015,1.04,d))+.12*(1-sstep(1.05,1+skirt,d));
       const incision=(vnoise(x*.075,z*.075,seed+9)-.5)*2.8;
       h+=top*terraces+incision*sstep(.12,.4,terraces);
     } else h += top * (cap + fan);

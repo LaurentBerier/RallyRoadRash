@@ -54,7 +54,18 @@ export function boulderGeo(seed, detail = 2, squash = 0.76) {
 
 /** A hoodoo: stacked resistant caps on a soft column, which is exactly how the
     real ones form and the only reason they read at 200 m. */
-export function hoodooGeo(seed) {
+export function hoodooGeo(seed, natural=false) {
+  if(natural) {
+    const g=new THREE.CylinderGeometry(.64,1.02,4.8,20,32),pos=g.attributes.position;
+    for(let i=0;i<pos.count;i++) {
+      const x=pos.getX(i),y=pos.getY(i)+2.4,z=pos.getZ(i),a=Math.atan2(z,x);
+      const bed=1+.055*Math.sin(y*8.2)+.035*Math.sin(y*17.1);
+      const neck=1-.19*Math.exp(-Math.pow((y-3.6)*2,2));
+      const fracture=1+.065*Math.sin(a*5+seed)+.035*Math.sin(a*11+y);
+      pos.setXYZ(i,x*bed*neck*fracture,y,z*bed*neck*fracture);
+    }
+    return finish([g]);
+  }
   const rng = makeRNG((seed * 7919) | 1), parts=[];
   const levels=5, step=1.0;
   for(let i=0;i<levels;i++) {

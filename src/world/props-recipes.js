@@ -53,21 +53,17 @@ export const RECIPES = {
   },
   canyon: {
     accent: '#ff7a1a',
-    rock: 0x8a4a30, dust: 0xb99a6a,
+    rock: 0x927050, dust: 0xb3a087,
     kinds: [
-      /* Hoodoos are down from 0.08 to 0.035. They were a tenth of the scatter
-         when the scatter was 2200 spread over a kilometre; at 2900 with 74 %
-         of it on the verge, the same share put 230 identical orange spires
-         along the racing line and SUNSTRIKE CANYON looked like a slalom
-         course. A hoodoo is a landmark — it wants to be rare. */
-      { id: 'hoodoo', share: 0.035, min: 1.4, max: 3.4, solid: true, r: 1.15, slope: 26, clear: 2.0, shadow: true },
+      // Sparse eroded columns break up the rock banks without becoming a slalom.
+      { id: 'hoodoo', share: 0.018, min: 1.4, max: 3.4, solid: true, r: 1.15, slope: 26, clear: 2.0, shadow: true },
       { id: 'rock0', share: 0.10, min: 1.2, max: 4.4, solid: true, r: 0.72, slope: 32, clear: 1.7, shadow: true },
       /* rock1 and rock2 are down 0.015 and 0.03 from where the wave-6 pass
          left them. That table summed to 1.025, which quietly gave the whole
          canyon scatter 2.5 % more instances than MAX_SCATTER budgets for —
          buildScatter ceils per kind, so an over-unity table simply overspends.
          kit-check now asserts the sum, per stage. */
-      { id: 'rock1', share: 0.245, min: 0.7, max: 2.2, solid: true, r: 0.72, slope: 36, clear: 1.5, shadow: false },
+      { id: 'rock1', share: 0.262, min: 0.7, max: 2.2, solid: true, r: 0.72, slope: 36, clear: 1.5, shadow: false },
       { id: 'rock2', share: 0.27, min: 0.22, max: 0.9, solid: false, slope: 40, clear: 1.35, shadow: false },
       { id: 'cactus0', share: 0.10, min: 0.8, max: 1.5, solid: true, r: 0.34, slope: 26, clear: 1.6, shadow: true },
       { id: 'cactus1', share: 0.06, min: 0.7, max: 1.3, solid: true, r: 0.32, slope: 26, clear: 1.6, shadow: true },

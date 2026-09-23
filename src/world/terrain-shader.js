@@ -50,10 +50,10 @@ export const THEMES = {
     // far mesas, which is the whole point of a desert.
     name: 'SUNSTRIKE CANYON',
     albedoScale: 0.68,
-    sun: [0.74, 0.34, -0.58], sunCol: [1.62, 1.34, 1.02],
+    sun: [0.74, 0.34, -0.58], sunCol: [1.45, 1.33, 1.16],
     sky: [0.46, 0.52, 0.70], ground: [0.38, 0.27, 0.18], ambient: 0.58,
     haze: [0.66, 0.68, 0.73], hazeDensity: 0.00042, hazeStart: 140,
-    tint: [1.08, 0.98, 0.88],
+    tint: [0.97, 0.99, 1.01],
     surf: { 4: [0.52, 0.27, 0.18], 1: [0.43, 0.27, 0.18], 2: [0.58, 0.40, 0.25] }
   },
   forest: {
@@ -620,10 +620,14 @@ export function buildTerrainMaterial(t) {
       #endif
 
       #ifdef CANYON_STRATA
+      // Broad mineral variation breaks up uniformly orange terrain without
+      // relying on tiny texture noise that disappears in the middle distance.
+      float mineralPatch=fb(vW.xz*.026);
+      albedo*=mix(vec3(.78,.82,.84),vec3(1.12,1.07,.99),mineralPatch);
       // Geological bedding remains legible past the texture detail cutoff.
       float cliffMask=smoothstep(.12,.62,1.0-N.y)*(1.0-vRoad);
       float bedHeight=vW.y+fb(vW.xz*.018)*1.8;
-      float beds=sin(bedHeight*2.6)+.36*sin(bedHeight*8.1);
+      float beds=sin(bedHeight*.85)+.28*sin(bedHeight*3.1);
       albedo*=1.0-cliffMask*(.12+.14*smoothstep(.3,1.1,beds));
       albedo=mix(albedo,albedo*vec3(.89,.95,1.06),cliffMask*.65);
       #endif
