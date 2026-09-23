@@ -99,11 +99,13 @@ const THEME_BASE = {
     h -= 3.2 * sstep(300, 40, r);
     // Excavated benches outside the tutorial's generous run-off. This lives
     // in the shared bake, so geometry, tyres and shadows see the same banks.
-    const rim = r + (fbm(x * 0.011, z * 0.011, 3, 2, 0.5, 17) - 0.5) * 95;
+    const rim = r + (fbm(x * 0.011, z * 0.011, 3, 2, 0.5, 17) - 0.5) * 95
+      + (vnoise(x*.09,z*.09,37)-.5)*11;
     const fracture=(ridged(x*.046,z*.046,3,2,.5,61)-.5)*8;
     h += 15 * sstep(260, 264, rim) + 19 * sstep(350, 355, rim);
     h += 25 * sstep(470, 476, rim);
     h += sstep(215,250,r)*fracture;
+    h += sstep(225,255,r)*(Math.floor(vnoise(x*.065,z*.065,73)*5)/5-.5)*3.5;
     // Flat excavated benches with irregular fractured risers. Broad rounded
     // plateaus here made the quarry read as dunes even with a cliff texture.
     h += vista(x, z, r, 63, 200, 620);

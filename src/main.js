@@ -519,7 +519,9 @@ function buildWorld(def, baked) {
   /* Optional photographic ground detail. Null is the normal case and the
      shader's own grain is the fallback; see core/assets.js. */
   setGroundTexture(terrain, App.assets.get('ground'),def.theme==='training'?App.assets.get('terrain/quarry-ground'):null,
-    def.theme==='training'?App.assets.get('terrain/quarry-normal'):null);
+    def.theme==='training'?App.assets.get('terrain/quarry-normal'):null,
+    def.theme==='training'?App.assets.get('terrain/quarry-cliff'):null,
+    def.theme==='training'?App.assets.get('terrain/quarry-cliff-normal'):null);
 
   const sky = new Sky(engine.renderer, engine.scene, engine.quality, theme);
   /* Optional skyline panorama. When there is one it replaces the procedural

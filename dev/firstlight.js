@@ -6,6 +6,7 @@
      ?orbit=1   slow circle around the car instead of driving
      ?still=1&s=60  hold the car at a repeatable track distance for art review
      ?pace=0.55    conservative scripted driving speed for a visual QA lap
+     ?qualitycycle=1  switch high -> low -> high during GPU/resource QA
      ?noassets=1    exercise procedural fallbacks without any asset requests
      ?capture=name save a local canvas frame after 150 rendered frames;
                    requires node server.js <port> --shots on localhost
@@ -50,9 +51,10 @@ let envNote = '';
 async function boot() {
   const def = TRACKS.find(t => t.id === trackId) || TRACKS[0];
   const engine = new Engine(document.getElementById('stage'), q.get('q') || 'high');
+  engine.useAmbientOcclusion=!q.has('noao');
   engine.renderer.info.autoReset = false;
   const assetsJob = q.has('noassets') ? Promise.resolve(new Map()) : loadAssets('../assets/manifest.json',()=>{},engine.quality.name);
-  let captured = false, renderedFrames = 0;
+  let captured = false, renderedFrames = 0, qualitySwaps = 0;
   setCarcassRenderer(engine.renderer);
 
   const gen = bakeTrack(def, (p, m) => { stats.textContent = `bake ${(p * 100) | 0}% ${m || ''}`; });
@@ -81,7 +83,9 @@ async function boot() {
   setCarcassSource((id, level) => A.url('models/' + id + '-carcass' + (level === 'high' ? '-high' : '')));
   const terrain = new Terrain(engine.renderer, baked, engine.quality, engine.caps, def);
   setGroundTexture(terrain, A.get('ground'),def.theme==='training'?A.get('terrain/quarry-ground'):null,
-    def.theme==='training'?A.get('terrain/quarry-normal'):null);
+    def.theme==='training'?A.get('terrain/quarry-normal'):null,
+    def.theme==='training'?A.get('terrain/quarry-cliff'):null,
+    def.theme==='training'?A.get('terrain/quarry-cliff-normal'):null);
   engine.scene.add(terrain.group);
   // The terrain samples the real shadow map; without this the cars hover.
   engine.attachTerrain(terrain);
@@ -226,13 +230,23 @@ async function boot() {
 
   function frame(now) {
     requestAnimationFrame(frame);
+    if(q.has('qualitycycle') && (renderedFrames===120 || renderedFrames===300)) {
+      engine.setQuality(renderedFrames===120?'low':'high');
+      terrain.setQuality(engine.quality);props.setQuality(engine.quality);
+      sky.setQuality(engine.quality);dust.setQuality(engine.quality);
+      qualitySwaps++;
+    }
     let dt = (now - last) / 1000; last = now;
     if (dt > 0.1) dt = 0.1;
     elapsed += dt;
 
     const ctl = q.get('orbit') || q.has('still') ? { throttle: 0, steer: 0, brake: 1, handbrake: 1 }
       : veh.airborne ? { throttle: 0.5, steer: 0, brake: 0, handbrake: 0 } : drive();
-    veh.step(dt, ctl);
+    // Art-review shots settle for a fixed number of physics ticks, then hold
+    // the actual settled pose. Brake-only idling slowly rotated the buggy and
+    // made material A/B captures incomparable after a minute of inspection.
+    if(!q.has('still')) veh.step(dt,ctl);
+    else if(renderedFrames<90) veh.step(1/60,ctl);
     veh.updateVisuals(dt);
 
     // wheel dust + tyre marks, minimal port of the planned race loop
@@ -293,7 +307,8 @@ async function boot() {
       `s ${n.s.toFixed(0)}/${spline.length.toFixed(0)}  d ${n.d.toFixed(1)}  surf ${SURFACES[veh.surfaceId]?.name}\n` +
       `air ${veh.airborne} ${veh.airTime.toFixed(1)}s  hardHit ${veh.hardHit.toFixed(1)}\n` +
       `drawcalls ${engine.renderer.info.render.calls}  tris ${(engine.renderer.info.render.triangles / 1000).toFixed(0)}k\n` +
-      `landmarks ${(props.landmarkStatus||[]).map(x=>x.id+':'+x.state+'@'+Math.round(x.site?.s||0)).join(' ')}`;
+      `landmarks ${(props.landmarkStatus||[]).map(x=>x.id+':'+x.state+'@'+Math.round(x.site?.s||0)).join(' ')}\n` +
+      `quarry rocks ${props.quarryNearRocks?.count||0}+${props.quarryMediumRocks?.count||0}  crags ${props.quarryCrags?.count||0}  AO ${engine.contactAO.enabled?'on':'off'}  ${engine.quality.name} ${props.quarryScanStatus||'fallback'}  swaps ${qualitySwaps}`;
     window.__FL = { veh, terrain, engine, fps, s: n.s, d: n.d };
   }
   requestAnimationFrame(frame);

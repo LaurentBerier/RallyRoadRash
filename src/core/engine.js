@@ -10,6 +10,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ContactAOPass } from './contact-ao.js';
 
 /* `pixels` is a hard ceiling on the framebuffer, and it is the single most
    important number here. A Retina MacBook reports devicePixelRatio 2, so a
@@ -352,6 +353,7 @@ export class Engine {
       minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
       colorSpace: THREE.LinearSRGBColorSpace
     });
+    if(q.name==='HIGH'||q.name==='ULTRA')rt.depthTexture=new THREE.DepthTexture(w,h,THREE.UnsignedIntType);
     // EffectComposer.dispose() frees its own two targets and nothing else.
     // UnrealBloomPass carries a mip chain of eleven more, so rebuilding the
     // composer without walking the passes leaks eleven render targets every
@@ -363,6 +365,9 @@ export class Engine {
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.setPixelRatio(1);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.contactAO=new ContactAOPass(this.camera);
+    this.contactAO.enabled=false;
+    this.composer.addPass(this.contactAO);
     /* Threshold sits above sunlit white bodywork on purpose: any lower and
        bright panels bloom and veil the entire frame. In three's physical
        lighting a 0.9 albedo panel under the brightest key here resolves to
@@ -523,6 +528,8 @@ export class Engine {
   }
 
   render(dt) {
+    this.contactAO.enabled=(this.quality.name==='HIGH'||this.quality.name==='ULTRA')
+      && this.terrain?.theme==='training' && this.useAmbientOcclusion!==false;
     this.final.uniforms.uTime.value += dt;
     this.composer.render(dt);
     this.governor(dt);

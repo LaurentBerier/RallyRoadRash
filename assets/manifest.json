@@ -4,6 +4,8 @@
   "foliage/training": { "url": "foliage/quarry-tussock-v3.webp", "kind": "color" },
   "terrain/quarry-ground": { "url": "ground/quarry-trail-color.webp", "lowUrl": "ground/quarry-trail-color-low.webp", "kind": "tile" },
   "terrain/quarry-normal": { "url": "ground/quarry-trail-normal.webp", "lowUrl": "ground/quarry-trail-normal-low.webp", "kind": "data-tile" },
+  "terrain/quarry-cliff": { "url": "ground/quarry-cliff-color.webp", "lowUrl": "ground/quarry-cliff-color-low.webp", "kind": "tile" },
+  "terrain/quarry-cliff-normal": { "url": "ground/quarry-cliff-normal.webp", "lowUrl": "ground/quarry-cliff-normal-low.webp", "kind": "data-tile" },
   "models/quarry/boulder-high": { "url": "models/quarry/boulder-high.glb", "kind": "model" },
   "models/quarry/boulder-low": { "url": "models/quarry/boulder-low.glb", "kind": "model" },
   "foliage/spruce": { "url": "foliage/spruce-bough.webp", "kind": "color" },

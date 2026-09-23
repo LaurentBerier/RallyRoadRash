@@ -93,7 +93,7 @@ export function buildEnvironmentDressing(p) {
         const x=cx+(rng()-0.5)*14, z=cz+(rng()-0.5)*14;
         if(!p._canPlace(x,z,1.12) || !p._clearOfClaims(x,z,1) || p.terrain.slopeAt(x,z)>38) continue;
         if(isGrass && p.theme==='volcano' && rng()<0.85) continue;
-        const size=isGrass ? 0.55+rng()*1.05 : 0.06+rng()*0.25;
+        const size=isGrass ? (p.theme==='training' ? .40+rng()*.65 : .55+rng()*1.05) : 0.06+rng()*0.25;
         put(mesh,count++,x,p.terrain.heightAt(x,z)-0.025,z,size,size*(isGrass?1:0.6),size);
       }
     }
@@ -130,6 +130,56 @@ export function buildEnvironmentDressing(p) {
     }
   }
   rocks.count=count;
+  if(p.theme==='training') {
+    const bank=new THREE.InstancedMesh(p._keepGeo(boulderGeo(35,1)),p.rockMat,220);
+    let bn=0;
+    for(let i=0;i<3500 && bn<220;i++) {
+      const s=rng()*sp.length,side=rng()<.5?-1:1,radius=.7+rng()*1.15;
+      sp.offsetPoint(s,side*(sp.widthAt(s)*1.4+2+rng()*15),point);
+      const x=point.x,z=point.z,extent=radius*1.5;
+      if(!p._canPlace(x,z,1.3)||!p._clearOfClaims(x,z,extent+1)||p.terrain.slopeAt(x,z)>30)continue;
+      sp.nearest(x,z,nearest);
+      if(nearest.d<sp.widthAt(nearest.s)+extent+6)continue;
+      if(p.data.shortcutSpline){
+        p.data.shortcutSpline.nearest(x,z,nearest);
+        if(nearest.d<p.data.shortcutSpline.widthAt(nearest.s)+extent+6)continue;
+      }
+      if(p.data.checkpoints.some(c=>Math.hypot(x-c.x,z-c.z)<c.r+extent+2))continue;
+      if(p.data.gridSlots.some(g=>Math.hypot(x-g.x,z-g.z)<extent+8))continue;
+      put(bank,bn++,x,p.terrain.heightAt(x,z)+radius*.2,z,radius,radius,radius*(.65+rng()*.3));
+      p._fixedColliders.push({x,z,r:extent,kind:'quarry-boulder',bounce:.55});
+      p._claimed.push({x,z,r:extent});
+    }
+    bank.count=bn;bank.instanceMatrix.needsUpdate=true;bank.receiveShadow=true;
+    bank.computeBoundingSphere();p.group.add(bank);p.quarryMediumRocks=bank;
+    const crags=new THREE.InstancedMesh(p._keepGeo(boulderGeo(93,2)),p.rockMat,140);
+    let n=0;
+    // Embed complete scanned forms in the quarry's actual escarpments.
+    // They break the smooth heightfield silhouette without cut-plane cards.
+    for(let i=0;i<1800 && n<140;i++) {
+      const a=rng()*Math.PI*2,r=220+rng()*310;
+      const x=Math.cos(a)*r,z=Math.sin(a)*r,radius=5+rng()*7;
+      if(p.terrain.slopeAt(x,z)<24 || !p._canPlace(x,z,2) || !p._clearOfClaims(x,z,radius*1.5))continue;
+      sp.nearest(x,z,nearest);
+      if(nearest.d<sp.widthAt(nearest.s)+radius*1.5+10)continue;
+      if(p.data.shortcutSpline){
+        p.data.shortcutSpline.nearest(x,z,nearest);
+        if(nearest.d<p.data.shortcutSpline.widthAt(nearest.s)+radius*1.5+10)continue;
+      }
+      if(p.data.checkpoints.some(c=>Math.hypot(x-c.x,z-c.z)<c.r+radius*1.5+2))continue;
+      if(p.data.gridSlots.some(g=>Math.hypot(x-g.x,z-g.z)<radius*1.5+8))continue;
+      let base=p.terrain.heightAt(x,z);
+      for(const [dx,dz] of [[radius*.6,0],[-radius*.6,0],[0,radius*.6],[0,-radius*.6]]) {
+        base=Math.min(base,p.terrain.heightAt(x+dx,z+dz));
+      }
+      const h=radius*(1+rng()*.55);
+      put(crags,n++,x,base+h*.3,z,radius,h,radius*(.6+rng()*.35));
+      p._fixedColliders.push({x,z,r:radius*1.5,kind:'rock0',bounce:.55});
+      p._claimed.push({x,z,r:radius*1.5});
+    }
+    crags.count=n;crags.instanceMatrix.needsUpdate=true;crags.receiveShadow=true;
+    crags.computeBoundingSphere();p.group.add(crags);p.quarryCrags=crags;
+  }
   if(p.theme==='training' && p.environmentAssets?.rockHigh) {
     p.quarryNearRocks=rocks;upgradeQuarryRocks(p,rocks);
   }
@@ -163,18 +213,28 @@ async function upgradeQuarryRocks(p,nearRocks) {
   const request=p._quarryRequest=(p._quarryRequest||0)+1;
   const model=await loadModel(low?p.environmentAssets.rockLow:p.environmentAssets.rockHigh);
   if(!model) return;
-  if(p._disposed || request!==p._quarryRequest){disposeModel(model);return;}
+  const distantModel=low?model:await loadModel(p.environmentAssets.rockLow);
+  const release=()=>{disposeModel(model);if(distantModel&&distantModel!==model)disposeModel(distantModel);};
+  if(p._disposed || request!==p._quarryRequest){release();return;}
   const currentLow=p.quality.name==='LOW' || p.quality.name==='MEDIUM';
-  if(low!==currentLow){disposeModel(model);upgradeQuarryRocks(p,nearRocks);return;}
+  if(low!==currentLow){release();upgradeQuarryRocks(p,nearRocks);return;}
   model.updateMatrixWorld(true);
   let source;model.traverse(o=>{if(o.isMesh&&!source)source=o;});
-  if(!source){disposeModel(model);return;}
+  if(!source){release();return;}
   const geo=source.geometry.clone().applyMatrix4(source.matrixWorld);
   geo.computeBoundingBox();
   const size=new THREE.Vector3(),center=new THREE.Vector3();
   geo.boundingBox.getSize(size);geo.boundingBox.getCenter(center);
   geo.translate(-center.x,-center.y,-center.z);
   geo.scale(1/Math.max(size.x,size.z),1/Math.max(size.x,size.z),1/Math.max(size.x,size.z));
+  let distantSource;
+  distantModel?.updateMatrixWorld(true);
+  distantModel?.traverse(o=>{if(o.isMesh&&!distantSource)distantSource=o;});
+  const distantGeo=distantSource?distantSource.geometry.clone().applyMatrix4(distantSource.matrixWorld):geo.clone();
+  if(distantSource){
+    distantGeo.translate(-center.x,-center.y,-center.z);
+    distantGeo.scale(1/Math.max(size.x,size.z),1/Math.max(size.x,size.z),1/Math.max(size.x,size.z));
+  }
   const mat=source.material.clone();mat.color.set(0xffffff);
   mat.envMapIntensity=1;mat.roughness=1;mat.side=THREE.DoubleSide;
   mat.onBeforeCompile=shader=>{
@@ -187,11 +247,11 @@ async function upgradeQuarryRocks(p,nearRocks) {
   for(const resource of p.quarryScanResources||[]) resource.dispose();
   p.quarryScanResources=[mat];
   p.quarryScans=[];
-  for(const [old,factor] of [[nearRocks,2]]) {
+  for(const [old,factor] of [[nearRocks,2],[p.quarryMediumRocks,2],[p.quarryCrags,2]]) {
     if(!old)continue;
     // Bury the scan's underside and keep its silhouette low enough to read
     // as fallen scree. Its full footprint remains inside the solid collider.
-    const g=geo.clone().scale(factor,factor*0.72,factor);p.quarryScanResources.push(g);
+    const g=(old===nearRocks?geo:distantGeo).clone().scale(factor,factor*0.72,factor);p.quarryScanResources.push(g);
     // Spatial batches let the camera and shadow frusta discard the quarry
     // behind the car, rather than drawing an entire ring on every pass.
     const buckets=Array.from({length:8},()=>[]);
@@ -205,12 +265,12 @@ async function upgradeQuarryRocks(p,nearRocks) {
       const mesh=new THREE.InstancedMesh(g,mat,matrices.length);
       matrices.forEach((a,i)=>mesh.instanceMatrix.array.set(a,i*16));
       mesh.instanceMatrix.needsUpdate=true;
-      mesh.castShadow=!low;mesh.receiveShadow=true;mesh.computeBoundingSphere();
+      mesh.castShadow=!low && old!==p.quarryCrags;mesh.receiveShadow=true;mesh.computeBoundingSphere();
       p.group.add(mesh);p.quarryScans.push(mesh);
     }
     old.visible=false;
   }
-  geo.dispose();disposeModel(model);
+  geo.dispose();distantGeo.dispose();release();
   p.quarryScanStatus=low?'loaded-low':'loaded-high';
 }
 

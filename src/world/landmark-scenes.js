@@ -99,6 +99,44 @@ export function dressLandmarkSite(p, h, site) {
     box(-10,5.6,2,6,0.5,6,0x393b37);
     for(let z=-0.3;z<4.5;z+=0.65) box(-12.55,3,z,0.13,4.8,0.12,rust);
     for(let x=-12;x<=-8;x+=1) box(x,3,4.55,0.12,4.8,0.13,rust);
+    // Screening tower: open structure, intermediate service platforms,
+    // diagonal braces and a corrugated control room establish human scale.
+    for(const x of [5.8,11.8]) for(const z of [2,8]) {
+      beam([x,0,z],[x,17,z],.34,steel);
+      for(let y=0;y<15;y+=5) {
+        const opposite=x===5.8?11.8:5.8;
+        beam([x,y,z],[opposite,y+5,z],.16,rust);
+      }
+    }
+    for(const y of [5,10,15]) {
+      box(8.8,y,5,7,.25,7,0x575a51);
+      for(const z of [1.6,8.4]) {
+        beam([5.3,y+1.1,z],[12.3,y+1.1,z],.075,rail);
+        for(let x=5.3;x<=12.3;x+=1.4) beam([x,y,z],[x,y+1.1,z],.075,rail);
+      }
+      // Short alternating flights on the outward face of the tower.
+      for(let j=0;j<12;j++) box(12.8,y-4.8+j*.4,2+j*.48,1.2,.13,.52,steel);
+    }
+    box(8.8,16.5,5,4.8,3,4.7,0x9a907b);
+    box(8.8,16.9,2.62,3.7,1.15,.10,0x334751);
+    box(8.8,18.15,5,5.5,.22,5.4,0x55564d);
+    for(let x=6.5;x<11.2;x+=.5)box(x,16.4,7.4,.07,2.9,.11,rail);
+    // A second transfer chute feeds a stockpile inside the same solid site.
+    for(const z of [10,12]) beam([-10,2,z],[7,12,z],.24,steel);
+    for(let i=0;i<18;i++) {
+      const x=-10+i, y=2+i*10/17;
+      box(x,y,11,1.1,.18,2.1,0x393a32);
+      if(i%4===0) for(const z of [10,12])beam([x,0,z],[x,y,z],.22,rust);
+    }
+    const pile=tint(new THREE.ConeGeometry(5.8,4.4,22,4),0x938675);
+    const pa=pile.attributes.position;
+    for(let i=0;i<pa.count;i++) {
+      const x=pa.getX(i),z=pa.getZ(i),a=Math.atan2(z,x);
+      const k=1+.08*Math.sin(a*5)+.045*Math.cos(a*9);
+      pa.setXYZ(i,x*k,pa.getY(i),z*k);
+    }
+    pile.computeVertexNormals();const pq=world(-9,7);
+    pile.translate(pq.x,site.y+2.05,pq.z);parts.push(pile);
   }
   // A few grounded, stage-specific satellites give the hero a working context.
   const ids=p.theme==='training'?['pipes','crate','drum','jersey']

@@ -281,6 +281,8 @@ export function buildTerrainMaterial(t) {
     uGround: { value: ground },
     uQuarryGround: { value: null },
     uQuarryNormal: { value: null },
+    uQuarryCliff: { value: null },
+    uQuarryCliffNormal: { value: null },
     uGroundOn: { value: ground ? 1 : 0 }
   };
 
@@ -336,6 +338,9 @@ export function buildTerrainMaterial(t) {
     #endif
     #ifdef QUARRY_NORMAL
     uniform sampler2D uQuarryNormal;
+    #endif
+    #ifdef QUARRY_CLIFF
+    uniform sampler2D uQuarryCliff,uQuarryCliffNormal;
     #endif
 
     float h1(vec2 p){ p = fract(p*vec2(0.1031,0.1030)); p += dot(p,p.yx+33.33); return fract((p.x+p.y)*p.x); }
@@ -582,6 +587,11 @@ export function buildTerrainMaterial(t) {
           vec3 rockY = texture(uGround, vec3(vW.xz * 0.14, 2.0)).rgb;
           vec3 rockX = texture(uGround, vec3(vW.zy * 0.14, 2.0)).rgb;
           vec3 rockZ = texture(uGround, vec3(vW.xy * 0.14, 2.0)).rgb;
+          #ifdef QUARRY_CLIFF
+          rockX=texture2D(uQuarryCliff,vW.zy*.065).rgb;
+          rockY=texture2D(uQuarryCliff,vW.xz*.065).rgb;
+          rockZ=texture2D(uQuarryCliff,vW.xy*.065).rgb;
+          #endif
           sampleGround = mix(sampleGround, rockX*blend.x + rockY*blend.y + rockZ*blend.z, steep);
         }
         vec3 gt = clamp(sampleGround * (1.0 / 0.2158), 0.35, 1.70);
@@ -619,6 +629,19 @@ export function buildTerrainMaterial(t) {
         vec3 bitangent=normalize(cross(tangent,N));
         vec3 scanned=normalize(tangent*detail.x+bitangent*detail.y+N*max(detail.z,.25));
         Nr=normalize(mix(Nr,scanned,dnear*.72));
+      }
+      #endif
+      // Triplanar scanned normals follow the exposed cliff faces.
+      #ifdef QUARRY_CLIFF
+      if(steep>.02 && dist<650.) {
+        vec3 w=pow(abs(N),vec3(4.));w/=max(dot(w,vec3(1.)),.001);
+        vec3 nx=texture2D(uQuarryCliffNormal,vW.zy*.065).xyz*2.-1.;
+        vec3 ny=texture2D(uQuarryCliffNormal,vW.xz*.065).xyz*2.-1.;
+        vec3 nz=texture2D(uQuarryCliffNormal,vW.xy*.065).xyz*2.-1.;
+        vec3 faceNormal=normalize(vec3(nx.z*sign(N.x),nx.y,nx.x)*w.x
+          +vec3(ny.x,ny.z*sign(N.y),ny.y)*w.y
+          +vec3(nz.x,nz.y,nz.z*sign(N.z))*w.z);
+        Nr=normalize(mix(Nr,faceNormal,steep*.85*(1.-smoothstep(250.,650.,dist))));
       }
       #endif
       /* ---- freshly churned ground is DARKER and wetter, not brighter ----
@@ -718,7 +741,7 @@ export function buildTerrainMaterial(t) {
  * Far rings retain cliff textures: a vertical quarry wall fills many pixels
  * at 200 m even though horizontal gravel has already faded away.
  */
-export function setGroundTexture(t, tex, quarry = null, normal = null) {
+export function setGroundTexture(t, tex, quarry = null, normal = null, cliff = null, cliffNormal = null) {
   if (!t || !t.material) return;
   t.ground = tex || null;
   const u = t.uniforms;
@@ -727,9 +750,12 @@ export function setGroundTexture(t, tex, quarry = null, normal = null) {
 
   const want = !!t.ground;
   const D = t.material.defines;
-  const quarryChanged=!!D.QUARRY_GROUND!==!!quarry || !!D.QUARRY_NORMAL!==!!normal;
+  const cliffOn=!!(cliff&&cliffNormal);
+  const quarryChanged=!!D.QUARRY_GROUND!==!!quarry || !!D.QUARRY_NORMAL!==!!normal || !!D.QUARRY_CLIFF!==cliffOn;
   u.uQuarryGround.value=quarry;
   u.uQuarryNormal.value=normal;
+  u.uQuarryCliff.value=cliff;u.uQuarryCliffNormal.value=cliffNormal;
+  if(cliffOn) D.QUARRY_CLIFF=1; else delete D.QUARRY_CLIFF;
   if(quarry) D.QUARRY_GROUND=1; else delete D.QUARRY_GROUND;
   if(normal) D.QUARRY_NORMAL=1; else delete D.QUARRY_NORMAL;
   if (!!D.GROUND === want && !quarryChanged) return;
@@ -746,6 +772,7 @@ export function setGroundTexture(t, tex, quarry = null, normal = null) {
       if(want) m.defines.GROUND=1; else delete m.defines.GROUND;
       if(quarry) m.defines.QUARRY_GROUND=1; else delete m.defines.QUARRY_GROUND;
       if(normal) m.defines.QUARRY_NORMAL=1; else delete m.defines.QUARRY_NORMAL;
+      if(cliffOn) m.defines.QUARRY_CLIFF=1; else delete m.defines.QUARRY_CLIFF;
       m.needsUpdate = true;
     }
   }
