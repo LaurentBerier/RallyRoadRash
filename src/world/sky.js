@@ -134,7 +134,7 @@ export const SKY_THEMES = {
     cloudY: 900, cirrus: 0.30,
     sunDiscColor: 0xfff2d8, sunAngDeg: 1.4, haloStrength: 1.10, sunGlow: 1.15,
     fogHint: 0.00105,
-    grade: [0.82, 0.86, 0.84],
+    grade: [0.90, 0.94, 0.91],
     shaft: 0.28, sat: 1.04, con: 1.06,
     vista: 'peaks', vistaColor: 0x4a5c70, vistaFade: 0.58
   },

@@ -1,3 +1,4 @@
+import { buildForestUnderstory, fernGeometry } from './forest-understory.js';
 import { buildCanyonVista } from './canyon-vista.js';
 import * as THREE from 'three';
 import { makeRNG } from '../core/rng.js';
@@ -40,7 +41,7 @@ export function buildEnvironmentDressing(p) {
   const stone = p._keepMat(new THREE.MeshStandardMaterial({
     color: b.stone, roughness: 0.97, metalness: 0, envMapIntensity: 0.35,
   }));
-  const scrub=p.environmentAssets?.scrub || null;
+  const scrub=p.theme==='forest'?null:(p.environmentAssets?.scrub || null);
   const grass = p._keepMat(new THREE.MeshStandardMaterial({
     color: scrub ? (p.theme==='forest'?0xb1c69c:0xffffff) : b.grass,
     vertexColors: !scrub, map: scrub, alphaTest: scrub ? 0.45 : 0,
@@ -59,7 +60,7 @@ export function buildEnvironmentDressing(p) {
       g.translate(0,0.56,0);g.rotateY(i*Math.PI/3);planes.push(g);
     }
     tuftGeo=mergeGeometries(planes,false);planes.forEach(g=>g.dispose());
-  } else tuftGeo=grassGeometry(43);
+  } else tuftGeo=p.theme==='forest'?fernGeometry():grassGeometry(43);
   const tufts = new THREE.InstancedMesh(p._keepGeo(tuftGeo), grass, 4200);
   const rocks = new THREE.InstancedMesh(p._keepGeo(boulderGeo(31, 2, 1)), p.rockMat, b.outcrops*3);
   for (const m of [pebbles, tufts, rocks]) {
@@ -102,7 +103,7 @@ export function buildEnvironmentDressing(p) {
     mesh.userData.fullCount=count;
   }
 
-  const groundFoot=(x,z,r)=>{let h=p.terrain.heightAt(x,z);if(p.theme==='canyon')for(let i=0;i<12;i++){const a=i*Math.PI/6;h=Math.min(h,p.terrain.heightAt(x+Math.cos(a)*r,z+Math.sin(a)*r));}return h;};
+  const groundFoot=(x,z,r)=>{let h=p.terrain.heightAt(x,z);if(['canyon','forest'].includes(p.theme))for(let i=0;i<12;i++){const a=i*Math.PI/6;h=Math.min(h,p.terrain.heightAt(x+Math.cos(a)*r,z+Math.sin(a)*r));}return h;};
   let count=0;
   for(let i=0;i<b.outcrops;i++) {
     const s=(i+0.2+rng()*0.6)/b.outcrops*sp.length;
@@ -142,7 +143,7 @@ export function buildEnvironmentDressing(p) {
       const s=rng()*sp.length,side=rng()<.5?-1:1,extent=3.8+rng()*3.2;
       sp.offsetPoint(s,side*(sp.widthAt(s)+extent+6.5+rng()*12),point);
       const x=point.x,z=point.z;
-      if(!p._canPlace(x,z,1.3)||!p._clearOfClaims(x,z,extent+.5)||p.terrain.slopeAt(x,z)>24)continue;
+      if(!p._canPlace(x,z,1.3)||!p._clearOfClaims(x,z,extent+.5)||p.terrain.slopeAt(x,z)>(p.theme==='forest'?48:24))continue;
       sp.nearest(x,z,nearest);
       if(nearest.d<sp.widthAt(nearest.s)+extent+6)continue;
       if(p.data.shortcutSpline){
@@ -164,7 +165,7 @@ export function buildEnvironmentDressing(p) {
     bank.count=bn;bank.instanceMatrix.needsUpdate=true;bank.receiveShadow=true;
     bank.computeBoundingSphere();p.group.add(bank);p.quarryMediumRocks=bank;
   }
-  if(p.theme==='training') {
+  if(p.theme==='training' || p.theme==='forest') {
     const crags=new THREE.InstancedMesh(p._keepGeo(boulderGeo(93,2)),p.rockMat,140);
     let n=0;
     // Embed complete scanned forms in the quarry's actual escarpments.
@@ -245,6 +246,7 @@ export function buildEnvironmentDressing(p) {
     p.environmentDetails.push(scree);
   }
   if(p.theme==='canyon') buildCanyonVista(p);
+  if(p.theme==='forest') buildForestUnderstory(p);
   setEnvironmentQuality(p,p.quality);
 }
 
@@ -303,7 +305,20 @@ async function upgradeQuarryRocks(p,nearRocks) {
         ?Math.min(7,Math.floor((Math.atan2(a[offset+14],a[offset+12])+Math.PI)/(Math.PI*2)*8))
         :Math.floor(a[offset+12]/128)+','+Math.floor(a[offset+14]/128);
       if(!buckets.has(bucket))buckets.set(bucket,[]);
-      buckets.get(bucket).push(a.slice(offset,offset+16));
+      const transform=a.slice(offset,offset+16);
+      if(p.theme==='forest') {
+        // Scan silhouettes differ from their procedural placeholders. Seat
+        // the lower third of the actual mesh, including its sloping footprint.
+        g.computeBoundingBox();const lo=g.boundingBox.min.y,hi=g.boundingBox.max.y;
+        const vertices=g.attributes.position,matrix=new THREE.Matrix4().fromArray(transform),v=new THREE.Vector3();
+        let shift=0;
+        for(let j=0;j<vertices.count;j++)if(vertices.getY(j)<lo+(hi-lo)*.30) {
+          v.fromBufferAttribute(vertices,j).applyMatrix4(matrix);
+          shift=Math.min(shift,p.terrain.heightAt(v.x,v.z)-v.y-.15);
+        }
+        transform[13]+=shift;
+      }
+      buckets.get(bucket).push(transform);
     }
     for(const matrices of buckets.values()) {
       if(!matrices.length)continue;

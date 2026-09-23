@@ -166,6 +166,8 @@ const THEME_BASE = {
     h += 58 * sstep(250, -300, x);                                     // the mountainside
     h += (ridged(x * 0.0033, z * 0.0033, 3, 2.1, 0.5, 47) - 0.35) * 6;
     h += (fbm(x * 0.021, z * 0.021, 2, 2, 0.5, 3) - 0.5) * 2.0;        // ground lumps
+    // Rugged outer ridges leave the calibrated racing hillside untouched.
+    h += sstep(410,700,r)*ridged(x*.0058,z*.0058,4,2.05,.5,197)*90;
     h += vista(x, z, r, 83, 250, 600);
     return h + 8;
   },

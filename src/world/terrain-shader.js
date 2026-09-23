@@ -464,7 +464,12 @@ export function buildTerrainMaterial(t) {
          as one flat swatch, and small enough never to be mistaken for a
          feature you could drive to. */
       #ifdef FOREST_GROUND
-      if(sid==3) {rough=max(rough,.30);gritK*=.65;}
+      if(sid==3) {
+        // Damp loam with isolated wet hollows, not a uniformly polished road.
+        float wetHollow=smoothstep(.63,.77,fb(vW.xz*.19));
+        rough=mix(.82,.32,wetHollow);gritK*=.38;
+      }
+      if(sid==5) albedo=mix(albedo,vec3(.19,.20,.145),.40);
       #endif
       albedo *= 0.74 + 0.45*fb(vW.xz*0.018);
 
@@ -529,6 +534,10 @@ export function buildTerrainMaterial(t) {
          ROCK palette (darkened raw substrate) regardless of painted id. */
       float steep = 1.0 - smoothstep(0.62, 0.86, N.y);
       float rockCoverage = steep;
+      #ifdef FOREST_GROUND
+      rockCoverage=max(rockCoverage,(1.-smoothstep(.70,.94,N.y))*(1.-smoothstep(.02,.20,vRoad)));
+      albedo=mix(albedo,vec3(.29,.31,.29),rockCoverage*.72);
+      #endif
       #ifdef QUARRY_PROFILE
       // Quarry benches are exposed bedrock too. Restricting the scan to
       // vertical normals left every upper ledge as a smooth sandy cap.

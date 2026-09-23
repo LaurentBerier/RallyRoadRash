@@ -160,11 +160,11 @@ async function boot() {
   if(q.has('review')) {
     const select=document.createElement('select');select.setAttribute('aria-label','Review position');
     select.style.cssText='position:fixed;right:12px;bottom:16px;padding:10px;background:#162029;color:white;z-index:9';
-    for(const s of [0,130,265,400,530,660,790,920,1050,1180,1310,1440,1560]) {
+    for(const s of (def.id==='forest'?[0,140,280,420,560,700,790,930,1080,1230,1380,1530,1690]:[0,130,265,400,530,660,790,920,1050,1180,1310,1440,1560])) {
       const option=document.createElement('option');option.value=s;option.textContent='Course '+s+' m';select.append(option);
     }
     select.value=String(Number(q.get('s'))||0);
-    select.addEventListener('change',()=>{window.FL.at(Number(select.value));captureName='canyon-route-'+select.value+'-'+engine.quality.name.toLowerCase();captured=false;renderedFrames=85;captureNote='';});
+    select.addEventListener('change',()=>{window.FL.at(Number(select.value));captureName=def.id+'-route-'+select.value+'-'+engine.quality.name.toLowerCase();captured=false;renderedFrames=85;captureNote='';});
     document.body.append(select);
   }
   const _out = {}, _v = new THREE.Vector3();

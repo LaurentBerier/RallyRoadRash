@@ -86,7 +86,7 @@ export function hoodooGeo(seed, natural=false) {
 /** Irregular branch whorls and a brown trunk, merged into one instanced draw. */
 export function pineGeo(seed) {
   const rng = makeRNG((seed * 104729) | 1);
-  const h = 6.8 + rng() * 4.2;
+  const h = 8.8 + rng() * 5.2;
   const parts = [];
   const paint = (g, base, variation) => {
     const c = new THREE.Color(base), pos = g.attributes.position;
@@ -105,9 +105,9 @@ export function pineGeo(seed) {
   // Open branch whorls leave sky between the limbs. The old stacked cones
   // made every tree a solid Christmas-tree silhouette even at arm's length.
   for (let i = 0; i < 13; i++) {
-    const t = i/12, y=h*(0.15+t*0.80), radius=(2.2-t*1.95)*(0.8+rng()*0.35);
+    const t = i/12, y=h*(0.20+t*0.75), radius=(2.65-t*2.35)*(0.66+rng()*0.65);
     const verts=[], uvs=[];
-    const branches=8;
+    const branches=6 + (i % 3);
     for(let j=0;j<branches;j++) {
       const a=j/branches*Math.PI*2+i*2.4+(rng()-0.5)*0.45;
       const r=radius*(0.72+rng()*0.46), dx=Math.cos(a), dz=Math.sin(a);
@@ -233,7 +233,7 @@ export function patchFoliageMaterial(material) {
       #ifdef USE_MAP
       if(vMapUv.x >= 0.0) {
         vec4 needles=texture2D(map,vMapUv);
-        diffuseColor.rgb=needles.rgb*0.85;
+        diffuseColor.rgb=needles.rgb*1.10;
         diffuseColor.a*=needles.a;
       }
       #endif
@@ -249,7 +249,7 @@ export function patchFoliageMaterial(material) {
       `);
     }
   };
-  material.customProgramCacheKey=()=> 'rrr-foliage-v2';
+  material.customProgramCacheKey=()=> 'rrr-foliage-v3';
   return material;
 }
 

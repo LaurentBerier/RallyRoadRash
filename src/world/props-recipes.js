@@ -76,13 +76,13 @@ export const RECIPES = {
     accent: '#4fd07a',
     rock: 0x5f6357, dust: 0x6b6c56,
     kinds: [
-      { id: 'pine0', share: 0.22, min: 0.75, max: 1.5, solid: true, r: 0.55, slope: 34, clear: 1.45, shadow: true },
-      { id: 'pine1', share: 0.18, min: 0.7, max: 1.4, solid: true, r: 0.5, slope: 36, clear: 1.45, shadow: true },
+      { id: 'pine0', share: 0.27, min: 0.75, max: 1.5, solid: true, r: 0.55, slope: 34, clear: 1.45, shadow: true },
+      { id: 'pine1', share: 0.23, min: 0.7, max: 1.4, solid: true, r: 0.5, slope: 36, clear: 1.45, shadow: true },
       { id: 'pine2', share: 0.14, min: 0.6, max: 1.2, solid: true, r: 0.45, slope: 38, clear: 1.45, shadow: false },
-      { id: 'broadleaf', share: 0.07, min: 0.7, max: 1.4, solid: true, r: 0.5, slope: 30, clear: 1.6, shadow: true },
-      { id: 'snag', share: 0.08, min: 0.7, max: 1.4, solid: true, r: 0.32, slope: 38, clear: 1.5, shadow: true },
+      { id: 'broadleaf', share: 0.025, min: 0.7, max: 1.4, solid: true, r: 0.5, slope: 30, clear: 1.6, shadow: true },
+      { id: 'snag', share: 0.045, min: 0.7, max: 1.4, solid: true, r: 0.32, slope: 38, clear: 1.5, shadow: true },
       { id: 'log', share: 0.07, min: 0.8, max: 1.4, solid: true, r: 0.5, slope: 22, clear: 1.7, shadow: false },
-      { id: 'stump', share: 0.07, min: 0.8, max: 1.5, solid: true, r: 0.4, slope: 26, clear: 1.5, shadow: false },
+      { id: 'stump', share: 0.05, min: 0.8, max: 1.5, solid: true, r: 0.4, slope: 26, clear: 1.5, shadow: false },
       { id: 'bush0', share: 0.075, min: 0.7, max: 1.7, solid: false, slope: 36, clear: 1.35, shadow: false },
       { id: 'rock1', share: 0.08, min: 0.4, max: 1.5, solid: false, slope: 40, clear: 1.5, shadow: false },
       /* The leanest scrap share in the game. TIMBERLINE CLIMB is a working
