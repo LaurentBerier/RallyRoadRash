@@ -525,6 +525,13 @@ export function buildTerrainMaterial(t) {
          cover slides off a slope in reality; blend steep faces toward the
          ROCK palette (darkened raw substrate) regardless of painted id. */
       float steep = 1.0 - smoothstep(0.62, 0.86, N.y);
+      float rockCoverage = steep;
+      #ifdef QUARRY_CLIFF
+      // Quarry benches are exposed bedrock too. Restricting the scan to
+      // vertical normals left every upper ledge as a smooth sandy cap.
+      rockCoverage=max(steep,smoothstep(200.,235.,length(vW.xz)));
+      rockCoverage=max(rockCoverage,(1.-smoothstep(.88,.98,N.y))*(1.-smoothstep(0.,.05,vRoad)));
+      #endif
       if (sid != 6) {                              // lava keeps its glow
         vec3 scree = uSurfCol[4] * (0.62 + 0.30*fb(vW.xz*0.5) + 0.14*g0);
         // Exposed cuts reveal strata and vertical water staining. This is
@@ -532,7 +539,7 @@ export function buildTerrainMaterial(t) {
         float strata = fb(vec2(vW.y*0.72 + fb(vW.xz*0.07)*2.8, vW.x*0.013+vW.z*0.009));
         float streak = fb(vW.xz*0.35 + vec2(vW.y*0.035));
         scree *= 0.73 + 0.20*strata + 0.24*streak;
-        albedo = mix(albedo, scree, steep * 0.85);
+        albedo = mix(albedo, scree, rockCoverage * 0.85);
         rough = mix(rough, 0.8, steep);
       }
 
@@ -544,7 +551,7 @@ export function buildTerrainMaterial(t) {
          identically with no assets at all — that is the contract. */
       float photoRelief = 0.0;
       #ifdef GROUND
-      float cliffFade = (1.0-smoothstep(180.0,650.0,dist))*steep;
+      float cliffFade = (1.0-smoothstep(180.0,650.0,dist))*rockCoverage;
       if ((gnear > 0.004 || cliffFade > 0.004) && sid != 6) {
         float lay = sid == 0 ? 5.0 : sid == 1 ? 0.0 : sid == 2 ? 1.0
                   : sid == 3 ? 3.0 : sid == 4 ? 2.0 : 4.0;
@@ -571,17 +578,17 @@ export function buildTerrainMaterial(t) {
         // the uniform sandpaper appearance of a single aggregate scale.
         if(sid==0) sampleGround=mix(sampleGround,texture(uGround,vec3(guv*.8,1.0)).rgb,.55);
         #ifdef QUARRY_GROUND
-        if(sid==0 || sid==2 || sid==5) {
+        if(sid==0 || sid==1 || sid==2 || sid==5) {
           // Keep the scanned-size aggregate crisp instead of resampling it
           // through the generic 512-pixel layer array. Break repeats with a
           // slow second scale while retaining the primary pebbles' edges.
-          vec2 qUV=vW.xz*.22;
+          vec2 qUV=vW.xz*((sid==0||sid==1)? .38 : .22);
           vec3 fine=texture2D(uQuarryGround,qUV).rgb;
           fine=mix(fine,texture2D(uQuarryGround,RA*qUV*.51+.31).rgb,.18);
           sampleGround=mix(sampleGround,fine,.90);
         }
         #endif
-        if (steep > 0.02) {
+        if (rockCoverage > 0.02) {
           vec3 blend = pow(abs(N), vec3(4.0));
           blend /= max(dot(blend, vec3(1.0)), 0.001);
           vec3 rockY = texture(uGround, vec3(vW.xz * 0.14, 2.0)).rgb;
@@ -592,7 +599,7 @@ export function buildTerrainMaterial(t) {
           rockY=texture2D(uQuarryCliff,vW.xz*.065).rgb;
           rockZ=texture2D(uQuarryCliff,vW.xy*.065).rgb;
           #endif
-          sampleGround = mix(sampleGround, rockX*blend.x + rockY*blend.y + rockZ*blend.z, steep);
+          sampleGround = mix(sampleGround, rockX*blend.x + rockY*blend.y + rockZ*blend.z, rockCoverage);
         }
         vec3 gt = clamp(sampleGround * (1.0 / 0.2158), 0.35, 1.70);
         float detailFade=max(gnear,cliffFade);
@@ -623,8 +630,8 @@ export function buildTerrainMaterial(t) {
 
       // Scanned OpenGL normals add aggregate relief on the quarry floor.
       #ifdef QUARRY_NORMAL
-      if((sid==0 || sid==2 || sid==5) && dnear>.002) {
-        vec3 detail=texture2D(uQuarryNormal,vW.xz*.22).xyz*2.0-1.0;
+      if((sid==0 || sid==1 || sid==2 || sid==5) && dnear>.002) {
+        vec3 detail=texture2D(uQuarryNormal,vW.xz*((sid==0||sid==1)? .38 : .22)).xyz*2.0-1.0;
         vec3 tangent=normalize(vec3(N.y,-N.x,0.0));
         vec3 bitangent=normalize(cross(tangent,N));
         vec3 scanned=normalize(tangent*detail.x+bitangent*detail.y+N*max(detail.z,.25));
@@ -633,7 +640,7 @@ export function buildTerrainMaterial(t) {
       #endif
       // Triplanar scanned normals follow the exposed cliff faces.
       #ifdef QUARRY_CLIFF
-      if(steep>.02 && dist<650.) {
+      if(rockCoverage>.02 && dist<650.) {
         vec3 w=pow(abs(N),vec3(4.));w/=max(dot(w,vec3(1.)),.001);
         vec3 nx=texture2D(uQuarryCliffNormal,vW.zy*.065).xyz*2.-1.;
         vec3 ny=texture2D(uQuarryCliffNormal,vW.xz*.065).xyz*2.-1.;
@@ -641,7 +648,7 @@ export function buildTerrainMaterial(t) {
         vec3 faceNormal=normalize(vec3(nx.z*sign(N.x),nx.y,nx.x)*w.x
           +vec3(ny.x,ny.z*sign(N.y),ny.y)*w.y
           +vec3(nz.x,nz.y,nz.z*sign(N.z))*w.z);
-        Nr=normalize(mix(Nr,faceNormal,steep*.85*(1.-smoothstep(250.,650.,dist))));
+        Nr=normalize(mix(Nr,faceNormal,rockCoverage*.85*(1.-smoothstep(250.,650.,dist))));
       }
       #endif
       /* ---- freshly churned ground is DARKER and wetter, not brighter ----

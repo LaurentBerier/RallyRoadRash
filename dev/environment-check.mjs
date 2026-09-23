@@ -32,6 +32,15 @@ function build(theme) {
   p.rockMat=p._keepMat(rockMaterial(0x777766,0x888877));
   buildEnvironmentDressing(p);
   if(theme==='training') assert(p.quarryCrags.count>0,'steep quarry faces receive crags');
+  if(theme==='training') {
+    const matrix=new THREE.Matrix4(),pos=new THREE.Vector3(),scale=new THREE.Vector3(),rot=new THREE.Quaternion();
+    const banks=p._fixedColliders.filter(c=>c.kind==='quarry-boulder');
+    for(let i=0;i<p.quarryMediumRocks.count;i++) {
+      p.quarryMediumRocks.getMatrixAt(i,matrix);matrix.decompose(pos,rot,scale);
+      assert(banks.some(c=>Math.hypot(pos.x-c.x,pos.z-c.z)+Math.max(scale.x,scale.z)*1.5<c.r+.001),
+        'every rubble fragment fits its aggregate collision footprint');
+    }
+  }
   assert(p._fixedColliders.length>0,theme+' has outcrops');
   for(const c of p._fixedColliders) {
     const clearance=c.kind==='quarry-boulder'?5.99:9.99;

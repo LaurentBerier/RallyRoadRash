@@ -104,8 +104,8 @@ async function boot() {
       else envNote = 'no env/' + def.theme + ' in the manifest — shader env';
   }
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData,
-    A.get('foliage/spruce'), { scrub: A.get('foliage/'+def.theme) || A.get('foliage/scrub'), cliff: A.get('terrain/cliff'),
-      rockHigh:A.url('models/quarry/boulder-high'),rockLow:A.url('models/quarry/boulder-low') });
+    A.get('foliage/spruce'), { scrub: A.get('foliage/'+def.theme) || A.get('foliage/scrub'), sagebrush: def.theme==='training'?A.get('foliage/training-sagebrush'):null, cliff: A.get('terrain/cliff'),
+      rockHigh:A.url('models/quarry/boulder-high'),rockLow:A.url('models/quarry/boulder-low'),rockMobile:A.url('models/quarry/boulder-mobile') });
   const dust = new Dust(engine.scene, terrain, terrain.uniforms.uSunDir, engine.quality.dust, def.theme);
   const vfx = new VFX(engine.scene, dust, engine.quality, def.theme);
   props.setVfx(vfx, dust);

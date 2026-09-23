@@ -702,6 +702,16 @@ export function* bakeTrack(trackDef, report = () => { }) {
         const lim = BANK_FREE + BANK_SLOPE * Math.max(0, dd);
         h = softClamp(h, roadH - lim, roadH + lim, 2.2);
       }
+      if(theme==='training' && dd>0) {
+        // An excavated haul road sits between spoil shoulders, not on a
+        // causeway above an empty bowl. Start outside the authored verge:
+        // the entire driving surface, jump lips and banking stay intact.
+        const x=(gi0+i-half)*px,z=(gj0+j-half)*px;
+        const broken=fbm(x*.047,z*.047,3,2,.5,97);
+        const rise=across>0?1.2+broken*3.8:.35+broken*1.8;
+        const fade=sstep(0,8,dd)*(1-sstep(27,CORRIDOR,dd));
+        h=Math.max(h,h+(roadH+rise-h)*fade);
+      }
       /* A shelf, if one is authored here: hillside on `side`, open air on the
          other. Deliberately applied AFTER the slope clamp, because the clamp
          is symmetric — that symmetry is what lets a road be authored on top

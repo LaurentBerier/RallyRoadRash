@@ -131,13 +131,16 @@ export function buildEnvironmentDressing(p) {
   }
   rocks.count=count;
   if(p.theme==='training') {
-    const bank=new THREE.InstancedMesh(p._keepGeo(boulderGeo(35,1)),p.rockMat,220);
+    const bank=new THREE.InstancedMesh(p._keepGeo(boulderGeo(35,1)),p.rockMat,640);
     let bn=0;
-    for(let i=0;i<3500 && bn<220;i++) {
-      const s=rng()*sp.length,side=rng()<.5?-1:1,radius=.7+rng()*1.15;
-      sp.offsetPoint(s,side*(sp.widthAt(s)*1.4+2+rng()*15),point);
-      const x=point.x,z=point.z,extent=radius*1.5;
-      if(!p._canPlace(x,z,1.3)||!p._clearOfClaims(x,z,extent+1)||p.terrain.slopeAt(x,z)>30)continue;
+    // Treat a rubble bank as one geological feature, not seven isolated
+    // objects whose individual keep-outs prevent them ever touching.
+    // The aggregate collider encloses every rock, on every quality tier.
+    for(let i=0;i<1800 && bn+8<=640;i++) {
+      const s=rng()*sp.length,side=rng()<.5?-1:1,extent=3.8+rng()*3.2;
+      sp.offsetPoint(s,side*(sp.widthAt(s)+extent+6.5+rng()*12),point);
+      const x=point.x,z=point.z;
+      if(!p._canPlace(x,z,1.3)||!p._clearOfClaims(x,z,extent+.5)||p.terrain.slopeAt(x,z)>24)continue;
       sp.nearest(x,z,nearest);
       if(nearest.d<sp.widthAt(nearest.s)+extent+6)continue;
       if(p.data.shortcutSpline){
@@ -146,7 +149,13 @@ export function buildEnvironmentDressing(p) {
       }
       if(p.data.checkpoints.some(c=>Math.hypot(x-c.x,z-c.z)<c.r+extent+2))continue;
       if(p.data.gridSlots.some(g=>Math.hypot(x-g.x,z-g.z)<extent+8))continue;
-      put(bank,bn++,x,p.terrain.heightAt(x,z)+radius*.2,z,radius,radius,radius*(.65+rng()*.3));
+      for(let j=0;j<8;j++) {
+        const radius=j===0?extent*.60:.45+rng()*extent*.23;
+        const a=rng()*Math.PI*2,dist=j===0?0:rng()*(extent-radius*1.5);
+        const rx=x+Math.cos(a)*dist,rz=z+Math.sin(a)*dist;
+        const h=radius*(j===0?1.65+rng()*.45:.8+rng()*.65);
+        put(bank,bn++,rx,p.terrain.heightAt(rx,rz)+h*.28,rz,radius,h,radius*(.65+rng()*.3));
+      }
       p._fixedColliders.push({x,z,r:extent,kind:'quarry-boulder',bounce:.55});
       p._claimed.push({x,z,r:extent});
     }
@@ -188,15 +197,42 @@ export function buildEnvironmentDressing(p) {
     if(m.instanceColor) m.instanceColor.needsUpdate=true;
   }
   p.environmentDetails=[pebbles,tufts];
+  if(p.theme==='training' && p.environmentAssets?.sagebrush) {
+    const sageMat=p._keepMat(grass.clone());
+    sageMat.map=p.environmentAssets.sagebrush;sageMat.emissiveMap=sageMat.map;
+    const sage=new THREE.InstancedMesh(tuftGeo,sageMat,tufts.count);
+    const matrix=new THREE.Matrix4(),widen=new THREE.Matrix4().makeScale(1.25,.80,1.25);
+    let green=0,dry=0;
+    for(let i=0;i<tufts.count;i++) {
+      tufts.getMatrixAt(i,matrix);tufts.getColorAt(i,col);
+      if(i%3!==0) {
+        sage.setMatrixAt(green,matrix.multiply(widen));sage.setColorAt(green++,col);
+      } else {tufts.setMatrixAt(dry,matrix);tufts.setColorAt(dry++,col);}
+    }
+    tufts.count=dry;tufts.userData.fullCount=dry;
+    tufts.instanceMatrix.needsUpdate=true;tufts.instanceColor.needsUpdate=true;
+    sage.count=green;sage.userData.fullCount=green;sage.receiveShadow=true;
+    sage.instanceMatrix.needsUpdate=true;sage.instanceColor.needsUpdate=true;
+    sage.computeBoundingSphere();p.group.add(sage);p.environmentDetails.push(sage);
+  }
   if(p.theme==='training') {
     const scree=new THREE.InstancedMesh(p._keepGeo(boulderGeo(71,0)),stone,9000);
     let n=0;
     for(let i=0;i<16000 && n<9000;i++) {
       const s=rng()*sp.length,side=rng()<0.5?-1:1;
-      // A narrow natural shoulder inside and beyond the barrier line.
-      sp.offsetPoint(s,side*(sp.widthAt(s)*1.05+rng()*5.5),point);
+      // Loose, ankle-high gravel belongs on the driving shoulder as well as
+      // beyond it. _canPlace rejects the entire road mask, which used to
+      // hide all this relief behind the concrete barriers.
+      sp.offsetPoint(s,side*(sp.widthAt(s)*.86+rng()*5.5),point);
       const x=point.x,z=point.z;
-      if(!p._canPlace(x,z,1.02)||!p._clearOfClaims(x,z,0.2)||p.terrain.slopeAt(x,z)>35)continue;
+      if(!p._clearOfClaims(x,z,.2)||p.terrain.slopeAt(x,z)>35)continue;
+      sp.nearest(x,z,nearest);
+      if(nearest.d<sp.widthAt(nearest.s)*.84)continue;
+      if(p.data.shortcutSpline) {
+        p.data.shortcutSpline.nearest(x,z,nearest);
+        if(nearest.d<p.data.shortcutSpline.widthAt(nearest.s)*.90)continue;
+      }
+      if(p.data.gridSlots.some(g=>Math.hypot(x-g.x,z-g.z)<5))continue;
       const r=0.045+Math.pow(rng(),2)*0.24;
       put(scree,n++,x,p.terrain.heightAt(x,z)+r*0.08,z,r,r*0.52,r*(0.7+rng()*0.6));
     }
@@ -211,7 +247,7 @@ async function upgradeQuarryRocks(p,nearRocks) {
   const {loadModel,disposeModel}=await import('../core/models.js');
   const low=p.quality.name==='LOW' || p.quality.name==='MEDIUM';
   const request=p._quarryRequest=(p._quarryRequest||0)+1;
-  const model=await loadModel(low?p.environmentAssets.rockLow:p.environmentAssets.rockHigh);
+  const model=await loadModel(low?(p.environmentAssets.rockMobile||p.environmentAssets.rockLow):p.environmentAssets.rockHigh);
   if(!model) return;
   const distantModel=low?model:await loadModel(p.environmentAssets.rockLow);
   const release=()=>{disposeModel(model);if(distantModel&&distantModel!==model)disposeModel(distantModel);};
