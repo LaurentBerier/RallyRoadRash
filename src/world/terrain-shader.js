@@ -52,7 +52,7 @@ export const THEMES = {
     albedoScale: 0.68,
     sun: [0.74, 0.34, -0.58], sunCol: [1.62, 1.34, 1.02],
     sky: [0.46, 0.52, 0.70], ground: [0.38, 0.27, 0.18], ambient: 0.58,
-    haze: [0.80, 0.68, 0.52], hazeDensity: 0.00032, hazeStart: 140,
+    haze: [0.66, 0.68, 0.73], hazeDensity: 0.00042, hazeStart: 140,
     tint: [1.08, 0.98, 0.88],
     surf: { 4: [0.52, 0.27, 0.18], 1: [0.43, 0.27, 0.18], 2: [0.58, 0.40, 0.25] }
   },
@@ -554,7 +554,11 @@ export function buildTerrainMaterial(t) {
          identically with no assets at all — that is the contract. */
       float photoRelief = 0.0;
       #ifdef GROUND
+      #ifdef CANYON_STRATA
+      float cliffFade = (1.0-smoothstep(380.0,1450.0,dist))*rockCoverage;
+      #else
       float cliffFade = (1.0-smoothstep(180.0,650.0,dist))*rockCoverage;
+      #endif
       if ((gnear > 0.004 || cliffFade > 0.004) && sid != 6) {
         float lay = sid == 0 ? 5.0 : sid == 1 ? 0.0 : sid == 2 ? 1.0
                   : sid == 3 ? 3.0 : sid == 4 ? 2.0 : 4.0;
@@ -615,6 +619,14 @@ export function buildTerrainMaterial(t) {
       }
       #endif
 
+      #ifdef CANYON_STRATA
+      // Geological bedding remains legible past the texture detail cutoff.
+      float cliffMask=smoothstep(.12,.62,1.0-N.y)*(1.0-vRoad);
+      float bedHeight=vW.y+fb(vW.xz*.018)*1.8;
+      float beds=sin(bedHeight*2.6)+.36*sin(bedHeight*8.1);
+      albedo*=1.0-cliffMask*(.12+.14*smoothstep(.3,1.1,beds));
+      albedo=mix(albedo,albedo*vec3(.89,.95,1.06),cliffMask*.65);
+      #endif
       vec3 Nr = N;
       #ifndef FAR
       if (dnear > 0.002 && gritK > 0.01){
@@ -766,6 +778,7 @@ export function setGroundTexture(t, tex, quarry = null, normal = null, cliff = n
   const D = t.material.defines;
   if(t.theme==='training') D.QUARRY_PROFILE=1;
   if(t.theme==='forest') D.FOREST_GROUND=1;
+  if(t.theme==='canyon') D.CANYON_STRATA=1;
   const cliffOn=!!(cliff&&cliffNormal);
   const quarryChanged=!!D.QUARRY_GROUND!==!!quarry || !!D.QUARRY_NORMAL!==!!normal || !!D.QUARRY_CLIFF!==cliffOn;
   u.uQuarryGround.value=quarry;
@@ -791,6 +804,7 @@ export function setGroundTexture(t, tex, quarry = null, normal = null, cliff = n
       if(cliffOn) m.defines.QUARRY_CLIFF=1; else delete m.defines.QUARRY_CLIFF;
       if(t.theme==='training') m.defines.QUARRY_PROFILE=1;
       if(t.theme==='forest') m.defines.FOREST_GROUND=1;
+      if(t.theme==='canyon') m.defines.CANYON_STRATA=1;
       m.needsUpdate = true;
     }
   }

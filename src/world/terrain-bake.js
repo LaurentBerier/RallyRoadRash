@@ -53,7 +53,7 @@ const BANK_TAPER = 12, BERM_TAPER = 10;
    road rather than a floating ribbon. */
 
 /** Flat-topped plateaus on a jittered lattice — mesas, buttes, benches. */
-function plateaus(x, z, cell, seed, hMin, hMax, prob, skirt) {
+function plateaus(x, z, cell, seed, hMin, hMax, prob, skirt, eroded = false) {
   let h = 0;
   const gx = Math.floor(x / cell), gz = Math.floor(z / cell);
   for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
@@ -67,13 +67,20 @@ function plateaus(x, z, cell, seed, hMin, hMax, prob, skirt) {
     // wobble the rim so no mesa is a cylinder
     const a = Math.atan2(z - pz, x - px);
     const wob = 1 + 0.16 * (vnoise(Math.cos(a) * 2.1 + cx * 3.3, Math.sin(a) * 2.1 + cz * 3.3, seed + 5) - 0.5) * 2;
-    const d = Math.hypot(x - px, z - pz) / (r * wob);
+    const fluting=eroded ? .075*Math.sin(a*11+cx)+.04*Math.sin(a*23+cz) : 0;
+    const d = Math.hypot(x - px, z - pz) / (r * (wob+fluting));
     if (d > 1 + skirt) continue;
     // flat cap, steep face, talus apron: 1 -> 0 over the last quarter of the
     // radius, then a low fan that keeps the base from looking cut out
     const cap = 1 - sstep(0.74, 1.0, d);
     const fan = (1 - sstep(1.0, 1 + skirt, d)) * 0.14;
-    h += top * (cap + fan);
+    if(eroded) {
+      // Several narrow cliff risers and broad benches replace smooth cones.
+      const terraces=.40*(1-sstep(.69,.75,d))+.29*(1-sstep(.83,.88,d))
+        +.20*(1-sstep(.97,1.015,d))+.11*(1-sstep(1.05,1+skirt,d));
+      const incision=(vnoise(x*.075,z*.075,seed+9)-.5)*2.8;
+      h+=top*terraces+incision*sstep(.12,.4,terraces);
+    } else h += top * (cap + fan);
   }
   return h;
 }
@@ -119,10 +126,11 @@ const THEME_BASE = {
     const r = Math.hypot(x, z);
     let h = (fbm(x * 0.00165, z * 0.00165, 4, 2.05, 0.5, 21) - 0.5) * 30;
     h += (fbm(x * 0.0072, z * 0.0072, 3, 2.1, 0.5, 29) - 0.5) * 5.5;   // dunes
-    h += plateaus(x, z, 210, 33, 22, 48, 0.55, 0.55);
-    h += plateaus(x, z, 78, 41, 6, 15, 0.30, 0.75);                    // hoodoo benches
+    h += plateaus(x, z, 210, 33, 28, 60, 0.55, 0.55, true);
+    h += plateaus(x, z, 78, 41, 6, 15, 0.30, 0.75, true);                    // hoodoo benches
     h += 34 * sstep(430, 640, r) * (0.5 + 0.9 * ridged(x * 0.0052, z * 0.0052, 3, 2.1, 0.5, 51));
-    h += vista(x, z, r, 71, 205, 620);
+    h += plateaus(x,z,430,133,65,135,.72,.60,true)*sstep(430,760,r);
+    h += vista(x, z, r, 71, 115, 920);
     return h;
   },
 

@@ -48,7 +48,7 @@ import {
   shardGeo, drumGeo, crateGeo, baleGeo, wreckGeo, pipeStackGeo, shedGeo,
   containerGeo, towerGeo, waterTankGeo, hangarGeo, grandstandGeo, canopyGeo,
   personGeo, poleGeo, culvertGeo, pipeworkGeo, logStackGeo, wireGeo,
-  floodlightGeo, billboardGeo, buntingGeo, tyreWallGeo, rockArchGeo,
+  floodlightGeo, billboardGeo, buntingGeo, tyreWallGeo, rockArchGeo, erodedRockArchGeo,
   waterfallSheetGeo, geyserVentGeo,
 } from './kit.js';
 import {
@@ -527,8 +527,9 @@ export class Props {
     // roadbed by a car's width on each side and no further: an arch you
     // cannot possibly hit is also an arch you cannot possibly notice.
     const scale = clamp((w * 2 + 13) / 26, 0.95, 1.7);
-    const geo = this._keepGeo(rockArchGeo(this.palette, (this.def.seed | 0) + 179, 26, 13));
-    const m = new THREE.Mesh(geo, this.theme==='canyon'?this.rockMat:this.dressMat);
+    const geo = this._keepGeo((this.theme==='canyon'?erodedRockArchGeo:rockArchGeo)(this.palette, (this.def.seed | 0) + 179, 26, 13));
+    const archMaterial=this.theme==='canyon'?this._keepMat(rockMaterial(0xa08066,this.recipe.dust,this.environmentAssets.cliff)):this.dressMat;
+    const m = new THREE.Mesh(geo, archMaterial);
     m.position.set(p.x, this.terrain.heightAt(p.x, p.z) - 0.25, p.z);
     m.rotation.y = Math.atan2(d.x, d.z);
     m.scale.setScalar(scale);

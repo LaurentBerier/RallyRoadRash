@@ -1,3 +1,4 @@
+import { erodedRockArchGeo } from '../src/world/kit.js';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { buildEnvironmentDressing, setEnvironmentQuality } from '../src/world/environment-dressing.js';
@@ -57,7 +58,13 @@ function build(theme) {
   setEnvironmentQuality(p,{name:'HIGH'});
   assert.deepEqual(p.environmentDetails.map(m=>m.count),full);
   for(const m of p.group.children) {
-    assert([...m.instanceMatrix.array].every(Number.isFinite));m.dispose();
+    if(m.isInstancedMesh){assert([...m.instanceMatrix.array].every(Number.isFinite));m.dispose();}
+    else {
+      assert([...m.geometry.attributes.position.array,...m.geometry.attributes.normal.array].every(Number.isFinite));
+      m.geometry.computeBoundingSphere();
+      const radius=m.geometry.boundingSphere.radius*Math.max(m.scale.x,m.scale.y,m.scale.z);
+      assert(Math.hypot(m.position.x,m.position.z)-radius>450,'distant mesas stay outside the race terrain');
+    }
   }
   owned.forEach(o=>o.dispose());
   return solids;
@@ -80,4 +87,18 @@ console.log('Environment geometry, determinism, road/shortcut/grid clearance and
   assert(Math.hypot(pos.getX(i),pos.getZ(i))<18,'industrial structures fit the existing collider');
  }
  owned.forEach(g=>g.dispose());p.dressMat.dispose();
+}
+
+{
+ const geo=erodedRockArchGeo({dirt:0x98785f},179),mat=new THREE.MeshBasicMaterial({side:THREE.DoubleSide});
+ const mesh=new THREE.Mesh(geo,mat);mesh.updateMatrixWorld(true);
+ const ray=new THREE.Raycaster(new THREE.Vector3(0,2,10),new THREE.Vector3(0,0,-1));
+ assert.equal(ray.intersectObject(mesh).length,0,'arch driving opening is genuinely hollow');
+ ray.ray.origin.x=13;assert(ray.intersectObject(mesh).length>0,'arch leg is real volume');
+ const a=geo.attributes.position;
+ for(let i=0;i<a.count;i++) if(a.getY(i)<2) {
+   const d=Math.min(Math.hypot(a.getX(i)-13,a.getZ(i)),Math.hypot(a.getX(i)+13,a.getZ(i)));
+   assert(d<3.001,'arch feet fit the existing colliders');
+ }
+ geo.dispose();mat.dispose();
 }

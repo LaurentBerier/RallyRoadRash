@@ -959,9 +959,7 @@ export function tyreWallGeo(P, seed, len = 6) {
  * props side; everything between them is clear air, which is the entire
  * point — the one landmark in the game that is also a gate.
  *
- * Built as a chain of short tapered cylinders following the arch line with
- * a jittered radius, rather than as a swept tube: the facets are what make
- * it read as fractured rock instead of as a pipe.
+ * Built as one closed eroded volume with sedimentary shelves and a clear opening.
  */
 export function rockArchGeo(P, seed, span = 26, h = 13) {
   const rng = makeRNG((seed * 434293) | 1);
@@ -1003,6 +1001,48 @@ export function rockArchGeo(P, seed, span = 26, h = 13) {
       q[0], q[1] + 1.6 + rng() * 0.8, q[2], (rng() - 0.5) * 0.4, rng() * 6.283, (rng() - 0.5) * 0.4);
   }
   return b.done();
+}
+
+
+export function erodedRockArchGeo(P, seed, span = 26, h = 13) {
+  // A single closed, eroded sandstone volume. Shared rings remove the open
+  // cylinder seams and cap blocks that previously read as stacked masonry.
+  const rings=112, sides=32, hx=span*.5, phase=(seed%997)*.013;
+  const pos=[], colors=[], indices=[];
+  const color=new THREE.Color(P.dirt);
+  for(let i=0;i<=rings;i++) {
+    const t=i/rings, a=Math.PI*t, sn=Math.sin(a), cs=Math.cos(a);
+    const cx=-hx*cs, cy=h*Math.pow(sn,.78)+.12;
+    const dx=hx*sn,dy=h*.78*Math.pow(Math.max(sn,.001),-.22)*cs,len=Math.hypot(dx,dy);
+    const nx=-dy/len, ny=dx/len;
+    const radius=2.12+.72*Math.pow(Math.abs(cs),6)+.30*sn*Math.sin(a*3+.7);
+    for(let j=0;j<=sides;j++) {
+      const b=2*Math.PI*j/sides, cb=Math.cos(b), sb=Math.sin(b);
+      const y0=cy+ny*radius*cb;
+      // Broad erosion, thin bedding shelves and small broken edges. Both
+      // ends remain inside the existing 3 m collision footprint.
+      const layer=.12*Math.sin(y0*5.1+phase)+.09*Math.sin(y0*11.7);
+      const fracture=.14*Math.sin(a*31+sb*7+phase)*Math.sin(b*5+a*9);
+      const erode=sn*(.26*Math.sin(a*13+b*3)+layer+fracture);
+      const rr=radius+erode;
+      const x=cx+nx*rr*cb, y=cy+ny*rr*cb;
+      const z=sb*(radius*.86+erode)+sn*.32*Math.sin(a*7);
+      pos.push(x,y,z);
+      const bed=.83+.12*Math.sin(y*2.1)+.05*Math.sin(y*9.3);
+      colors.push(color.r*bed,color.g*bed,color.b*bed);
+      if(i<rings && j<sides){const k=i*(sides+1)+j;indices.push(k,k+1,k+sides+1,k+1,k+sides+2,k+sides+1);}
+    }
+  }
+  // Ground-facing caps; the feet are sunk slightly when placed.
+  for(const i of [0,rings]) {
+    const center=pos.length/3;pos.push(i===0?-hx:hx,.12,0);colors.push(color.r,color.g,color.b);
+    for(let j=0;j<sides;j++){const k=i*(sides+1)+j;if(i===0)indices.push(center,k+1,k);else indices.push(center,k,k+1);}
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  geo.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
+  geo.setIndex(indices);geo.computeVertexNormals();
+  return geo;
 }
 
 /**

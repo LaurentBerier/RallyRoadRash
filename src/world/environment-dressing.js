@@ -1,3 +1,4 @@
+import { buildCanyonVista } from './canyon-vista.js';
 import * as THREE from 'three';
 import { makeRNG } from '../core/rng.js';
 import { boulderGeo } from './props-shapes.js';
@@ -242,6 +243,7 @@ export function buildEnvironmentDressing(p) {
     scree.receiveShadow=true;scree.frustumCulled=false;p.group.add(scree);
     p.environmentDetails.push(scree);
   }
+  if(p.theme==='canyon') buildCanyonVista(p);
   setEnvironmentQuality(p,p.quality);
 }
 
