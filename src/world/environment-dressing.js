@@ -1,4 +1,5 @@
 import { buildForestUnderstory, fernGeometry } from './forest-understory.js';
+import { buildVolcanoVFX, setVolcanoVFXQuality } from './volcano-vfx.js';
 import { buildVolcanoGeology } from './volcano-geology.js';
 import { buildCanyonVista } from './canyon-vista.js';
 import * as THREE from 'three';
@@ -229,11 +230,11 @@ export function buildEnvironmentDressing(p) {
       // Loose, ankle-high gravel belongs on the driving shoulder as well as
       // beyond it. _canPlace rejects the entire road mask, which used to
       // hide all this relief behind the concrete barriers.
-      sp.offsetPoint(s,side*(sp.widthAt(s)*.86+rng()*5.5),point);
+      sp.offsetPoint(s,side*(sp.widthAt(s)*(p.theme==='volcano'?.58:.86)+rng()*5.5),point);
       const x=point.x,z=point.z;
       if(!p._clearOfClaims(x,z,.2)||p.terrain.slopeAt(x,z)>35)continue;
       sp.nearest(x,z,nearest);
-      if(nearest.d<sp.widthAt(nearest.s)*.84)continue;
+      if(nearest.d<sp.widthAt(nearest.s)*(p.theme==='volcano'?.56:.84))continue;
       if(p.data.shortcutSpline) {
         p.data.shortcutSpline.nearest(x,z,nearest);
         if(nearest.d<p.data.shortcutSpline.widthAt(nearest.s)*.90)continue;
@@ -248,7 +249,7 @@ export function buildEnvironmentDressing(p) {
   }
   if(p.theme==='canyon') buildCanyonVista(p);
   if(p.theme==='forest') buildForestUnderstory(p);
-  if(p.theme==='volcano') buildVolcanoGeology(p);
+  if(p.theme==='volcano') {buildVolcanoGeology(p);buildVolcanoVFX(p);}
   setEnvironmentQuality(p,p.quality);
 }
 
@@ -337,6 +338,7 @@ async function upgradeQuarryRocks(p,nearRocks) {
 }
 
 export function setEnvironmentQuality(p,q) {
+  setVolcanoVFXQuality(p,q);
   const factor=q.name==='LOW'?0.25:q.name==='MEDIUM'?0.55:1;
   for(const m of p.environmentDetails || []) m.count=Math.floor(m.userData.fullCount*factor);
   const tier=q.name==='LOW'||q.name==='MEDIUM'?'loaded-low':'loaded-high';

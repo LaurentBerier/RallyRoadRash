@@ -1440,6 +1440,7 @@ export class Props {
        long as the camera is missing. Returns on its own the moment nothing is
        moving, which is almost always. */
     stepDynamicPool(this._dyn, dt, this.terrain);
+    if(this.volcanoVFX) this.volcanoVFX.time.value+=dt;
     if (!camera) return;
     this._bobCrowd(t, camera);
     this._runGeysers(dt, camera);

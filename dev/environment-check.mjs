@@ -53,12 +53,15 @@ function build(theme) {
   const full=p.environmentDetails.map(m=>m.count);
   const solids=JSON.stringify(p._fixedColliders);
   setEnvironmentQuality(p,{name:'LOW'});
+  if(theme==='volcano'){assert(p.volcanoVFX.steam.geometry.instanceCount<p.volcanoVFX.fullSteam);assert.equal(p.volcanoVFX.ash.geometry.drawRange.count,180);}
   p.environmentDetails.forEach((m,i)=>assert(m.count<full[i]));
   assert.equal(JSON.stringify(p._fixedColliders),solids,'quality cannot hide solid outcrops');
   setEnvironmentQuality(p,{name:'HIGH'});
+  if(theme==='volcano'){assert.equal(p.volcanoVFX.steam.geometry.instanceCount,p.volcanoVFX.fullSteam);assert.equal(p.volcanoVFX.ash.geometry.drawRange.count,700);}
   assert.deepEqual(p.environmentDetails.map(m=>m.count),full);
   for(const m of p.group.children) {
-    if(m.isInstancedMesh){assert([...m.instanceMatrix.array].every(Number.isFinite));m.dispose();}
+    if(m.userData.volcanoEffect){assert([...m.geometry.attributes.position.array].every(Number.isFinite));assert(m.material.transparent&&!m.material.depthWrite,'effects preserve opaque depth');}
+    else if(m.isInstancedMesh){assert([...m.instanceMatrix.array].every(Number.isFinite));m.dispose();}
     else {
       assert([...m.geometry.attributes.position.array,...m.geometry.attributes.normal.array].every(Number.isFinite));
       m.geometry.computeBoundingSphere();

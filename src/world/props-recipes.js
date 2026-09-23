@@ -95,12 +95,12 @@ export const RECIPES = {
     accent: '#ff5a2c',
     rock: 0x3a3634, dust: 0x4a3c33,
     kinds: [
-      { id: 'basalt', share: 0.20, min: 0.9, max: 2.4, solid: true, r: 1.0, slope: 30, clear: 1.9, shadow: true },
-      { id: 'vent', share: 0.06, min: 0.9, max: 1.8, solid: true, r: 1.6, slope: 18, clear: 2.2, shadow: true },
-      { id: 'shard0', share: 0.14, min: 0.7, max: 1.9, solid: true, r: 0.5, slope: 36, clear: 1.5, shadow: true },
-      { id: 'shard1', share: 0.10, min: 0.5, max: 1.4, solid: false, slope: 40, clear: 1.4, shadow: false },
-      { id: 'snag', share: 0.08, min: 0.6, max: 1.2, solid: true, r: 0.3, slope: 36, clear: 1.5, shadow: true },
-      { id: 'rock0', share: 0.10, min: 0.9, max: 3.2, solid: true, r: 0.72, slope: 34, clear: 1.7, shadow: false },
+      { id: 'basalt', share: 0.045, min: 0.9, max: 2.4, solid: true, r: 1.0, slope: 30, clear: 1.9, shadow: true },
+      { id: 'vent', share: 0.04, min: 0.9, max: 1.8, solid: true, r: 1.6, slope: 18, clear: 2.2, shadow: true },
+      { id: 'shard0', share: 0.07, min: 0.7, max: 1.9, solid: true, r: 0.5, slope: 36, clear: 1.5, shadow: true },
+      { id: 'shard1', share: 0.06, min: 0.5, max: 1.4, solid: false, slope: 40, clear: 1.4, shadow: false },
+      { id: 'snag', share: 0.025, min: 0.6, max: 1.2, solid: true, r: 0.3, slope: 36, clear: 1.5, shadow: true },
+      { id: 'rock0', share: 0.44, min: 0.9, max: 3.2, solid: true, r: 0.72, slope: 34, clear: 1.7, shadow: false },
       { id: 'rock2', share: 0.30, min: 0.25, max: 1.0, solid: false, slope: 42, clear: 1.4, shadow: false },
       { id: 'scrap', share: 0.02, min: 0.8, max: 1.5, solid: true, r: 0.62, slope: 22, clear: 1.5, shadow: false }
     ]

@@ -536,6 +536,9 @@ export function buildTerrainMaterial(t) {
       float steep = 1.0 - smoothstep(0.62, 0.86, N.y);
       float rockCoverage = steep;
       #ifdef VOLCANIC_GROUND
+      rockCoverage=max(rockCoverage,.85*(1.-smoothstep(.02,.2,vRoad)));
+      #endif
+      #ifdef VOLCANIC_GROUND
       rockCoverage=max(steep,(1.-smoothstep(.72,.95,N.y))*(1.-smoothstep(.02,.2,vRoad)));
       if(sid!=6) {
         float ash=fb(vW.xz*.045);
@@ -575,7 +578,11 @@ export function buildTerrainMaterial(t) {
       #ifdef CANYON_STRATA
       float cliffFade = (1.0-smoothstep(380.0,1450.0,dist))*rockCoverage;
       #else
+      #ifdef VOLCANIC_GROUND
+      float cliffFade=(1.0-smoothstep(650.,1800.,dist))*rockCoverage;
+      #else
       float cliffFade = (1.0-smoothstep(180.0,650.0,dist))*rockCoverage;
+      #endif
       #endif
       if ((gnear > 0.004 || cliffFade > 0.004) && sid != 6) {
         float lay = sid == 0 ? 5.0 : sid == 1 ? 0.0 : sid == 2 ? 1.0
@@ -753,6 +760,13 @@ export function buildTerrainMaterial(t) {
       float ndl = max(dot(Nr, uSunDir), 0.0);
       vec3 col = albedo * uSunCol * ndl * sm;
 
+      #ifdef VOLCANIC_GROUND
+      // Broad ruts and broken ash plates remain readable beyond the micrograin.
+      if(sid!=6 && vRoad>.1){
+        float ruts=pow(.5+.5*cos(latF(vW.xz)*43.+fb(vW.xz*.11)*1.2),8.);
+        col*=1.-ruts*.20*(1.-smoothstep(90.,180.,dist));
+      }
+      #endif
       // hemisphere ambient: sky above, bounce off the ground below
       vec3 amb = mix(uGroundCol, uSkyCol, 0.5 + 0.5*N.y);
       col += albedo * amb * uAmbient;

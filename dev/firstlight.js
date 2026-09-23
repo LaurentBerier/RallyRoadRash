@@ -164,7 +164,7 @@ async function boot() {
       const option=document.createElement('option');option.value=s;option.textContent='Course '+s+' m';select.append(option);
     }
     select.value=String(Number(q.get('s'))||0);
-    select.addEventListener('change',()=>{window.FL.at(Number(select.value));captureName=def.id+'-route-'+select.value+'-'+engine.quality.name.toLowerCase();captured=false;renderedFrames=85;captureNote='';});
+    select.addEventListener('change',()=>{window.FL.at(Number(select.value));captureName=(q.get('prefix')||def.id+'-route')+'-'+select.value+'-'+engine.quality.name.toLowerCase();captured=false;renderedFrames=85;captureNote='';});
     document.body.append(select);
   }
   const _out = {}, _v = new THREE.Vector3();
@@ -319,7 +319,7 @@ async function boot() {
       `air ${veh.airborne} ${veh.airTime.toFixed(1)}s  hardHit ${veh.hardHit.toFixed(1)}\n` +
       `drawcalls ${engine.renderer.info.render.calls}  tris ${(engine.renderer.info.render.triangles / 1000).toFixed(0)}k\n` +
       `landmarks ${(props.landmarkStatus||[]).map(x=>x.id+':'+x.state+'@'+Math.round(x.site?.s||0)).join(' ')}\n` +
-      `quarry rocks ${props.quarryNearRocks?.count||0}+${props.quarryMediumRocks?.count||0}  crags ${props.quarryCrags?.count||0}  AO ${engine.contactAO.enabled?'on':'off'}  ${engine.quality.name} ${props.quarryScanStatus||'fallback'}  swaps ${qualitySwaps}\n${captureNote}`;
+      `quarry rocks ${props.quarryNearRocks?.count||0}+${props.quarryMediumRocks?.count||0}  crags ${props.quarryCrags?.count||0}  AO ${engine.contactAO.enabled?'on':'off'}  ${engine.quality.name} ${props.quarryScanStatus||'fallback'}  swaps ${qualitySwaps}\n${props.volcanoVFX?'VFX '+props.volcanoVFX.time.value.toFixed(1)+'s steam '+props.volcanoVFX.steam.geometry.instanceCount+' ash '+props.volcanoVFX.ash.geometry.drawRange.count+'\n':''}${captureNote}`;
     window.__FL = { veh, terrain, engine, fps, s: n.s, d: n.d };
   }
   requestAnimationFrame(frame);

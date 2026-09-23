@@ -202,6 +202,7 @@ const THEME_BASE = {
     h += crevices(x, z, 0.0062, 79, 26);
     // Broken outer lava ridges, outside the protected racing corridor.
     h += sstep(420,640,r)*ridged(x*.011,z*.011,4,2.1,.55,193)*42;
+    h += plateaus(x,z,145,233,32,78,.72,.75,true)*sstep(380,500,r);
     h += 92 * sstep(430, 620, r) * (0.45 + 0.95 * ridged(x * 0.0044, z * 0.0044, 4, 2.1, 0.5, 89));
     h += vista(x, z, r, 97, 230, 610);
     return h;
