@@ -42,8 +42,8 @@ export const THEMES = {
     haze: [0.66, 0.73, 0.83], hazeDensity: 0.00050, hazeStart: 90,
     tint: [1.00, 1.00, 1.00],
     albedoScale: 0.62,
-    surf: { 0: [0.34, 0.28, 0.21], 2: [0.45, 0.35, 0.24],
-      4: [0.37, 0.30, 0.23], 5: [0.25, 0.27, 0.14] }
+    surf: { 0: [0.36, 0.33, 0.28], 2: [0.45, 0.38, 0.29],
+      4: [0.37, 0.33, 0.28], 5: [0.30, 0.27, 0.20] }
   },
   canyon: {
     // Late afternoon, sun low across the wash. Clear warm air: you can see the
@@ -272,12 +272,15 @@ export function buildTerrainMaterial(t) {
     uRShadow: { value: null },
     uRShadowMat: { value: new THREE.Matrix4() },
     uRShadowOn: { value: 0 },
+    uContactShadow: { value: new THREE.Vector4(0,0,0,0) },
     uRShadowTexel: { value: 1 / 2048 },
     /* Optional photographic ground detail, a DataArrayTexture in
        GROUND_LAYERS order. Absent is the normal case — see core/assets.js and
        setGroundTexture() below. The sampler is behind a #define so a null
        binding never reaches a driver. */
     uGround: { value: ground },
+    uQuarryGround: { value: null },
+    uQuarryNormal: { value: null },
     uGroundOn: { value: ground ? 1 : 0 }
   };
 
@@ -317,6 +320,7 @@ export function buildTerrainMaterial(t) {
     uniform sampler2D uSunMask, uTrail, uSurf, uLat;
     uniform sampler2D uRShadow; uniform mat4 uRShadowMat;
     uniform float uRShadowOn, uRShadowTexel;
+    uniform vec4 uContactShadow;
     uniform vec3 uSunDir, uSunCol, uSkyCol, uGroundCol, uHazeCol;
     uniform vec3 uSurfCol[7];
     uniform float uSunMaskExt, uTime, uFogK, uAmbient;
@@ -326,6 +330,12 @@ export function buildTerrainMaterial(t) {
     precision highp sampler2DArray;
     uniform sampler2DArray uGround;
     uniform float uGroundOn;
+    #endif
+    #ifdef QUARRY_GROUND
+    uniform sampler2D uQuarryGround;
+    #endif
+    #ifdef QUARRY_NORMAL
+    uniform sampler2D uQuarryNormal;
     #endif
 
     float h1(vec2 p){ p = fract(p*vec2(0.1031,0.1030)); p += dot(p,p.yx+33.33); return fract((p.x+p.y)*p.x); }
@@ -471,6 +481,15 @@ export function buildTerrainMaterial(t) {
         albedo *= 1.0 + 0.19*shoulder*onRoad;
         albedo = mix(albedo, uSurfCol[1]*1.15, verge*onRoad*0.55);
         rough = mix(rough, rough*0.66, lane*onRoad);
+        #ifdef QUARRY_GROUND
+        // Several worn wheel paths follow the course instead of a world-axis
+        // texture. Broken edges prevent evenly painted racing stripes.
+        float paths=pow(.5+.5*cos(al*49.0+fb(vW.xz*.033)*1.4),10.0);
+        paths*=smoothstep(.04,.16,al)*(1.-smoothstep(.82,1.,al));
+        paths*=.5+.5*fb(vW.xz*.17);
+        albedo*=1.-paths*onRoad*.33;
+        rough=mix(rough,.83,paths*onRoad);
+        #endif
       }
       #endif
 
@@ -546,6 +565,17 @@ export function buildTerrainMaterial(t) {
         // Packed quarry fines under loose, coarser stones. This also breaks
         // the uniform sandpaper appearance of a single aggregate scale.
         if(sid==0) sampleGround=mix(sampleGround,texture(uGround,vec3(guv*.8,1.0)).rgb,.55);
+        #ifdef QUARRY_GROUND
+        if(sid==0 || sid==2 || sid==5) {
+          // Keep the scanned-size aggregate crisp instead of resampling it
+          // through the generic 512-pixel layer array. Break repeats with a
+          // slow second scale while retaining the primary pebbles' edges.
+          vec2 qUV=vW.xz*.22;
+          vec3 fine=texture2D(uQuarryGround,qUV).rgb;
+          fine=mix(fine,texture2D(uQuarryGround,RA*qUV*.51+.31).rgb,.18);
+          sampleGround=mix(sampleGround,fine,.90);
+        }
+        #endif
         if (steep > 0.02) {
           vec3 blend = pow(abs(N), vec3(4.0));
           blend /= max(dot(blend, vec3(1.0)), 0.001);
@@ -581,6 +611,16 @@ export function buildTerrainMaterial(t) {
         (dFdx(photoRelief)*rx + dFdy(photoRelief)*ry));
       #endif
 
+      // Scanned OpenGL normals add aggregate relief on the quarry floor.
+      #ifdef QUARRY_NORMAL
+      if((sid==0 || sid==2 || sid==5) && dnear>.002) {
+        vec3 detail=texture2D(uQuarryNormal,vW.xz*.22).xyz*2.0-1.0;
+        vec3 tangent=normalize(vec3(N.y,-N.x,0.0));
+        vec3 bitangent=normalize(cross(tangent,N));
+        vec3 scanned=normalize(tangent*detail.x+bitangent*detail.y+N*max(detail.z,.25));
+        Nr=normalize(mix(Nr,scanned,dnear*.72));
+      }
+      #endif
       /* ---- freshly churned ground is DARKER and wetter, not brighter ----
          (the instinct to brighten a fresh cut is wrong for dirt: what a
          wheel turns up is damp subsoil.) */
@@ -641,6 +681,10 @@ export function buildTerrainMaterial(t) {
       // hemisphere ambient: sky above, bounce off the ground below
       vec3 amb = mix(uGroundCol, uSkyCol, 0.5 + 0.5*N.y);
       col += albedo * amb * uAmbient;
+      // Low-tier grounding without another shadow-map pass. Height fades the
+      // soft contact patch away during jumps; full shadow tiers leave w zero.
+      vec2 contactDelta=(vW.xz-uContactShadow.xz)/1.55;
+      col *= 1.0-uContactShadow.w*exp(-dot(contactDelta,contactDelta)*1.4);
 
       // one spec lobe, only where the surface earns it (wet mud, polished
       // hardpack, glassy lava crust)
@@ -674,7 +718,7 @@ export function buildTerrainMaterial(t) {
  * Far rings retain cliff textures: a vertical quarry wall fills many pixels
  * at 200 m even though horizontal gravel has already faded away.
  */
-export function setGroundTexture(t, tex) {
+export function setGroundTexture(t, tex, quarry = null, normal = null) {
   if (!t || !t.material) return;
   t.ground = tex || null;
   const u = t.uniforms;
@@ -683,7 +727,12 @@ export function setGroundTexture(t, tex) {
 
   const want = !!t.ground;
   const D = t.material.defines;
-  if (!!D.GROUND === want) return;
+  const quarryChanged=!!D.QUARRY_GROUND!==!!quarry || !!D.QUARRY_NORMAL!==!!normal;
+  u.uQuarryGround.value=quarry;
+  u.uQuarryNormal.value=normal;
+  if(quarry) D.QUARRY_GROUND=1; else delete D.QUARRY_GROUND;
+  if(normal) D.QUARRY_NORMAL=1; else delete D.QUARRY_NORMAL;
+  if (!!D.GROUND === want && !quarryChanged) return;
   if (want) D.GROUND = 1; else delete D.GROUND;
   /* The near rings SHARE this defines object — makeLevelMaterial passes the
      reference straight through — so flipping the flag above has already
@@ -695,6 +744,8 @@ export function setGroundTexture(t, tex) {
     const m = L.mesh.material;
     if (m && m.defines) {
       if(want) m.defines.GROUND=1; else delete m.defines.GROUND;
+      if(quarry) m.defines.QUARRY_GROUND=1; else delete m.defines.QUARRY_GROUND;
+      if(normal) m.defines.QUARRY_NORMAL=1; else delete m.defines.QUARRY_NORMAL;
       m.needsUpdate = true;
     }
   }

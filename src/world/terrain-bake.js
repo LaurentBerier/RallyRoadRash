@@ -101,10 +101,11 @@ const THEME_BASE = {
     // in the shared bake, so geometry, tyres and shadows see the same banks.
     const rim = r + (fbm(x * 0.011, z * 0.011, 3, 2, 0.5, 17) - 0.5) * 95;
     const fracture=(ridged(x*.046,z*.046,3,2,.5,61)-.5)*8;
-    h += 11 * sstep(260, 272, rim) + 16 * sstep(350, 367, rim);
-    h += 23 * sstep(470, 491, rim);
+    h += 15 * sstep(260, 264, rim) + 19 * sstep(350, 355, rim);
+    h += 25 * sstep(470, 476, rim);
     h += sstep(215,250,r)*fracture;
-    h += sstep(215, 280, r) * plateaus(x, z, 95, 53, 5, 18, 0.48, 0.65);
+    // Flat excavated benches with irregular fractured risers. Broad rounded
+    // plateaus here made the quarry read as dunes even with a cliff texture.
     h += vista(x, z, r, 63, 200, 620);
     return h;
   },

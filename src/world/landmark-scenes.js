@@ -21,6 +21,16 @@ export function dressLandmarkSite(p, h, site) {
     o.position.set(q.x,site.y+y,q.z);o.rotation.set(0,site.yaw+angle,0);o.scale.setScalar(1);o.updateMatrix();
     g.applyMatrix4(o.matrix);parts.push(g);
   };
+  const beam = (a,b,width,color) => {
+    const start=world(a[0],a[2]),end=world(b[0],b[2]);
+    const av=new THREE.Vector3(start.x,site.y+a[1],start.z);
+    const bv=new THREE.Vector3(end.x,site.y+b[1],end.z);
+    const delta=bv.clone().sub(av);
+    const g=tint(new THREE.BoxGeometry(width,delta.length(),width),color);
+    o.position.copy(av).add(bv).multiplyScalar(0.5);
+    o.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),delta.normalize());
+    o.scale.setScalar(1);o.updateMatrix();g.applyMatrix4(o.matrix);parts.push(g);
+  };
   // Clear the construction footprint out of the preplanned scatter. Retain
   // instance indices so quality switches and the dynamic pool stay consistent.
   for(let vi=0;vi<p.scatterMeshes.length;vi++) {
@@ -60,6 +70,35 @@ export function dressLandmarkSite(p, h, site) {
       box(side*radius*0.79,0.10,0,0.20,0.20,radius*0.9,0x999184);
       if(!forest) for(let k=-2;k<=2;k++) box(side*radius*0.79,0.22,k*radius*0.17,0.23,0.035,radius*0.08,k%2?0x20262a:0xc78936);
     }
+  }
+  if(h.id==='training-conveyor') {
+    // The loading belt, its trestles and service walkways all fit inside the
+    // existing 18 m site collider. One merged draw, no new runtime machinery.
+    const steel=0x686055,rust=0x77503a,rail=0x999180;
+    const beltY=x=>5+(x+12)*0.32;
+    for(const z of [-5.8,-2.2]) {
+      beam([-12,beltY(-12),z],[12,beltY(12),z],0.28,steel);
+      beam([-12,beltY(-12)-1.8,z],[12,beltY(12)-1.8,z],0.25,rust);
+      beam([-12,beltY(-12)+1,z],[12,beltY(12)+1,z],0.08,rail);
+      for(let x=-12;x<12;x+=3) {
+        beam([x,beltY(x),z],[x+3,beltY(x+3)-1.8,z],0.12,rust);
+        beam([x,beltY(x),z],[x,beltY(x)+1,z],0.08,rail);
+      }
+    }
+    for(let x=-12;x<=12;x+=1.5) {
+      box(x,beltY(x)-0.10,-4,1.52,0.20,3.5,0x30302b);
+    }
+    for(const x of [-9,0,9]) {
+      for(const z of [-5.8,-2.2]) beam([x,0,z],[x,beltY(x)-1.7,z],0.38,steel);
+      beam([x,0,-5.8],[x,beltY(x)-1.7,-2.2],0.16,rust);
+      beam([x,0,-2.2],[x,beltY(x)-1.7,-5.8],0.16,rust);
+      box(x,0.3,-4,2,0.6,5,0x797365);
+    }
+    // Loading hopper and ribbed service cabinet at the low end of the belt.
+    box(-10,3,2,5,5,5,0x6e6050);
+    box(-10,5.6,2,6,0.5,6,0x393b37);
+    for(let z=-0.3;z<4.5;z+=0.65) box(-12.55,3,z,0.13,4.8,0.12,rust);
+    for(let x=-12;x<=-8;x+=1) box(x,3,4.55,0.12,4.8,0.13,rust);
   }
   // A few grounded, stage-specific satellites give the hero a working context.
   const ids=p.theme==='training'?['pipes','crate','drum','jersey']

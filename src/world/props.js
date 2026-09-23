@@ -1105,7 +1105,7 @@ export class Props {
     const walls = this.data.walls || [];
     if (!walls.length) { this.barrierMesh = null; return; }
     const sp = this.data.spline, L = sp.length;
-    const rTex = this._keepTex(railTex(accent));
+    const rTex = this._keepTex(railTex(this.theme==='training' ? '#59818d' : accent));
     rTex.wrapS = THREE.RepeatWrapping;
     const railMat = this._keepMat(new THREE.MeshStandardMaterial({
       map: rTex, roughness: 0.92, metalness: 0.02, side: THREE.DoubleSide
@@ -1524,6 +1524,7 @@ export class Props {
     this.scene.remove(this.group);
     this.group.traverse(o => { if (o.isInstancedMesh) o.dispose(); });
     disposeHeroModels(this);
+    for(const resource of this.quarryScanResources||[]) resource.dispose();
     for (const g of this._geo) g.dispose();
     for (const m of this._mat) m.dispose();
     for (const t of this._tex) t.dispose();

@@ -486,6 +486,13 @@ export class Engine {
 
   /** keep the shadow frustum tight around the car so 2 k feels like 8 k */
   aimShadow(target, sunDir) {
+    const contact=this.terrain?.uniforms?.uContactShadow;
+    if(contact) {
+      const h=target.y-this.terrain.heightAt(target.x,target.z);
+      const strength=!this.sun.castShadow && this.terrain.theme==='training'
+        ? 0.55*Math.max(0,1-Math.max(0,h-0.8)/4) : 0;
+      contact.value.set(target.x,target.y,target.z,strength);
+    }
     if (!this.sun.castShadow) { this._terrainShadow(0); return; }
     this.sun.target.position.copy(target);
     this.sun.position.copy(target).addScaledVector(sunDir, 90);

@@ -54,7 +54,7 @@ const LAYER_SIZE = 512;      // every ground layer is resampled to this square
  * @param {string} manifestUrl  relative, e.g. 'assets/manifest.json'
  * @returns {Promise<Map<string, THREE.Texture|null>>} never rejects
  */
-export async function loadAssets(manifestUrl = 'assets/manifest.json', onProgress = () => {}) {
+export async function loadAssets(manifestUrl = 'assets/manifest.json', onProgress = () => {}, quality = 'HIGH') {
   const out = new Map();
   let manifest = null;
   try {
@@ -83,7 +83,8 @@ export async function loadAssets(manifestUrl = 'assets/manifest.json', onProgres
     } else if (spec.kind === 'layers') {
       jobs.push(loadLayers(base, spec).then(t => out.set(id, t)));
     } else {
-      jobs.push(loadOne(base + spec.url, spec.kind).then(t => out.set(id, t)));
+      const low=['LOW','MEDIUM'].includes(String(quality).toUpperCase());
+      jobs.push(loadOne(base + (low && spec.lowUrl || spec.url), spec.kind).then(t => out.set(id, t)));
     }
   }
   let completed = 0;
@@ -119,7 +120,7 @@ async function loadOne(url, kind) {
   const img = await loadImage(url);
   if (!img) return null;
   const t = new THREE.Texture(img);
-  t.colorSpace = THREE.SRGBColorSpace;
+  t.colorSpace = kind==='data-tile' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
   if (kind === 'equirect') {
     t.mapping = THREE.EquirectangularReflectionMapping;
     t.wrapS = THREE.RepeatWrapping;          // the seam is a real wrap in longitude
@@ -130,7 +131,7 @@ async function loadOne(url, kind) {
     t.needsUpdate = true;
     return t;
   }
-  const repeat = kind === 'tile';
+  const repeat = kind === 'tile' || kind === 'data-tile';
   t.wrapS = t.wrapT = repeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
   t.generateMipmaps = true;
   t.minFilter = THREE.LinearMipmapLinearFilter;

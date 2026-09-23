@@ -1186,6 +1186,57 @@ export class Sky {
     this._envDirty = true;
   }
 
+  /** Full lat-long photographic sky and distant ridges, shared with IBL.
+   * The mesh follows the sky group/camera and adds only one unlit draw. */
+  setBackdrop(tex,cloudTexture=null) {
+    const hadBackdrop=!!this._backdropImage;
+    if(this.backdrop) {
+      this.group.remove(this.backdrop);
+      this.backdrop.geometry.dispose();this.backdrop.material.dispose();
+      this.backdrop=null;
+    }
+    this._backdropImage=tex || null;
+    if(!tex && hadBackdrop) {this.backdropEnvScene=null;this.setEnvImage(null);}
+    if(tex) {
+      tex.wrapS=THREE.RepeatWrapping;tex.needsUpdate=true;
+      if(cloudTexture){cloudTexture.wrapS=THREE.RepeatWrapping;cloudTexture.needsUpdate=true;}
+      const material=new THREE.ShaderMaterial({
+        side:THREE.BackSide,depthWrite:false,depthTest:false,fog:false,
+        uniforms:{uMap:{value:tex},uCloudMap:{value:cloudTexture||tex},uCloudOn:{value:cloudTexture?1:0}},
+        vertexShader:`varying vec3 vDirection;void main(){vDirection=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+        fragmentShader:`uniform sampler2D uMap,uCloudMap;uniform float uCloudOn;varying vec3 vDirection;
+          void main(){vec3 d=normalize(vDirection);
+            vec2 uv=vec2(atan(d.z,d.x)*0.159154943+0.5,asin(clamp(d.y,-1.0,1.0))*0.318309886+0.5);
+            // Compress the generated ridge to a distant horizon. An actual
+            // 4K photographic sky supplies the detail above that narrow band.
+            vec2 ridgeUV=vec2(uv.x,clamp(.5+(uv.y-.5)*1.8,0.0,1.0));
+            // Explicit LOD avoids the atan longitude discontinuity selecting
+            // the coarsest mip for one vertical seam. Blend the generated
+            // image's unequal edge colors over the last few degrees.
+            vec3 color=textureLod(uMap,ridgeUV,0.0).rgb;
+            float seam=.5*(1.-smoothstep(0.,.025,min(uv.x,1.-uv.x)));
+            color=mix(color,textureLod(uMap,vec2(1.-ridgeUV.x,ridgeUV.y),0.0).rgb,seam);
+            color=mix(color,vec3(.28,.37,.47),.36*(1.-smoothstep(.11,.22,d.y)));
+            if(uCloudOn>.5){
+              vec3 clouds=textureLod(uCloudMap,vec2(uv.x+.45,uv.y),0.0).rgb*1.6;
+              color=mix(color,clouds,smoothstep(.28,.42,d.y));
+            }
+            // Lift the LDR panorama before the final scene-wide ACES pass.
+            gl_FragColor=vec4(color*1.25,1.0);}`
+      });
+      this.backdrop=new THREE.Mesh(new THREE.SphereGeometry(4500,48,24),material);
+      this.backdrop.rotation.y=-1.60;
+      this.backdrop.renderOrder=-1001;this.backdrop.frustumCulled=false;
+      this.group.add(this.backdrop);this.setEnvImage(tex);
+      this.backdropEnvScene=new THREE.Scene();
+      this.backdropEnvScene.add(this.backdrop.clone());
+    }
+    for(const mesh of [this.skyMesh,this.dome,this.sunMesh,this.vista,this.clouds]) {
+      if(mesh) mesh.visible=!tex;
+    }
+    if(!tex && this.vista) this.vista.visible=!this._skyline;
+  }
+
   /** Which of the two paths refreshEnv will take. Cheap enough to assert. */
   envUsesImage() { return !!this._envImage; }
 
@@ -1199,7 +1250,9 @@ export class Sky {
    */
   refreshEnv() {
     const old = this.envRT;
-    this.envRT = this._envImage
+    this.envRT = this._backdropImage
+      ? this.pmrem.fromScene(this.backdropEnvScene,0,1,10000)
+      : this._envImage
       ? this.pmrem.fromEquirectangular(this._envImage)
       : this.pmrem.fromScene(this.envScene, 0, 1, 4000);
     if (old) old.dispose();
@@ -1294,10 +1347,16 @@ export class Sky {
       this.plume = null;
       this._buildPlume();
     }
+    if(this._backdropImage) {
+      for(const mesh of [this.skyMesh,this.dome,this.sunMesh,this.vista,this.clouds]) if(mesh) mesh.visible=false;
+    }
     this._envDirty = true;
   }
 
   dispose() {
+    if(this.backdrop) {
+      this.backdrop.geometry.dispose();this.backdrop.material.dispose();this.backdrop=null;
+    }
     this.scene.remove(this.group);
     this.dome.geometry.dispose(); this.dome.material.dispose();
     this.skyMesh.geometry.dispose(); this.skyMesh.material.dispose();
@@ -1320,6 +1379,7 @@ export class Sky {
     // lifetimes — drop the reference, never the texture.
     this._skyline = null;
     this._envImage = null;
+    this._backdropImage=null;this.backdropEnvScene=null;
     this.clouds = this.plume = this.dome = this.sunMesh = this.vista = null;
     this.skyMesh = this.envMesh = null;
   }

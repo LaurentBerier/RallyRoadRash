@@ -5,6 +5,7 @@
      ?veh=hopper|ridgeback|redline   ?q=low|medium|high|ultra
      ?orbit=1   slow circle around the car instead of driving
      ?still=1&s=60  hold the car at a repeatable track distance for art review
+     ?pace=0.55    conservative scripted driving speed for a visual QA lap
      ?noassets=1    exercise procedural fallbacks without any asset requests
      ?capture=name save a local canvas frame after 150 rendered frames;
                    requires node server.js <port> --shots on localhost
@@ -50,7 +51,7 @@ async function boot() {
   const def = TRACKS.find(t => t.id === trackId) || TRACKS[0];
   const engine = new Engine(document.getElementById('stage'), q.get('q') || 'high');
   engine.renderer.info.autoReset = false;
-  const assetsJob = q.has('noassets') ? Promise.resolve(new Map()) : loadAssets('../assets/manifest.json');
+  const assetsJob = q.has('noassets') ? Promise.resolve(new Map()) : loadAssets('../assets/manifest.json',()=>{},engine.quality.name);
   let captured = false, renderedFrames = 0;
   setCarcassRenderer(engine.renderer);
 
@@ -79,13 +80,15 @@ async function boot() {
   setHeroSource((key) => A.url(key));
   setCarcassSource((id, level) => A.url('models/' + id + '-carcass' + (level === 'high' ? '-high' : '')));
   const terrain = new Terrain(engine.renderer, baked, engine.quality, engine.caps, def);
-  setGroundTexture(terrain, A.get('ground'));
+  setGroundTexture(terrain, A.get('ground'),def.theme==='training'?A.get('terrain/quarry-ground'):null,
+    def.theme==='training'?A.get('terrain/quarry-normal'):null);
   engine.scene.add(terrain.group);
   // The terrain samples the real shadow map; without this the cars hover.
   engine.attachTerrain(terrain);
   const sky = new Sky(engine.renderer, engine.scene, engine.quality, def.theme);
   engine.setLightTheme(SKY_THEMES[def.theme]);
   if (A.get('sky/' + def.theme)) sky.setSkyline(A.get('sky/' + def.theme));
+  sky.setBackdrop(A.get('backdrop/' + def.theme), A.get('clouds/' + def.theme));
 
   /* ?env — the §8.5 A/B. Non-blocking on purpose: the stage is already up
      and racing, and the panorama arriving two seconds later is exactly what
@@ -97,7 +100,8 @@ async function boot() {
       else envNote = 'no env/' + def.theme + ' in the manifest — shader env';
   }
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData,
-    A.get('foliage/spruce'), { scrub: A.get('foliage/scrub'), cliff: A.get('terrain/cliff') });
+    A.get('foliage/spruce'), { scrub: A.get('foliage/'+def.theme) || A.get('foliage/scrub'), cliff: A.get('terrain/cliff'),
+      rockHigh:A.url('models/quarry/boulder-high'),rockLow:A.url('models/quarry/boulder-low') });
   const dust = new Dust(engine.scene, terrain, terrain.uniforms.uSunDir, engine.quality.dust, def.theme);
   const vfx = new VFX(engine.scene, dust, engine.quality, def.theme);
   props.setVfx(vfx, dust);
@@ -214,7 +218,7 @@ async function boot() {
       const q2 = line[Math.round(((n.s + d) % spline.length) / step) % line.length];
       if (q2.speed < want) want = q2.speed;
     }
-    want *= 0.9;
+    want *= Math.max(0.25,Math.min(1,Number(q.get('pace'))||0.9));
     const throttle = veh.speed < want ? 1 : 0.1;
     const brake = veh.speed > want * 1.12 ? 0.85 : 0;
     return { throttle, steer, brake, handbrake: 0 };

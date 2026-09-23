@@ -143,7 +143,7 @@ async function boot() {
   // Resolve and decode the image set behind the loading screen. Failed files
   // settle to the procedural fallback; they cannot repaint a visible menu.
   const map = await loadAssets('assets/manifest.json', p =>
-    App.ui.boot(0.08 + p * 0.88, 'preparing menu assets'));
+    App.ui.boot(0.08 + p * 0.88, 'preparing menu assets'), App.engine.quality.name);
   App.assets = new Assets(map);
   App.ui.setAssets(App.assets);
   App.menuScene.assets = App.assets;
@@ -518,7 +518,8 @@ function buildWorld(def, baked) {
   engine.attachTerrain(terrain);
   /* Optional photographic ground detail. Null is the normal case and the
      shader's own grain is the fallback; see core/assets.js. */
-  setGroundTexture(terrain, App.assets.get('ground'));
+  setGroundTexture(terrain, App.assets.get('ground'),def.theme==='training'?App.assets.get('terrain/quarry-ground'):null,
+    def.theme==='training'?App.assets.get('terrain/quarry-normal'):null);
 
   const sky = new Sky(engine.renderer, engine.scene, engine.quality, theme);
   /* Optional skyline panorama. When there is one it replaces the procedural
@@ -528,11 +529,13 @@ function buildWorld(def, baked) {
      (8.5). null is the normal case and returns to the physical sky — only
      PROVING GROUNDS ships one, as an A/B against the shader env. */
   sky.setEnvImage(App.assets.get('env/' + theme));
+  sky.setBackdrop(App.assets.get('backdrop/' + theme), App.assets.get('clouds/' + theme));
   engine.setLightTheme(SKY_THEMES[theme]);
   syncSun(terrain, sky);
 
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData,
-    App.assets.get('foliage/spruce'), { scrub: App.assets.get('foliage/scrub'), cliff: App.assets.get('terrain/cliff') });
+    App.assets.get('foliage/spruce'), { scrub: App.assets.get('foliage/'+def.theme) || App.assets.get('foliage/scrub'), cliff: App.assets.get('terrain/cliff'),
+      rockHigh:App.assets.url('models/quarry/boulder-high'),rockLow:App.assets.url('models/quarry/boulder-low') });
   const dust = new Dust(engine.scene, terrain, sky.sunDir, engine.quality.dust, theme);
   const vfx = new VFX(engine.scene, dust, engine.quality, theme);
   props.setVfx(vfx, dust);

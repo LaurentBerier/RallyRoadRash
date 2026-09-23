@@ -17,5 +17,16 @@ try {
  assert.equal(map.get('missing'),null);assert.equal(map.get('slow'),null);
  assert.equal(map.get('car'),'assets/car.glb');assert.equal(progress.at(-1),1);
  assert.ok(progress.every((p,i)=>i===0||p>=progress[i-1]));
+ globalThis.fetch=async()=>({ok:true,json:async()=>({
+  normal:{kind:'data-tile',url:'normal-2k.webp',lowUrl:'normal-1k.webp'},
+  ground:{kind:'tile',url:'ground-2k.webp',lowUrl:'ground-1k.webp'}
+ })});
+ const low=await loadAssets('assets/manifest.json',()=>{},'LOW');
+ assert.equal(low.get('normal').image.url,'assets/normal-1k.webp');
+ assert.equal(low.get('normal').colorSpace,'','normal data must remain linear');
+ assert.equal(low.get('ground').colorSpace,'srgb');
+ assert.equal(low.get('normal').wrapS,low.get('ground').wrapS,'both tile kinds repeat');
+ const high=await loadAssets('assets/manifest.json',()=>{},'HIGH');
+ assert.equal(high.get('normal').image.url,'assets/normal-2k.webp');
  console.log('PASS: decoded readiness, missing image fallback, bounded slow request, progress, lazy model URL');
 } finally { globalThis.setTimeout=timers; }
