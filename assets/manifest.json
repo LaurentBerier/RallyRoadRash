@@ -1,4 +1,10 @@
 {
+  "backdrop/canyon": { "url": "sky/canyon-panorama-v1.webp", "lowUrl": "sky/canyon-panorama-v1-low.webp", "kind": "color" },
+  "backdrop/forest": { "url": "sky/forest-panorama-v1.webp", "lowUrl": "sky/forest-panorama-v1-low.webp", "kind": "color" },
+  "backdrop/volcano": { "url": "sky/volcano-panorama-v1.webp", "lowUrl": "sky/volcano-panorama-v1-low.webp", "kind": "color" },
+  "backdrop/thunder": { "url": "sky/thunder-panorama-v1.webp", "lowUrl": "sky/thunder-panorama-v1-low.webp", "kind": "color" },
+  "terrain/forest-ground": { "url": "ground/forest-color.webp", "lowUrl": "ground/forest-color-low.webp", "kind": "tile" },
+  "terrain/forest-normal": { "url": "ground/forest-normal.webp", "lowUrl": "ground/forest-normal-low.webp", "kind": "data-tile" },
   "backdrop/training": { "url": "sky/quarry-panorama-v3.webp", "kind": "color" },
   "clouds/training": { "url": "sky/quarry-clouds-4k.webp", "lowUrl": "sky/quarry-clouds-2k.webp", "kind": "color" },
   "foliage/training": { "url": "foliage/quarry-tussock-v3.webp", "kind": "color" },

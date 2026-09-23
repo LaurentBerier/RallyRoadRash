@@ -227,8 +227,18 @@ export function patchFoliageMaterial(material) {
       }
       #endif
     `);
+    if(material.isMeshStandardMaterial) {
+      // Thin needles retain a little transmitted skylight on the shaded
+      // side. Opaque bark keeps its ordinary lighting and shadow response.
+      sh.fragmentShader=sh.fragmentShader.replace('#include <emissivemap_fragment>',`
+        #include <emissivemap_fragment>
+        #ifdef USE_MAP
+        if(vMapUv.x>=0.) totalEmissiveRadiance+=texture2D(map,vMapUv).rgb*.18;
+        #endif
+      `);
+    }
   };
-  material.customProgramCacheKey=()=> 'rrr-foliage-v1';
+  material.customProgramCacheKey=()=> 'rrr-foliage-v2';
   return material;
 }
 

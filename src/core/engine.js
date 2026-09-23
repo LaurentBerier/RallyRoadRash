@@ -529,7 +529,7 @@ export class Engine {
 
   render(dt) {
     this.contactAO.enabled=(this.quality.name==='HIGH'||this.quality.name==='ULTRA')
-      && this.terrain?.theme==='training' && this.useAmbientOcclusion!==false;
+      && !!this.terrain && this.useAmbientOcclusion!==false;
     this.final.uniforms.uTime.value += dt;
     this.composer.render(dt);
     this.governor(dt);

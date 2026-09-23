@@ -32,7 +32,7 @@ function build(theme) {
   p.rockMat=p._keepMat(rockMaterial(0x777766,0x888877));
   buildEnvironmentDressing(p);
   if(theme==='training') assert(p.quarryCrags.count>0,'steep quarry faces receive crags');
-  if(theme==='training') {
+  {
     const matrix=new THREE.Matrix4(),pos=new THREE.Vector3(),scale=new THREE.Vector3(),rot=new THREE.Quaternion();
     const banks=p._fixedColliders.filter(c=>c.kind==='quarry-boulder');
     for(let i=0;i<p.quarryMediumRocks.count;i++) {

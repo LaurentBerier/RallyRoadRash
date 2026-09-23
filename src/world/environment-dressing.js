@@ -7,10 +7,10 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 // models. Large rocks are solid; ankle-high gravel and flexible grass are not.
 const BIOMES = {
   training: { stone: 0x95816b, grass: 0x777047, outcrops: 64, size: 0.8 },
-  canyon:   { stone: 0xb07450, grass: 0x81724b, outcrops: 34, size: 1.3 },
-  forest:   { stone: 0x707969, grass: 0x435d36, outcrops: 22, size: 0.8 },
-  volcano:  { stone: 0x5b5150, grass: 0x615146, outcrops: 36, size: 1.2 },
-  thunder:  { stone: 0x9f6950, grass: 0x79614b, outcrops: 26, size: 1.1 },
+  canyon:   { stone: 0xb07450, grass: 0x81724b, outcrops: 90, size: 1.3 },
+  forest:   { stone: 0x707969, grass: 0x435d36, outcrops: 80, size: 0.8 },
+  volcano:  { stone: 0x5b5150, grass: 0x615146, outcrops: 100, size: 1.2 },
+  thunder:  { stone: 0x9f6950, grass: 0x79614b, outcrops: 80, size: 1.1 },
 };
 
 function grassGeometry(seed) {
@@ -93,7 +93,7 @@ export function buildEnvironmentDressing(p) {
         const x=cx+(rng()-0.5)*14, z=cz+(rng()-0.5)*14;
         if(!p._canPlace(x,z,1.12) || !p._clearOfClaims(x,z,1) || p.terrain.slopeAt(x,z)>38) continue;
         if(isGrass && p.theme==='volcano' && rng()<0.85) continue;
-        const size=isGrass ? (p.theme==='training' ? .40+rng()*.65 : .55+rng()*1.05) : 0.06+rng()*0.25;
+        const size=isGrass ? .40+rng()*.65 : 0.06+rng()*0.25;
         put(mesh,count++,x,p.terrain.heightAt(x,z)-0.025,z,size,size*(isGrass?1:0.6),size);
       }
     }
@@ -130,7 +130,7 @@ export function buildEnvironmentDressing(p) {
     }
   }
   rocks.count=count;
-  if(p.theme==='training') {
+  {
     const bank=new THREE.InstancedMesh(p._keepGeo(boulderGeo(35,1)),p.rockMat,640);
     let bn=0;
     // Treat a rubble bank as one geological feature, not seven isolated
@@ -161,6 +161,8 @@ export function buildEnvironmentDressing(p) {
     }
     bank.count=bn;bank.instanceMatrix.needsUpdate=true;bank.receiveShadow=true;
     bank.computeBoundingSphere();p.group.add(bank);p.quarryMediumRocks=bank;
+  }
+  if(p.theme==='training') {
     const crags=new THREE.InstancedMesh(p._keepGeo(boulderGeo(93,2)),p.rockMat,140);
     let n=0;
     // Embed complete scanned forms in the quarry's actual escarpments.
@@ -189,7 +191,7 @@ export function buildEnvironmentDressing(p) {
     crags.count=n;crags.instanceMatrix.needsUpdate=true;crags.receiveShadow=true;
     crags.computeBoundingSphere();p.group.add(crags);p.quarryCrags=crags;
   }
-  if(p.theme==='training' && p.environmentAssets?.rockHigh) {
+  if(p.environmentAssets?.rockHigh) {
     p.quarryNearRocks=rocks;upgradeQuarryRocks(p,rocks);
   }
   for(const m of [pebbles,tufts,rocks]) {
@@ -197,7 +199,7 @@ export function buildEnvironmentDressing(p) {
     if(m.instanceColor) m.instanceColor.needsUpdate=true;
   }
   p.environmentDetails=[pebbles,tufts];
-  if(p.theme==='training' && p.environmentAssets?.sagebrush) {
+  if(p.environmentAssets?.sagebrush) {
     const sageMat=p._keepMat(grass.clone());
     sageMat.map=p.environmentAssets.sagebrush;sageMat.emissiveMap=sageMat.map;
     const sage=new THREE.InstancedMesh(tuftGeo,sageMat,tufts.count);
@@ -215,7 +217,7 @@ export function buildEnvironmentDressing(p) {
     sage.instanceMatrix.needsUpdate=true;sage.instanceColor.needsUpdate=true;
     sage.computeBoundingSphere();p.group.add(sage);p.environmentDetails.push(sage);
   }
-  if(p.theme==='training') {
+  {
     const scree=new THREE.InstancedMesh(p._keepGeo(boulderGeo(71,0)),stone,9000);
     let n=0;
     for(let i=0;i<16000 && n<9000;i++) {
@@ -273,12 +275,13 @@ async function upgradeQuarryRocks(p,nearRocks) {
   }
   const mat=source.material.clone();mat.color.set(0xffffff);
   mat.envMapIntensity=1;mat.roughness=1;mat.side=THREE.DoubleSide;
+  const tint={training:[1.65,1.52,1.32],canyon:[1.40,.91,.64],forest:[1.05,1.12,1.04],volcano:[.48,.49,.53],thunder:[1.25,.86,.64]}[p.theme]||[1,1,1];
   mat.onBeforeCompile=shader=>{
     shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',`#include <map_fragment>
       float stoneLuma=dot(diffuseColor.rgb,vec3(.2126,.7152,.0722));
-      diffuseColor.rgb=mix(diffuseColor.rgb,vec3(stoneLuma),.7)*vec3(1.65,1.52,1.32);`);
+      diffuseColor.rgb=mix(diffuseColor.rgb,vec3(stoneLuma),.7)*vec3(${tint.map(n=>n.toFixed(3)).join(',')});`);
   };
-  mat.customProgramCacheKey=()=> 'quarry-scan-limestone-v3';
+  mat.customProgramCacheKey=()=> 'biome-scan-'+p.theme;
   for(const old of p.quarryScans||[]) {p.group.remove(old);old.dispose();}
   for(const resource of p.quarryScanResources||[]) resource.dispose();
   p.quarryScanResources=[mat];
@@ -287,16 +290,19 @@ async function upgradeQuarryRocks(p,nearRocks) {
     if(!old)continue;
     // Bury the scan's underside and keep its silhouette low enough to read
     // as fallen scree. Its full footprint remains inside the solid collider.
-    const g=(old===nearRocks?geo:distantGeo).clone().scale(factor,factor*0.72,factor);p.quarryScanResources.push(g);
+    const g=(old===nearRocks&&p.theme==='training'?geo:distantGeo).clone().scale(factor,factor*0.72,factor);p.quarryScanResources.push(g);
     // Spatial batches let the camera and shadow frusta discard the quarry
     // behind the car, rather than drawing an entire ring on every pass.
-    const buckets=Array.from({length:8},()=>[]);
+    const buckets=new Map();
     for(let i=0;i<old.count;i++) {
       const a=old.instanceMatrix.array,offset=i*16;
-      const bucket=Math.min(7,Math.floor((Math.atan2(a[offset+14],a[offset+12])+Math.PI)/(Math.PI*2)*8));
-      buckets[bucket].push(a.slice(offset,offset+16));
+      const bucket=p.theme==='training'
+        ?Math.min(7,Math.floor((Math.atan2(a[offset+14],a[offset+12])+Math.PI)/(Math.PI*2)*8))
+        :Math.floor(a[offset+12]/128)+','+Math.floor(a[offset+14]/128);
+      if(!buckets.has(bucket))buckets.set(bucket,[]);
+      buckets.get(bucket).push(a.slice(offset,offset+16));
     }
-    for(const matrices of buckets) {
+    for(const matrices of buckets.values()) {
       if(!matrices.length)continue;
       const mesh=new THREE.InstancedMesh(g,mat,matrices.length);
       matrices.forEach((a,i)=>mesh.instanceMatrix.array.set(a,i*16));

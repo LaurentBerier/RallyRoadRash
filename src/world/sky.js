@@ -144,7 +144,7 @@ export const SKY_THEMES = {
     sunEl: 11, sunAz: -152,
     sunDir: { x: -0.866729, y: 0.190809, z: -0.460847 },
     sunColor: 0xff8c4e, sunIntensity: 1.55,
-    hemiSky: 0x8793af, hemiGround: 0x48372c, hemiIntensity: 0.85,
+    hemiSky: 0x9aaac7, hemiGround: 0x48372c, hemiIntensity: 1.05,
     zenith: 0x241c2c, horizon: 0x8e3a18, hazeColor: 0x6e2c1c,
     turbidity: 20.0, rayleigh: 3.0, mie: 0.020, mieG: 0.85, skyExposure: 0.0775,
     groundHaze: 0x40201a,
@@ -152,7 +152,7 @@ export const SKY_THEMES = {
     cloudY: 1100, cirrus: 0.25,
     sunDiscColor: 0xff9a52, sunAngDeg: 3.4, haloStrength: 1.35, sunGlow: 0.85,
     fogHint: 0.00130,
-    grade: [1.00, 0.90, 0.86],
+    grade: [1.00, 0.94, 0.94],
     shaft: 0.24, sat: 1.06, con: 1.04,
     vista: 'rim', vistaColor: 0x3a1e1c, vistaFade: 0.44,
     // ash + the thing making it: a plume off the caldera, downwind of the track
@@ -180,8 +180,8 @@ export const SKY_THEMES = {
     cloudY: 1350, cirrus: 0.70,
     sunDiscColor: 0xffc078, sunAngDeg: 2.4, haloStrength: 1.25, sunGlow: 1.35,
     fogHint: 0.00058,
-    grade: [1.02, 0.90, 0.80],
-    shaft: 0.30, sat: 1.08, con: 1.08,
+    grade: [0.94, 0.96, 1.00],
+    shaft: 0.20, sat: 0.88, con: 1.04,
     vista: 'buttes', vistaColor: 0x5a2c30, vistaFade: 0.34
   }
 };
@@ -1202,27 +1202,31 @@ export class Sky {
       if(cloudTexture){cloudTexture.wrapS=THREE.RepeatWrapping;cloudTexture.needsUpdate=true;}
       const material=new THREE.ShaderMaterial({
         side:THREE.BackSide,depthWrite:false,depthTest:false,fog:false,
-        uniforms:{uMap:{value:tex},uCloudMap:{value:cloudTexture||tex},uCloudOn:{value:cloudTexture?1:0}},
+        uniforms:{uMap:{value:tex},uCloudMap:{value:cloudTexture||tex},uCloudOn:{value:cloudTexture?1:0},
+          uVertical:{value:cloudTexture?1.8:1.0},uLift:{value:cloudTexture?1.25:this.themeName==='thunder'?1.0:1.6},
+          uBackdropSat:{value:this.themeName==='thunder'?.72:1.0},
+          uBackdropHaze:{value:cloudTexture?new THREE.Color(.28,.37,.47):new THREE.Color(this.theme.hazeColor)}},
         vertexShader:`varying vec3 vDirection;void main(){vDirection=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
-        fragmentShader:`uniform sampler2D uMap,uCloudMap;uniform float uCloudOn;varying vec3 vDirection;
+        fragmentShader:`uniform sampler2D uMap,uCloudMap;uniform float uCloudOn,uVertical,uLift,uBackdropSat;uniform vec3 uBackdropHaze;varying vec3 vDirection;
           void main(){vec3 d=normalize(vDirection);
             vec2 uv=vec2(atan(d.z,d.x)*0.159154943+0.5,asin(clamp(d.y,-1.0,1.0))*0.318309886+0.5);
             // Compress the generated ridge to a distant horizon. An actual
             // 4K photographic sky supplies the detail above that narrow band.
-            vec2 ridgeUV=vec2(uv.x,clamp(.5+(uv.y-.5)*1.8,0.0,1.0));
+            vec2 ridgeUV=vec2(uv.x,clamp(.5+(uv.y-.5)*uVertical,0.0,1.0));
             // Explicit LOD avoids the atan longitude discontinuity selecting
             // the coarsest mip for one vertical seam. Blend the generated
             // image's unequal edge colors over the last few degrees.
             vec3 color=textureLod(uMap,ridgeUV,0.0).rgb;
             float seam=.5*(1.-smoothstep(0.,.025,min(uv.x,1.-uv.x)));
             color=mix(color,textureLod(uMap,vec2(1.-ridgeUV.x,ridgeUV.y),0.0).rgb,seam);
-            color=mix(color,vec3(.28,.37,.47),.36*(1.-smoothstep(.11,.22,d.y)));
+            color=mix(color,uBackdropHaze,mix(.12,.36,uCloudOn)*(1.-smoothstep(.11,.22,d.y)));
             if(uCloudOn>.5){
               vec3 clouds=textureLod(uCloudMap,vec2(uv.x+.45,uv.y),0.0).rgb*1.6;
               color=mix(color,clouds,smoothstep(.28,.42,d.y));
             }
             // Lift the LDR panorama before the final scene-wide ACES pass.
-            gl_FragColor=vec4(color*1.25,1.0);}`
+            color=mix(vec3(dot(color,vec3(.2126,.7152,.0722))),color,uBackdropSat);
+            gl_FragColor=vec4(color*uLift,1.0);}`
       });
       this.backdrop=new THREE.Mesh(new THREE.SphereGeometry(4500,48,24),material);
       this.backdrop.rotation.y=-1.60;

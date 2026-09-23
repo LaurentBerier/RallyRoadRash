@@ -87,10 +87,10 @@ export const THEMES = {
     sun: [-0.62, 0.28, 0.73], sunCol: [1.50, 0.94, 0.62],
     // Ambient raised from 0.50 after QA: away-from-sun climbs read as a wall
     // of murk at 0.50, and this track needs its road legible at 130 km/h.
-    sky: [0.34, 0.24, 0.23], ground: [0.28, 0.14, 0.09], ambient: 0.64,
+    sky: [0.34, 0.28, 0.32], ground: [0.28, 0.14, 0.09], ambient: 0.72,
     haze: [0.14, 0.095, 0.085], hazeDensity: 0.00085, hazeStart: 90,
-    tint: [1.02, 0.90, 0.86],
-    surf: { 4: [0.25, 0.23, 0.23], 1: [0.31, 0.24, 0.19] }
+    tint: [0.88, 0.96, 1.03],
+    surf: { 4: [0.19, 0.20, 0.22], 1: [0.25, 0.23, 0.22], 2: [0.25,0.25,0.27] }
   },
   thunder: {
     // The canyon family an hour later. Sun nine degrees off the deck, so the
@@ -463,6 +463,9 @@ export function buildTerrainMaterial(t) {
          wavelength at plus or minus 12 % is enough to stop a stage reading
          as one flat swatch, and small enough never to be mistaken for a
          feature you could drive to. */
+      #ifdef FOREST_GROUND
+      if(sid==3) {rough=max(rough,.30);gritK*=.65;}
+      #endif
       albedo *= 0.74 + 0.45*fb(vW.xz*0.018);
 
       /* ---- the road surface itself ----
@@ -526,7 +529,7 @@ export function buildTerrainMaterial(t) {
          ROCK palette (darkened raw substrate) regardless of painted id. */
       float steep = 1.0 - smoothstep(0.62, 0.86, N.y);
       float rockCoverage = steep;
-      #ifdef QUARRY_CLIFF
+      #ifdef QUARRY_PROFILE
       // Quarry benches are exposed bedrock too. Restricting the scan to
       // vertical normals left every upper ledge as a smooth sandy cap.
       rockCoverage=max(steep,smoothstep(200.,235.,length(vW.xz)));
@@ -578,14 +581,18 @@ export function buildTerrainMaterial(t) {
         // the uniform sandpaper appearance of a single aggregate scale.
         if(sid==0) sampleGround=mix(sampleGround,texture(uGround,vec3(guv*.8,1.0)).rgb,.55);
         #ifdef QUARRY_GROUND
-        if(sid==0 || sid==1 || sid==2 || sid==5) {
+        if(sid!=6) {
           // Keep the scanned-size aggregate crisp instead of resampling it
           // through the generic 512-pixel layer array. Break repeats with a
           // slow second scale while retaining the primary pebbles' edges.
           vec2 qUV=vW.xz*((sid==0||sid==1)? .38 : .22);
           vec3 fine=texture2D(uQuarryGround,qUV).rgb;
           fine=mix(fine,texture2D(uQuarryGround,RA*qUV*.51+.31).rgb,.18);
+          #ifdef FOREST_GROUND
+          sampleGround=mix(sampleGround,fine,.90*(1.-smoothstep(.05,.8,vRoad)*.8));
+          #else
           sampleGround=mix(sampleGround,fine,.90);
+          #endif
         }
         #endif
         if (rockCoverage > 0.02) {
@@ -630,7 +637,7 @@ export function buildTerrainMaterial(t) {
 
       // Scanned OpenGL normals add aggregate relief on the quarry floor.
       #ifdef QUARRY_NORMAL
-      if((sid==0 || sid==1 || sid==2 || sid==5) && dnear>.002) {
+      if(sid!=6 && dnear>.002) {
         vec3 detail=texture2D(uQuarryNormal,vW.xz*((sid==0||sid==1)? .38 : .22)).xyz*2.0-1.0;
         vec3 tangent=normalize(vec3(N.y,-N.x,0.0));
         vec3 bitangent=normalize(cross(tangent,N));
@@ -757,6 +764,8 @@ export function setGroundTexture(t, tex, quarry = null, normal = null, cliff = n
 
   const want = !!t.ground;
   const D = t.material.defines;
+  if(t.theme==='training') D.QUARRY_PROFILE=1;
+  if(t.theme==='forest') D.FOREST_GROUND=1;
   const cliffOn=!!(cliff&&cliffNormal);
   const quarryChanged=!!D.QUARRY_GROUND!==!!quarry || !!D.QUARRY_NORMAL!==!!normal || !!D.QUARRY_CLIFF!==cliffOn;
   u.uQuarryGround.value=quarry;
@@ -780,6 +789,8 @@ export function setGroundTexture(t, tex, quarry = null, normal = null, cliff = n
       if(quarry) m.defines.QUARRY_GROUND=1; else delete m.defines.QUARRY_GROUND;
       if(normal) m.defines.QUARRY_NORMAL=1; else delete m.defines.QUARRY_NORMAL;
       if(cliffOn) m.defines.QUARRY_CLIFF=1; else delete m.defines.QUARRY_CLIFF;
+      if(t.theme==='training') m.defines.QUARRY_PROFILE=1;
+      if(t.theme==='forest') m.defines.FOREST_GROUND=1;
       m.needsUpdate = true;
     }
   }

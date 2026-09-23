@@ -82,10 +82,9 @@ async function boot() {
   setHeroSource((key) => A.url(key));
   setCarcassSource((id, level) => A.url('models/' + id + '-carcass' + (level === 'high' ? '-high' : '')));
   const terrain = new Terrain(engine.renderer, baked, engine.quality, engine.caps, def);
-  setGroundTexture(terrain, A.get('ground'),def.theme==='training'?A.get('terrain/quarry-ground'):null,
-    def.theme==='training'?A.get('terrain/quarry-normal'):null,
-    def.theme==='training'?A.get('terrain/quarry-cliff'):null,
-    def.theme==='training'?A.get('terrain/quarry-cliff-normal'):null);
+  const groundProfile=def.theme==='forest'?'forest':'quarry';
+  setGroundTexture(terrain, A.get('ground'),A.get('terrain/'+groundProfile+'-ground'),
+    A.get('terrain/'+groundProfile+'-normal'),A.get('terrain/quarry-cliff'),A.get('terrain/quarry-cliff-normal'));
   engine.scene.add(terrain.group);
   // The terrain samples the real shadow map; without this the cars hover.
   engine.attachTerrain(terrain);
@@ -104,7 +103,7 @@ async function boot() {
       else envNote = 'no env/' + def.theme + ' in the manifest — shader env';
   }
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData,
-    A.get('foliage/spruce'), { scrub: A.get('foliage/'+def.theme) || A.get('foliage/scrub'), sagebrush: def.theme==='training'?A.get('foliage/training-sagebrush'):null, cliff: A.get('terrain/cliff'),
+    A.get('foliage/spruce'), { scrub: A.get('foliage/'+def.theme) || A.get('foliage/scrub'), sagebrush: ['training','canyon','thunder'].includes(def.theme)?A.get('foliage/training-sagebrush'):null, cliff: A.get('terrain/cliff'),
       rockHigh:A.url('models/quarry/boulder-high'),rockLow:A.url('models/quarry/boulder-low'),rockMobile:A.url('models/quarry/boulder-mobile') });
   const dust = new Dust(engine.scene, terrain, terrain.uniforms.uSunDir, engine.quality.dust, def.theme);
   const vfx = new VFX(engine.scene, dust, engine.quality, def.theme);
@@ -301,7 +300,7 @@ async function boot() {
     if (ft > 0.5) { fps = frames / ft; frames = 0; ft = 0; }
     const n = spline.nearest(veh.pos.x, veh.pos.z, _out);
     stats.textContent =
-      `track ${def.id}  veh ${vehId}  env ${envMode}${envNote ? ' (' + envNote + ')' : ''}\n` +
+      `track ${def.id}  veh ${vehId}  env ${envMode}${envNote ? ' (' + envNote + ')' : ''}  lighting ${sky.envUsesImage()?'panorama':'procedural'}\n` +
       `fps ${fps.toFixed(0)}  ${(ftMean * 1000).toFixed(1)} ms\n` +
       `speed ${(veh.speed * 3.6).toFixed(0)} km/h  gear ${veh.gear ?? '-'}  rpm ${(veh.rpmNorm ?? 0).toFixed(2)}\n` +
       `s ${n.s.toFixed(0)}/${spline.length.toFixed(0)}  d ${n.d.toFixed(1)}  surf ${SURFACES[veh.surfaceId]?.name}\n` +

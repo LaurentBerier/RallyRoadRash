@@ -528,7 +528,7 @@ export class Props {
     // cannot possibly hit is also an arch you cannot possibly notice.
     const scale = clamp((w * 2 + 13) / 26, 0.95, 1.7);
     const geo = this._keepGeo(rockArchGeo(this.palette, (this.def.seed | 0) + 179, 26, 13));
-    const m = new THREE.Mesh(geo, this.dressMat);
+    const m = new THREE.Mesh(geo, this.theme==='canyon'?this.rockMat:this.dressMat);
     m.position.set(p.x, this.terrain.heightAt(p.x, p.z) - 0.25, p.z);
     m.rotation.y = Math.atan2(d.x, d.z);
     m.scale.setScalar(scale);
@@ -536,6 +536,7 @@ export class Props {
     m.frustumCulled = false;
     this.group.add(m);
     this.archMesh = m;
+    m.receiveShadow=true;
     // two leg colliders, exactly as _buildJumpArch does it
     for (const side of [-1, 1]) {
       const q = sp.offsetPoint(s, side * 13 * scale, _pp2);

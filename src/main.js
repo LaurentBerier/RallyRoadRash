@@ -518,10 +518,10 @@ function buildWorld(def, baked) {
   engine.attachTerrain(terrain);
   /* Optional photographic ground detail. Null is the normal case and the
      shader's own grain is the fallback; see core/assets.js. */
-  setGroundTexture(terrain, App.assets.get('ground'),def.theme==='training'?App.assets.get('terrain/quarry-ground'):null,
-    def.theme==='training'?App.assets.get('terrain/quarry-normal'):null,
-    def.theme==='training'?App.assets.get('terrain/quarry-cliff'):null,
-    def.theme==='training'?App.assets.get('terrain/quarry-cliff-normal'):null);
+  const groundProfile=def.theme==='forest'?'forest':'quarry';
+  setGroundTexture(terrain, App.assets.get('ground'),App.assets.get('terrain/'+groundProfile+'-ground'),
+    App.assets.get('terrain/'+groundProfile+'-normal'),
+    App.assets.get('terrain/quarry-cliff'),App.assets.get('terrain/quarry-cliff-normal'));
 
   const sky = new Sky(engine.renderer, engine.scene, engine.quality, theme);
   /* Optional skyline panorama. When there is one it replaces the procedural
@@ -536,7 +536,7 @@ function buildWorld(def, baked) {
   syncSun(terrain, sky);
 
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData,
-    App.assets.get('foliage/spruce'), { scrub: App.assets.get('foliage/'+def.theme) || App.assets.get('foliage/scrub'), sagebrush: def.theme==='training'?App.assets.get('foliage/training-sagebrush'):null, cliff: App.assets.get('terrain/cliff'),
+    App.assets.get('foliage/spruce'), { scrub: App.assets.get('foliage/'+def.theme) || App.assets.get('foliage/scrub'), sagebrush: ['training','canyon','thunder'].includes(def.theme)?App.assets.get('foliage/training-sagebrush'):null, cliff: App.assets.get('terrain/cliff'),
       rockHigh:App.assets.url('models/quarry/boulder-high'),rockLow:App.assets.url('models/quarry/boulder-low'),rockMobile:App.assets.url('models/quarry/boulder-mobile') });
   const dust = new Dust(engine.scene, terrain, sky.sunDir, engine.quality.dust, theme);
   const vfx = new VFX(engine.scene, dust, engine.quality, theme);
