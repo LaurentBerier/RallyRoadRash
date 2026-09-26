@@ -65,6 +65,7 @@
    where a good line goes (see sitePickups).
    ============================================================ */
 import * as THREE from 'three';
+import {beginWreck} from './wreck.js';
 import { G, TUNE } from './config.js';
 import { DUST_KIND } from '../world/dust.js';
 import { boostPadGeo, kitPalette } from '../world/kit.js';
@@ -174,7 +175,7 @@ const ROCKET_GROUND = 0.25;      // m above the ground at which a rocket goes of
    barrier. Props are only tested while the rocket is low enough to
    plausibly be hitting one. */
 const PROP_LOW = 2.2;
-const FLYBY_D = 7;               // m — a rival's rocket passing this close hisses
+const FLYBY_D = 12;               // m — a rival's rocket passing this close hisses
 const SMOKE_D = 160;             // m — beyond this the trail is a ribbon only
 const ROCKET_SPIN = 18;          // rad/s of visual roll in flight
 const SCORCH_Y = 3.0;            // m above the ground within which a blast marks it
@@ -867,7 +868,7 @@ export class Arsenal {
       let hit = -1;
       for (let ri = 0; ri < this.racers.length && hit < 0; ri++) {
         const r = this.racers[ri], v = r.vehicle;
-        if (r.finished || v.ghost) continue;
+        if (r.finished || v.ghost || v.wrecked) continue;
         if (ri === this.pOwner[i] && this.pArm[i] > 0) continue;
         const dx = v.pos.x - x, dy = v.pos.y - y, dz = v.pos.z - z;
         const R = (v.collRadius || 1.2) + W.radius;
@@ -879,8 +880,8 @@ export class Arsenal {
          when it is somebody else's — your own leaving the tube is the
          launch cue. */
       if (player && !this.pFly[i] && this.pOwner[i] !== this.playerIdx) {
-        const dx = player.pos.x - x, dz = player.pos.z - z;
-        if (dx * dx + dz * dz < FLYBY_D * FLYBY_D) {
+        const dx = player.pos.x - x, dy = player.pos.y - y, dz = player.pos.z - z;
+        if (dx * dx + dy * dy + dz * dz < FLYBY_D * FLYBY_D) {
           this.pFly[i] = 1;
           if (this.audio.rocketFlyby) {
             this.audio.rocketFlyby(clamp(-(dx * player.right.x + dz * player.right.z) / FLYBY_D, -1, 1));
@@ -942,7 +943,8 @@ export class Arsenal {
     }
     const A = this.audio;
     if (this._hear(x, y, z, W.hitHearD)) {
-      const near = this._hear(x, y, z, 26);
+      const listener=this.racers[this.playerIdx]?.vehicle;
+      const near=listener?listener.pos.distanceToSquared(_v1.set(x,y,z))<26*26:false;
       if (A.rocketHit) A.rocketHit(_gain, _pan, near);
       else if (A.crash) A.crash(clamp(_gain * 1.6, 0.3, 2.2), _pan);
     }
@@ -950,7 +952,7 @@ export class Arsenal {
 
     for (let ri = 0; ri < this.racers.length; ri++) {
       const r = this.racers[ri], v = r.vehicle;
-      if (r.finished || v.ghost) continue;
+      if (r.finished || v.ghost || v.wrecked) continue;
       if (ri === owner && this.pArm[i] > 0) continue;
       const direct = ri === hitRi;
       if (!direct) {
@@ -969,6 +971,10 @@ export class Arsenal {
          cause. `_launch` is the blast itself. */
       this._spin(ri, hitSpin(direct), sx, sz, owner);
       this._launch(ri, sx, sz, direct);
+      if(direct){
+        beginWreck(v,this.spline.nearest(v.pos.x,v.pos.z,{}).s,this.racers[owner]?.id ?? null);
+        this.vfx?.vehicleHit?.(v.pos.x,v.pos.y,v.pos.z,v.spec.color);
+      }
     }
     this._killProj(i);
   }
@@ -1131,7 +1137,7 @@ export class Arsenal {
   fire(ri, back) {
     if (!this.enabled) return false;
     const s = this.st[ri], r = this.racers[ri], a = s.ars;
-    if (r.finished) return false;
+    if (r.finished || r.vehicle.wrecked) return false;
     if (!canFire(a)) {
       /* An empty rack must SAY so, or the key reads as broken. Only the
          player, only when actually empty (a reload is visible on the HUD),

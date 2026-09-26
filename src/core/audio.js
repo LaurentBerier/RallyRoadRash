@@ -1,7 +1,7 @@
 /* ============================================================
    RALLY ROAD RASH — EVERY SOUND IS SYNTHESISED
    ------------------------------------------------------------
-   No sample files, no network. A rally car is mostly three
+   Sampled foley complements the live simulation. A rally car is mostly three
    noises stacked: a firing engine, four contact patches, and
    moving air. Each is built here from the cheapest primitive
    that still reads as the real thing —
@@ -22,6 +22,7 @@
 
 import { SURFACES, SURF } from '../world/surfaces.js';
 import * as ARCADE_SFX from './audio-arcade.js';
+import { EngineTextures } from './engine-textures.js';
 import { MusicBank } from './music.js';
 import { SfxBank } from './sfx.js';
 import * as WEAPONS from './audio-weapons.js';
@@ -92,6 +93,7 @@ export class Audio {
     this.familyName = 'buggy';
 
     // per-frame state, all primitives — nothing here allocates later
+    this._lastGear = null;
     this._air = 0; this._prevLoad = 0; this._liftT = 0; this._liftCd = 0;
     this._crackAcc = 0; this._grainAcc = 0; this._shiftCd = 0;
     this._scrapeReq = 0; this._scrapeSurf = SURF.ROCK;
@@ -106,6 +108,7 @@ export class Audio {
     // Contract 8.7: the sampled soundtrack and sample bank. Both take `this`
     // and are safe to construct with no ctx — they only ever touch it inside
     // methods that check for one first, same as everything above.
+    this._engineTextures=new EngineTextures(this);
     this._sfx = new SfxBank(this);
     this._music = new MusicBank(this);
   }
@@ -136,8 +139,8 @@ export class Audio {
     /* Fetch + decodeAudioData AFTER ready — never before, there is no ctx
        until this point. Fire-and-forget: init() stays synchronous, and both
        banks are no-ops for every caller until their promise resolves. */
-    this._sfx.load();
-    this._music.load();
+    this._sfx.load();this._engineTextures.load();
+    this._musicReady=this._music.load();
 
     /* init() happens on the first user gesture, which can be long after the
        menu has already picked a car, a volume and a music mode. Replay the
@@ -324,6 +327,7 @@ export class Audio {
     if (typeof spec === 'string') name = SPEC_FAMILY[spec] || spec;
     else if (spec) name = spec.family || SPEC_FAMILY[spec.id] || 'buggy';
     if (!FAMILIES[name]) name = 'buggy';
+    this._lastGear = null;
     this.familyName = name;
     this.fam = FAMILIES[name];
     if (!this.ready) return;
@@ -335,6 +339,7 @@ export class Audio {
     }
     this.boomG.gain.setTargetAtTime(0.5 * f.boom, t, 0.05);
     this.rvOsc.setPeriodicWave(this.waves[name]);
+    this._rivalFamily = null;
   }
 
   /** Gate for the whole continuous car layer (engine, tyres, beds, wind,
@@ -620,7 +625,8 @@ export class Audio {
     if (!this.ready) return;
     const t = this.now();
     this.menuBus.gain.setTargetAtTime(mode === 'menu' ? 1 : 0.0001, t, mode === 'menu' ? 0.5 : 0.8);
-    this.raceBus.gain.setTargetAtTime(mode === 'race' ? 1 : 0.0001, t, mode === 'race' ? 0.4 : 0.8);
+    this.raceBus.gain.cancelScheduledValues(t);
+    this.raceBus.gain.setTargetAtTime(mode === 'race' ? .52 : 0.0001, t, mode === 'race' ? 0.4 : 0.8);
   }
 
   /** Contract 8.7. race.js calls this from `_enterGrid`; a theme with no
@@ -789,8 +795,20 @@ export class Audio {
 
   /* ---------------- suspension & impacts ---------------- */
   /** A suspension stop taking a hit — dull, panned to the wheel's side. */
+  _metalImpact(force,pan=0,vehicleId=null,isPlayer=true) {
+    const names=['metalImpactA','metalImpactB','suspensionImpact'];
+    const previous=this._lastMetalImpact??-1;
+    let pick=Math.floor(Math.random()*(previous<0?3:2));
+    if(previous>=0&&pick>=previous)pick++;
+    this._lastMetalImpact=pick;
+    const rate=({ridgeback:.78,hopper:.87,redline:.94,moto:1.02})[vehicleId]||.86;
+    return this._sfx.play(names[pick],{gain:clamp(force,.12,1.2)*(.92+Math.random()*.16),
+      rate:rate*(.97+Math.random()*.06),pan,cooldownKey:isPlayer?'metal:player':'metal:rival'});
+  }
+
   clunk(force, pan = 0) {
     if (!this.ready || force < 0.08) return;
+    if(this._metalImpact(force*.8,pan))return;
     const ctx = this.ctx, t = this.now();
     const amp = Math.min(force, 1) * 0.24;
     const o = ctx.createOscillator(); o.type = 'sine';
@@ -810,6 +828,7 @@ export class Audio {
   /** Suspension out of travel — the clunk plus metal on its stops. */
   bottomOut(force = 1, pan = 0) {
     if (!this.ready) return;
+    if (this._metalImpact(clamp(force,.3,1.3),pan)) return;
     const ctx = this.ctx, t = this.now();
     const f = clamp(force, 0.2, 2);
     this.clunk(Math.min(f, 1) * 0.9, pan);
@@ -849,13 +868,21 @@ export class Audio {
 
   /** Wheels back on the ground: chassis slam, four dampers, and whatever the
       tyres throw up. Surface picks the spray — mud splats, sand puffs. */
-  land(force = 1, surface = null) {
+  land(force = 1, surface = null, vehicleId = null, pan = 0, isPlayer = true) {
     if (!this.ready) return;
     const t = this.now(), f = clamp(force, 0.15, 2.2);
     const sid = surface == null ? this.surfaceId : surface | 0;
     const s = SURFACES[sid] || SURFACES[SURF.DIRT];
     const soft = sid === SURF.SAND || sid === SURF.MUD || sid === SURF.GRASS ? 1 : 0;
-    if (this._sfx.play(soft ? 'landSoft' : 'landHeavy', { gain: f * 0.7, rate: 0.92 + Math.random() * 0.16 })) return;
+    this.duckRace(.18,.3);
+    const cue=({hopper:'landHopper',ridgeback:'landRidgeback',redline:'landRedline',moto:'landHornet'})[vehicleId] ||
+      ({buggy:'landHopper',truck:'landRidgeback',wedge:'landRedline',thumper:'landHornet'})[this.familyName];
+    const gain=isPlayer?clamp(f,.55,1.5):clamp(f,.08,.65);
+    this._metalImpact(gain*.78,pan,vehicleId,isPlayer);
+    const opts={gain:gain*.95,pan,rate:soft?.90:.96,cooldownKey:(isPlayer?'player:':'rival:')+cue};
+    if ((cue&&this._sfx.play(cue,opts)) || this._sfx.play(soft&&f<.9?'landSoft':'landHeavy',opts)) {
+      this.thud(gain*.55);return;
+    }
     this.thud(f * 0.9);
     this.clunk(Math.min(f * 0.7, 1), -0.3);
     this.clunk(Math.min(f * 0.7, 1) * 0.85, 0.32);
@@ -878,15 +905,17 @@ export class Audio {
   jumpWhoosh(force = 1) {
     if (!this.ready) return;
     const t = this.now(), f = clamp(force, 0.2, 1.6);
-    this._burst(t, 0.34, 'bandpass', 420, 1500, 1.1, 0.075 * f, -0.25, this.busSfx);
-    this._burst(t + 0.02, 0.30, 'bandpass', 520, 1750, 1.0, 0.065 * f, 0.28, this.busSfx);
+    this._burst(t, 0.34, 'bandpass', 420, 1500, 1.1, 0.025 * f, -0.25, this.busSfx);
+    this._burst(t + 0.02, 0.30, 'bandpass', 520, 1750, 1.0, 0.022 * f, 0.28, this.busSfx);
   }
 
   /** Panel-on-rock. Layered: a low body hit, three inharmonic metal rings that
       cannot resolve into a note, then debris. Force scales all three. */
   crash(force = 1, pan = 0) {
     if (!this.ready) return;
-    if (this._sfx.play(force >= 1.15 ? 'crashHeavy' : 'crashLight', { gain: clamp(force, 0.15, 2.5) * 0.6, pan })) return;
+    this.duckRace(.2,.35);
+    this._metalImpact(force*.65,pan);
+    if (this._sfx.play(force >= 1.0 ? 'crashHeavy' : 'crashLight', { gain: clamp(force, .15, 1.7), pan })) {this.thud(Math.min(force,1.6)*.4);return;}
     const ctx = this.ctx, t = this.now();
     const f = clamp(force, 0.15, 2.5), pn = clamp(pan, -1, 1);
     const o = ctx.createOscillator(); o.type = 'sine';
@@ -960,8 +989,8 @@ export class Audio {
      towSnap, sledLaunch and stormHit spoke for a seven-item inventory that no
      longer exists. The rocket/nitro cues that replace them (contract 8.7) now
      live in core/audio-weapons.js, same split, just below. */
-  boostTier(tier) { ARCADE_SFX.boostTier(this, tier); }
-  boostFire(tier, gain) { ARCADE_SFX.boostFire(this, tier, gain); }
+  boostTier(tier) { if(this._sfx.play('gearShift',{gain:.3,rate:.8+tier*.12}))return;ARCADE_SFX.boostTier(this, tier); }
+  boostFire(tier, gain=1) { if(this._sfx.play('nitroBurst',{gain:gain*.6,rate:.9+tier*.08}))return;ARCADE_SFX.boostFire(this, tier, gain); }
   spinOut(gain) { if (this._sfx.play('spinOutSkid', { gain })) return; ARCADE_SFX.spinOut(this, gain); }
 
   /* ---- arsenal (contract 8.7) ----
@@ -971,7 +1000,16 @@ export class Audio {
      arsenal.js already calls all eight of these guarded (`if (A.rocketFire)
      …`), so they must exist and be silent-but-safe with no context and no
      samples loaded. */
+  async preloadRaceTheme(theme) {
+    await this._musicReady;
+    await this._music.preloadTheme(theme);
+  }
   rocketFire(gain, pan) { WEAPONS.rocketFire(this, gain, pan); }
+  duckRace(level=.2, duration=.45) {
+    if(!this.ready || this.musicMode!=='race')return;
+    const t=this.now(),p=this.raceBus.gain;
+    p.cancelScheduledValues(t);p.setTargetAtTime(level,t,.015);p.setTargetAtTime(.52,t+duration,.22);
+  }
   rocketFlyby(pan) { WEAPONS.rocketFlyby(this, pan); }
   rocketHit(gain, pan, near) { WEAPONS.rocketHit(this, gain, pan, near); }
   ammoPickup() { WEAPONS.ammoPickup(this); }
@@ -980,30 +1018,15 @@ export class Audio {
   ammoEmpty() { WEAPONS.ammoEmpty(this); }
   crateBreak(gain) { WEAPONS.crateBreak(this, gain); }
 
-  /** 3, 2, 1 — deliberately low and dry so GO reads as a release. */
+  /** Three identical, dry start-light tones; GO is a clean octave release. */
   countdownBeep(n = 3) {
     if (!this.ready) return;
-    const t = this.now(), i = clamp(3 - (n | 0), 0, 2);
-    if (this._sfx.play('countdownBeep', { gain: 0.8, rate: Math.pow(2, i / 24) })) return;
-    const f = 196 * Math.pow(2, i / 24);          // barely rising: tension, not melody
-    this._note(this.busSfx, f, t, 0.20, 0.17, 'square', 0);
-    this._note(this.busSfx, f * 0.5, t, 0.16, 0.10, 'sine', 0);
-    this._burst(t, 0.05, 'bandpass', 1600, 900, 3, 0.035, 0, this.busSfx);
+    this._sfx.play('countdownBeep', { gain: .8, rate: 1 });
   }
 
-  /** GO — a bright major stab an octave above the beeps, with a lift under it. */
   countdownGo() {
     if (!this.ready) return;
-    if (this._sfx.play('countdownGo', { gain: 0.9 })) return;
-    const t = this.now();
-    const CH = [587.33, 739.99, 880.0, 1174.66];  // D major
-    for (let i = 0; i < CH.length; i++) {
-      const g = this._note(this.busSfx, CH[i], t, 0.55 - i * 0.06, 0.115 - i * 0.018, 'sawtooth', i * 7 - 10);
-      g.connect(this.verb);
-      this._note(this.busSfx, CH[i], t, 0.28, 0.055, 'square', -6);
-    }
-    this._note(this.busSfx, 146.83, t, 0.45, 0.20, 'triangle', 0);
-    this._burst(t, 0.30, 'highpass', 1200, 5200, 0.8, 0.10, 0, this.busSfx);
+    this._sfx.play('countdownGo', { gain: .9, rate: 1 });
   }
 
   /** Two notes, fast, up — has to survive being heard 14 times a lap. */
@@ -1045,7 +1068,7 @@ export class Audio {
     // A crowd sample is ambience, not a competing melody — it LAYERS under
     // the stinger below rather than replacing it, unlike every other cue's
     // sample check. Broadband noise and a tonal phrase don't fight.
-    this._sfx.play('finishCrowd', { gain: 0.7 });
+    if(this._sfx.play('finishCrowd',{gain:won?.9:.6})){this._sfx.play('countdownGo',{gain:won?.5:.28,rate:.9});return;}
     const t = this.now();
     if (won) {
       const MEL = [587.33, 739.99, 880.0, 1174.66], OFF = [0, 0.13, 0.26, 0.42];
@@ -1095,6 +1118,7 @@ export class Audio {
       it reads as "more to come". */
   unlockJingle() {
     if (!this.ready) return;
+    if(this._sfx.play('uiConfirm',{gain:.8,rate:.9}))return;
     const t = this.now();
     const N = [587.33, 698.46, 880.0, 1046.5, 1318.51, 1760.0, 2093.0];
     for (let i = 0; i < N.length; i++) {
@@ -1109,6 +1133,7 @@ export class Audio {
   /** Wrong way — two low buzzes, unpleasant on purpose but not painful. */
   wrongWay() {
     if (!this.ready) return;
+    if(this._sfx.play('uiWarn',{gain:.8,rate:.85}))return;
     const ctx = this.ctx, t = this.now();
     for (let i = 0; i < 2; i++) {
       const w = t + i * 0.22;
@@ -1132,6 +1157,7 @@ export class Audio {
   /** Respawn: a swish down and back up, with an arrival tick. */
   resetWhoosh() {
     if (!this.ready) return;
+    if(this._sfx.play('uiConfirm',{gain:.8,rate:.75}))return;
     const t = this.now();
     this._burst(t, 0.26, 'bandpass', 2600, 380, 1.8, 0.085, 0.5, this.busSfx);
     this._burst(t + 0.20, 0.30, 'bandpass', 400, 3000, 1.8, 0.075, -0.5, this.busSfx);
@@ -1142,32 +1168,30 @@ export class Audio {
 
   ui(kind = 'tick') {
     if (!this.ready) return;
-    const sampleName = kind === 'tick' ? 'uiTick' : kind === 'ok' ? 'uiConfirm' : kind === 'back' ? 'uiBack' : null;
-    if (sampleName && this._sfx.play(sampleName, { gain: 0.7 })) return;
-    const t = this.now();
-    if (kind === 'tick') this.ping(1900, 0.05, 0.045, 'square');
-    else if (kind === 'hover') this.ping(2600, 0.03, 0.016, 'sine');
-    else if (kind === 'ok') {
-      this._note(this.busSfx, 880, t, 0.09, 0.070, 'square', 0);
-      this._note(this.busSfx, 1320, t + 0.07, 0.14, 0.060, 'square', 0);
-    } else if (kind === 'back') {
-      this._note(this.busSfx, 780, t, 0.07, 0.050, 'square', 0);
-      this._note(this.busSfx, 520, t + 0.06, 0.12, 0.045, 'square', 0);
-    } else if (kind === 'bad') this.ping(220, 0.20, 0.10, 'sawtooth');
-    else if (kind === 'warn') {
-      this._note(this.busSfx, 660, t, 0.10, 0.080, 'square', 0);
-      this._note(this.busSfx, 660, t + 0.16, 0.10, 0.080, 'square', 0);
-    }
+    const cues={tick:'uiTick',hover:'uiHover',ok:'uiConfirm',back:'uiBack',bad:'uiReject',warn:'uiWarn'};
+    if(this._sfx.play(cues[kind]||'uiTick',{gain:1}))return;
+    // Dry latch/clutch foley fallback, with no interface beeps.
+    const t=this.now(),soft=kind==='hover',heavy=kind==='ok'||kind==='bad';
+    this._burst(t,soft?.025:.065,'bandpass',heavy?450:1800,350,1.2,soft?.012:.045,0,this.busSfx);
+    if(heavy)this._note(this.busSfx,82,t,.075,.035,'sine',0);
+    if(kind==='back'||kind==='warn')this._burst(t+.045,.035,'bandpass',650,250,1,.022,0,this.busSfx);
   }
 
   /* ---------------- gear change ----------------
      Real shift: torque drops, revs fall, the clutch bites again. Heard from
      outside that is a dip and a catch, roughly 100 ms end to end. */
-  _shift(t, rpm) {
+  _gearChange(gear, enabled) {
+    if(!enabled || !Number.isInteger(gear)){this._lastGear=null;return 0;}
+    const old=this._lastGear;this._lastGear=gear;
+    return old===null || old===gear ? 0 : gear>old ? 1 : -1;
+  }
+
+  _shift(t, rpm, down = false) {
+    this._sfx.play('gearShift',{gain:.65,rate:(this.familyName==='truck'?.85:this.familyName==='thumper'?1.2:1)*(down?1.12:1)});
     const d = this.engDuck.gain;
     d.cancelScheduledValues(t);
-    d.setTargetAtTime(0.30, t, 0.010);
-    d.setTargetAtTime(1.0, t + 0.055, 0.045);
+    d.setTargetAtTime(down ? .55 : .28, t, .008);
+    d.setTargetAtTime(1.0, t + (down ? .04 : .065), .035);
     this._grain(false, t + 0.005, 0.055 + rpm * 0.05, 300 + rpm * 260, 2.2, 0.05, 1, -0.1);
     this._burst(t + 0.06, 0.09, 'bandpass', 900 + rpm * 800, 400, 2.4,
       0.035 + rpm * 0.035, 0.12, this.driveBus);
@@ -1210,6 +1234,9 @@ export class Audio {
        28→190 Hz of firing frequency is 840→5700 crank rpm on a four-cylinder
        four-stroke (two firings per revolution); `rev` spreads the families
        either side of that, so the wedge tops out near 6400. */
+    this.engineOff=!!st.engineOff;
+    this._engineTextures.update(rpm,load,air);
+    const recorded = this._engineTextures.hasVoice(this.familyName);
     const f0 = 28 * Math.pow(6.786, rpm) * fam.rev;
     this.pOsc.frequency.setTargetAtTime(f0, t, 0.035);
     for (let i = 0; i < 2; i++) this.inOsc[i].frequency.setTargetAtTime(f0 * 0.5, t, 0.035);
@@ -1225,11 +1252,11 @@ export class Audio {
     this.boomG.gain.setTargetAtTime(0.5 * fam.boom * (0.6 + load * 0.6) * bodyCut, t, kf);
     // idle must be present at rpm 0.35 with no throttle — hence the floor
     this.engBus.gain.setTargetAtTime(
-      (0.050 + load * 0.105 + rpm * 0.080 + rpm * load * 0.045) * drv, t, k);
+      (0.085 + load * 0.17 + rpm * 0.13 + rpm * load * 0.07) * drv * (st.engineOff?0:1) * (recorded?.20:1), t, k);
 
     this.inLp.frequency.setTargetAtTime(280 + load * 1500 + rpm * 950, t, kf);
     this.inG.gain.setTargetAtTime(
-      fam.intake * fam.growl * (0.020 + load * 0.075) * (0.35 + rpm * 0.65) * drv, t, k);
+      fam.intake * fam.growl * (0.020 + load * 0.075) * (0.35 + rpm * 0.65) * drv * (st.engineOff?0:1), t, k);
 
     // turbo spools slowly and hangs on lift — that lag is the whole character
     this.whOsc.frequency.setTargetAtTime(1050 + Math.pow(rpm, 1.5) * 5200, t, 0.22);
@@ -1242,7 +1269,10 @@ export class Audio {
     this._rpmRing[ri] = rpm; this._rpmRingT[ri] = this._clock;
     this._rpmRingI = (ri + 1) % this._rpmRing.length;
     this._shiftCd -= d;
-    if (load > 0.5 && drv && this._shiftCd <= 0) {
+    const gearChange=this._gearChange(st.gear,drv && !st.engineOff);
+    if(gearChange){this._shift(t,rpm,gearChange<0);this._shiftCd=.18;}
+    // RPM inference is only a fallback for older callers without gear telemetry.
+    if (!Number.isInteger(st.gear) && !st.engineOff && load > 0.5 && drv && this._shiftCd <= 0) {
       let peak = rpm;
       for (let i = 0; i < this._rpmRing.length; i++) {
         if (this._clock - this._rpmRingT[i] <= 0.080 && this._rpmRing[i] > peak) peak = this._rpmRing[i];
@@ -1287,16 +1317,16 @@ export class Audio {
     this.rdBp.frequency.setTargetAtTime(240 + spd * 760, t, 0.12);
     this.rdPk.gain.setTargetAtTime(spd * spd * 9, t, 0.12);
     this.rdPk.frequency.setTargetAtTime(950 + spd * 900, t, 0.12);
-    this.rdG.gain.setTargetAtTime(wRoad * roll * 0.085, t, k);
+    this.rdG.gain.setTargetAtTime(wRoad * roll * 0.055, t, k);
 
     this.gtBp.frequency.setTargetAtTime(200 + spd * 420 + bright * 400, t, 0.12);
     this.gtSh.gain.setTargetAtTime(-12 + bright * 10 + spd * 4, t, 0.12);
-    this.gtG.gain.setTargetAtTime(grit * roll * 0.075, t, k);
+    this.gtG.gain.setTargetAtTime(grit * roll * 0.050, t, k);
 
     this.sdHp.frequency.setTargetAtTime(620 + spd * 1100, t, 0.12);
-    this.sdG.gain.setTargetAtTime(wSand * roll * 0.085, t, k);
+    this.sdG.gain.setTargetAtTime(wSand * roll * 0.052, t, k);
 
-    const mudBase = wMud * roll * 0.115;
+    const mudBase = wMud * roll * 0.075;
     this.mdLp.frequency.setTargetAtTime(380 + spd * 320, t, 0.12);
     this.mdG.gain.setTargetAtTime(mudBase, t, k);
     this.mdLfo.frequency.setTargetAtTime(wheelHz, t, 0.08);
@@ -1304,7 +1334,7 @@ export class Audio {
     this.mdLfoG.gain.setTargetAtTime(mudBase * 0.70, t, k);
     this.mdLfoG2.gain.setTargetAtTime(mudBase * 0.32, t, k);
 
-    const grBase = wGrass * roll * 0.060;
+    const grBase = wGrass * roll * 0.040;
     this.grBp.frequency.setTargetAtTime(1300 + spd * 1500, t, 0.12);
     this.grG.gain.setTargetAtTime(grBase, t, k);
     this.grLfo.frequency.setTargetAtTime(wheelHz * 0.5, t, 0.08);
@@ -1368,7 +1398,7 @@ export class Audio {
     this.wnd[0].bp.frequency.setTargetAtTime(300 + speed * 15, t, 0.2);
     this.wnd[1].bp.frequency.setTargetAtTime(370 + speed * 13, t, 0.2);
     this.wndLp.frequency.setTargetAtTime(120 + speed * 2.4, t, 0.2);
-    this.wndBus.gain.setTargetAtTime(wv * (1 + air * 0.65) * 0.115 * drv, t, 0.1);
+    this.wndBus.gain.setTargetAtTime(wv * (1 + air * 0.65) * 0.042 * drv, t, 0.1);
 
     /* --- body scrape --- */
     const scReq = Math.max(clamp(st.scrape || 0, 0, 1), this._scrapeReq);
@@ -1381,11 +1411,13 @@ export class Audio {
     /* --- nearest rival --- */
     const rr = st.rivalRpm;
     if (rr != null && rr >= 0) {
-      const rf = 28 * Math.pow(6.786, clamp(rr, 0, 1)) * fam.rev;
+      const rivalFamily=SPEC_FAMILY[st.rivalId]||this.familyName;
+      if(this._rivalFamily!==rivalFamily){this.rvOsc.setPeriodicWave(this.waves[rivalFamily]);this._rivalFamily=rivalFamily;}
+      const rf = 28 * Math.pow(6.786, clamp(rr, 0, 1)) * FAMILIES[rivalFamily].rev;
       this.rvOsc.frequency.setTargetAtTime(rf, t, 0.06);
       this.rvBp.frequency.setTargetAtTime(420 + clamp(rr, 0, 1) * 900, t, 0.1);
       this.rvPan.pan.setTargetAtTime(clamp(st.rivalPan || 0, -1, 1), t, 0.12);
-      this.rvG.gain.setTargetAtTime((0.020 + clamp(rr, 0, 1) * 0.030) * drv, t, 0.15);
+      this.rvG.gain.setTargetAtTime((0.020 + clamp(rr, 0, 1) * 0.030) * drv / (1 + Math.pow((st.rivalDistance??8)/12,2)), t, 0.15);
     } else {
       this.rvG.gain.setTargetAtTime(0.0001, t, 0.20);
     }

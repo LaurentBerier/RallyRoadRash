@@ -40,7 +40,7 @@ export function rocketFire(A, gain = 1, pan = 0) {
     sound of the pass. */
 export function rocketFlyby(A, pan = 0) {
   if (!A.ready) return;
-  if (A._sfx.play('rocketFlyby', { gain: 0.5, pan })) return;
+  if (A._sfx.play('rocketFlyby', { gain: 1.15, pan })) return;
   const t = A.now(), pn = clamp(pan, -1, 1);
   A._burst(t, 0.30, 'bandpass', 2600, 700, 1.4, 0.075, pn, A.busSfx);
   A._burst(t + 0.02, 0.24, 'bandpass', 3200, 900, 1.2, 0.05, pn * 0.7, A.busSfx);
@@ -51,7 +51,8 @@ export function rocketFlyby(A, pan = 0) {
     same distance/ownership gate `crash()` already uses. */
 export function rocketHit(A, gain = 1, pan = 0, near = true) {
   if (!A.ready) return;
-  if (A._sfx.play(near ? 'explodeNear' : 'explodeFar', { gain: gain * 0.8, pan })) return;
+  A.duckRace?.(.12,.65);
+  if (A._sfx.play(near ? 'explodeNear' : 'explodeFar', { gain: gain * 1.2, pan })) { A.thud(Math.min(gain,1.2)*(near?.85:.35));return; }
   const t = A.now(), g = clamp(gain, 0, 1.5), pn = clamp(pan, -1, 1);
   A._burst(t, near ? 0.10 : 0.20, 'bandpass', near ? 2400 : 700, near ? 900 : 300, 1.6,
     (near ? 0.16 : 0.09) * g, pn, A.busSfx);
@@ -80,7 +81,7 @@ export function ammoPickup(A) {
 /** A nitro can picked up. */
 export function nitroPickup(A) {
   if (!A.ready) return;
-  if (A._sfx.play('nitroPickup', { gain: 0.7 })) return;
+  if (A._sfx.play('nitroPickup', { gain: 1.0, rate: .94 })) { A.thud(.30); return; }
   const t = A.now();
   A._burst(t, 0.12, 'highpass', 2200, 4200, 1.8, 0.045, 0, A.busSfx);
   const g = A._note(A.busSfx, 1318.51, t + 0.02, 0.18, 0.055, 'triangle', 0);

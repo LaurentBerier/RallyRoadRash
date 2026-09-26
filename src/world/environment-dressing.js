@@ -14,7 +14,7 @@ const BIOMES = {
   canyon:   { stone: 0xb07450, grass: 0x81724b, outcrops: 90, size: 1.3 },
   forest:   { stone: 0x707969, grass: 0x435d36, outcrops: 80, size: 0.8 },
   volcano:  { stone: 0x5b5150, grass: 0x615146, outcrops: 100, size: 1.2 },
-  thunder:  { stone: 0x9f6950, grass: 0x79614b, outcrops: 80, size: 1.1 },
+  thunder:  { stone: 0x9e886f, grass: 0x968769, outcrops: 80, size: 1.1 },
 };
 
 function grassGeometry(seed) {
@@ -54,6 +54,14 @@ export function buildEnvironmentDressing(p) {
     emissiveMap: scrub, emissive: scrub ? 0xffffff : 0x000000, emissiveIntensity: 0.12,
   }));
   const pebbles = new THREE.InstancedMesh(p._keepGeo(boulderGeo(19, 0)), stone, 2200);
+  if(p.theme==='thunder'&&scrub){
+    // Root contact and pale, sun-dried tips break up flat foliage cards.
+    grass.onBeforeCompile=sh=>{sh.fragmentShader=sh.fragmentShader.replace('#include <map_fragment>',`#include <map_fragment>
+      diffuseColor.rgb*=mix(vec3(.68,.70,.66),vec3(1.12,1.06,.91),smoothstep(.02,.86,vMapUv.y));
+    `);};
+    grass.customProgramCacheKey=()=> 'thunder-grass-root-tip-v1';
+    grass.emissiveIntensity=.16;
+  }
   let tuftGeo;
   if(scrub) {
     const planes=[];
@@ -105,7 +113,7 @@ export function buildEnvironmentDressing(p) {
     mesh.userData.fullCount=count;
   }
 
-  const groundFoot=(x,z,r)=>{let h=p.terrain.heightAt(x,z);if(['canyon','forest','volcano'].includes(p.theme))for(let i=0;i<12;i++){const a=i*Math.PI/6;h=Math.min(h,p.terrain.heightAt(x+Math.cos(a)*r,z+Math.sin(a)*r));}return h;};
+  const groundFoot=(x,z,r)=>{let h=p.terrain.heightAt(x,z);if(['canyon','forest','volcano','thunder'].includes(p.theme))for(let i=0;i<12;i++){const a=i*Math.PI/6;h=Math.min(h,p.terrain.heightAt(x+Math.cos(a)*r,z+Math.sin(a)*r));}return h;};
   let count=0;
   for(let i=0;i<b.outcrops;i++) {
     const s=(i+0.2+rng()*0.6)/b.outcrops*sp.length;
@@ -247,7 +255,7 @@ export function buildEnvironmentDressing(p) {
     scree.receiveShadow=true;scree.frustumCulled=false;p.group.add(scree);
     p.environmentDetails.push(scree);
   }
-  if(p.theme==='canyon') buildCanyonVista(p);
+  if(p.theme==='canyon'||p.theme==='thunder') buildCanyonVista(p);
   if(p.theme==='forest') buildForestUnderstory(p);
   if(p.theme==='volcano') {buildVolcanoGeology(p);buildVolcanoVFX(p);}
   setEnvironmentQuality(p,p.quality);
@@ -283,7 +291,7 @@ async function upgradeQuarryRocks(p,nearRocks) {
   }
   const mat=source.material.clone();mat.color.set(0xffffff);
   mat.envMapIntensity=1;mat.roughness=1;mat.side=THREE.DoubleSide;
-  const tint={training:[1.65,1.52,1.32],canyon:[1.40,.91,.64],forest:[1.05,1.12,1.04],volcano:[.48,.49,.53],thunder:[1.25,.86,.64]}[p.theme]||[1,1,1];
+  const tint={training:[1.65,1.52,1.32],canyon:[1.40,.91,.64],forest:[1.05,1.12,1.04],volcano:[.48,.49,.53],thunder:[1.19,1.04,.88]}[p.theme]||[1,1,1];
   mat.onBeforeCompile=shader=>{
     shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',`#include <map_fragment>
       float stoneLuma=dot(diffuseColor.rgb,vec3(.2126,.7152,.0722));

@@ -75,8 +75,8 @@ const SETTINGS_SPEC = [
     type: 'seg', opts: [[false, 'OFF'], [true, 'ON']], def: true },
   { key: 'hudScale', label: 'HUD SIZE', hint: 'Scales every instrument from one knob.',
     type: 'seg', opts: [[0.85, 'S'], [1, 'M'], [1.15, 'L'], [1.3, 'XL']], def: 1 },
-  { key: 'grain', label: 'FILM GRAIN', hint: '',
-    type: 'seg', opts: [[0, 'OFF'], [0.35, 'LOW'], [1, 'FULL']], def: 0.35 },
+  { key: 'contrast', label: 'CONTRAST', hint: 'Scene contrast. 100% is neutral; default 108% adds a little punch.',
+    type: 'range', min: .9, max: 1.2, step: .01, def: 1.08, fmt: v => `${Math.round(v * 100)}%` },
   { key: 'showTouch', label: 'TOUCH CONTROLS', hint: 'AUTO shows them only after you touch the screen.',
     type: 'seg', opts: [['auto', 'AUTO'], ['on', 'ON'], ['off', 'OFF']], def: 'auto' },
   /* Wave-6 additions (ARCHITECTURE §6.10). motionFx is the one that buys
@@ -113,7 +113,7 @@ const BINDINGS = {
     ['Steer', 'left slider pad'], ['Throttle', 'GAS pedal'],
     ['Brake / reverse', 'BRAKE pedal'], ['Handbrake (drift)', 'DRIFT'],
     ['Fire rocket', 'FIRE  (hold BRAKE to fire behind)'], ['Barrel roll (in air)', 'DRIFT + steer'],
-    ['Reset to track', 'hold RESET'], ['Camera', 'CAM'], ['Pause', 'II'],
+    ['Reset to track', 'hold RESET at top right'], ['Pause', 'II at top right'],
   ],
 };
 
@@ -164,6 +164,7 @@ export class UI {
 
     this.el = {
       boot: $('boot'), bootBar: $('bootBar'), bootMsg: $('bootMsg'), bootArt: $('bootArt'),
+      bootKeyArt: $('bootKeyArt'), bootPercent: $('bootPercent'),
       hero: $('hero'), heroArt: $('heroArt'),
       screens: $('screens'),
       playbookTabs: $('playbookTabs'), playbookBody: $('playbookBody'),
@@ -184,6 +185,17 @@ export class UI {
       rotate: $('rotate'),
     };
     this.scr = {};
+    const keyArt = this.el.bootKeyArt;
+    if (keyArt) {
+      const ready = () => {
+        const loaded = !!keyArt.naturalWidth;
+        this.el.boot?.classList.toggle('cinematic-loading', loaded);
+        this.el.bootArt?.classList.toggle('on', loaded);
+      };
+      keyArt.addEventListener('load', ready);
+      keyArt.addEventListener('error', () => this.el.boot?.classList.remove('cinematic-loading'));
+      if (keyArt.complete) ready();
+    }
     for (const s of SCREENS) this.scr[s] = $('scr-' + s);
 
     // settings snapshot: the UI needs current values to render its controls even
@@ -306,6 +318,13 @@ export class UI {
   setLoadingArt(trackId) {
     const el = this.el.bootArt;
     if (!el) return;
+    // The dedicated key art loads directly from HTML before the manifest.
+    // Keep it during every bake instead of replacing it with a stage thumbnail.
+    if (this.el.bootKeyArt?.naturalWidth) {
+      this.el.boot?.classList.add('cinematic-loading');
+      el.classList.add('on');
+      return;
+    }
     const img = artImage(this._stageArt(trackId || this._sel.trackId));
     const src = img && img.nodeName === 'IMG' ? img.src : '';
     if (src === this._artSrc) return;
@@ -339,6 +358,7 @@ export class UI {
      ============================================================ */
   /** @param trackId optional — which stage's key art to show behind the bar. */
   boot(p01, msg, trackId) {
+    if(this.el.screens)this.el.screens.inert=true;
     const b = this.el.boot;
     if (b) {
       const first = b.classList.contains('hidden');
@@ -355,12 +375,14 @@ export class UI {
       const percent = Math.round(clamp01(+p01 || 0) * 100);
       this.el.bootBar.style.width = `${percent}%`;
       this.el.bootBar.parentElement.setAttribute('aria-valuenow', String(percent));
+      if (this.el.bootPercent) this.el.bootPercent.textContent = `${percent}%`;
     }
     if (this.el.bootMsg && msg != null && msg !== this._bootMsg) {
       this._bootMsg = msg; this.el.bootMsg.textContent = String(msg);
     }
   }
   bootDone() {
+    if(this.el.screens)this.el.screens.inert=false;
     if (this.el.boot) this.el.boot.classList.add('hidden');
     if (this.el.bootBar) this.el.bootBar.style.width = '100%';
   }
@@ -532,6 +554,13 @@ export class UI {
        boxes is what made this screen a spreadsheet. */
     const g = this.el.trackGrid;
     if (!g) return;
+    this._trackThumbObserver?.disconnect();
+    const thumbPainters = new Map();
+    if (typeof ResizeObserver !== 'undefined') {
+      this._trackThumbObserver = new ResizeObserver(entries => {
+        for (const { target } of entries) thumbPainters.get(target)?.();
+      });
+    }
     g.innerHTML = '';
     for (const t of list) {
       const b = document.createElement('button');
@@ -552,7 +581,16 @@ export class UI {
       g.appendChild(b);
       const cv = b.querySelector('.stage-art');
       if (cv && def) {
-        drawStage(cv, def, t.locked, { art: this._stageArt(t.id), elev: t.elev || def.elev });
+        const redraw = () => {
+          const rect = cv.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return;
+          cv.width = Math.round(rect.width);
+          cv.height = Math.round(rect.height);
+          drawStage(cv, def, t.locked, { art: this._stageArt(t.id), elev: t.elev || def.elev });
+        };
+        thumbPainters.set(cv, redraw);
+        this._trackThumbObserver?.observe(cv);
+        redraw();
       }
     }
     this._syncTrackFoot(list);
@@ -1001,9 +1039,10 @@ export class UI {
   _renderPause(d) {
     if (!this.el.pauseCtx) return;
     const bits = [];
-    if (d.trackName) bits.push(String(d.trackName));
-    if (d.position) bits.push(`P${d.position}`);
-    if (d.lap) bits.push(`LAP ${d.lap}`);
+    const track=this.scr.pause?.querySelector('#pauseTrack');
+    if(track)track.textContent=d.trackName||'RACE IN PROGRESS';
+    if (d.position) bits.push(`POSITION ${String(d.position).padStart(2,'0')}`);
+    if (d.lap) bits.push(`LAP ${d.lap}${d.laps?' OF '+d.laps:''}`);
     this.el.pauseCtx.textContent = bits.join('  ·  ');
   }
 
@@ -1247,7 +1286,7 @@ export class UI {
   }
 
   _onKey(e) {
-    if (!this._cur) return;
+    if (!this._cur || (this.el.boot && !this.el.boot.classList.contains('hidden'))) return;
     const k = e.key;
     if (k === 'Escape') { e.preventDefault(); this._back(); return; }
     if (k === 'Tab') { e.preventDefault(); this._move(0, e.shiftKey ? -1 : 1); return; }

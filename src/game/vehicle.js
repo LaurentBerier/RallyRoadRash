@@ -45,6 +45,7 @@ export class Vehicle {
    * @param {object} opts             { livery:int, headless:bool }
    */
   constructor(scene, terrain, spec, opts = {}) {
+    this.wrecked=false; this.wreckAge=0; this.wreckGround=0; this.wreckS=null; this.wreckAttacker=null;
     this.spec = spec;
     this.terrain = terrain;
     this.headless = !!opts.headless || !scene;
@@ -186,7 +187,7 @@ export class Vehicle {
     this.gear = 0;
     this.odo = 0;
     this.motorLoad = 0;
-    this._rpmRaw = TUNE.drive.rpmIdle;
+    this.gridThrottle=null; this._rpmRaw = TUNE.drive.rpmIdle;
     this._blip = 0;
     this._ctlBrake = 0; this._ctlThr = 0; this._ctlHand = 0;
     this._accelLong = 0; this._accelLat = 0;
@@ -307,6 +308,7 @@ export class Vehicle {
 
   /** Drop the car onto the ground at (x,z) facing `yaw`, all motion zeroed. */
   placeAt(x, z, yaw = 0) {
+    this.wrecked=false; this.wreckAge=0; this.wreckGround=0; this.wreckS=null; this.wreckAttacker=null;
     const S = this.spec;
     const h = this.terrain.heightAt(x, z);
     this.terrain.normalAt(x, z, 0.8, _n1);
@@ -319,7 +321,7 @@ export class Vehicle {
     this.vel.set(0, 0, 0); this.omega.set(0, 0, 0);
 
     for (const w of this.wheels) {
-      w.comp = this.sag; w.compVel = 0; w.spinVel = 0; w.spin = 0;
+      w.comp = this.sag; w.compVel = 0; w.spinVel = 0; w.spin = 0; w.displaySpin=0;
       w.contact = true; w.load = this.cornerLoad;
       w.align = 1; w.alignMul = 1;
       w.slipLat = 0; w.slipLong = 0; w.steer = 0;
@@ -332,7 +334,7 @@ export class Vehicle {
     this.hullDown = false;
     this.slipLat = 0; this.slipLong = 0; this.motorLoad = 0;
     this.gear = 0; this._blip = 0;
-    this._rpmRaw = TUNE.drive.rpmIdle; this.rpmNorm = TUNE.drive.rpmIdle;
+    this.gridThrottle=null; this._rpmRaw = TUNE.drive.rpmIdle; this.rpmNorm = TUNE.drive.rpmIdle;
     this._accelLong = 0; this._accelLat = 0; this._lastSpeed = 0;
     this._leanRoll = 0; this._leanPitch = 0; this._bikeLean = 0;
     this._ctlBrake = 0; this._ctlThr = 0; this._ctlHand = 0;
@@ -534,7 +536,8 @@ export class Vehicle {
        drift, vFwd drops, the lock opens back up, and there is more rack
        available exactly when you need it to catch the slide. */
     const lock = S.steerLockScale * T.steer.maxLock *
-      lerp(1, T.steer.speedTaper, Math.pow(Math.min(1, vn), T.steer.taperShape));
+      lerp(1, T.steer.speedTaper, Math.pow(Math.min(1, vn), T.steer.taperShape)) *
+      lerp(1, S.steerHighSpeedScale ?? 1, sstep(6,18,Math.abs(vFwd)));
 
     let target = ctl.steer;
     if (vHoriz > T.steer.assistSpeed && absSlip < 1.2 && T.steer.countersteerAssist > 0) {
@@ -733,7 +736,8 @@ export class Vehicle {
         const ex = lockSlip - T.assists.absCap;
         if (ex > 0) brakeCmd *= Math.max(T.assists.absFloor, 1 - ex * T.assists.absAttack);
       }
-      const brakeT = brakeCmd * S.wheelR * Math.sign(w.spinVel || vLong || 1e-6);
+      const freeTorque = this.wheelI*w.spinVel/dt + driveT + T.tyre.longStiff*fs*S.wheelR*vLong;
+      const brakeT = clamp(freeTorque, -brakeCmd*S.wheelR, brakeCmd*S.wheelR); // brakes oppose, never propel
 
       /* ---- longitudinal tyre force, solved SEMI-IMPLICITLY ----
          The wheel inertia is small and the slip stiffness is large, so an
@@ -1284,7 +1288,13 @@ export class Vehicle {
     const S = this.spec, D = TUNE.drive;
     const thr = Math.abs(this._ctlThr);
 
-    if (this.airborne) {
+    if (this.gridThrottle!=null) {
+      // Clutch disengaged: throttle affects sound/tacho only, never wheel torque.
+      const pedal=clamp(this.gridThrottle,0,1);
+      const target=D.rpmIdle+pedal*(.94-D.rpmIdle);
+      this._rpmRaw+=(target-this._rpmRaw)*Math.min(1,dt*(pedal>.05?7:4));
+      this.motorLoad=pedal*.85;this.gear=0;this._blip=0;
+    } else if (this.airborne) {
       // no load: the engine chases the pedal, and falls away when you lift
       const t = thr > 0.05 ? 0.94 : D.rpmIdle + 0.08;
       this._rpmRaw += (t - this._rpmRaw) * Math.min(1, dt * D.airRevSmooth);

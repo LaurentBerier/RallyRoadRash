@@ -61,6 +61,17 @@ function ok(name, pass, detail) {
 }
 function info(s) { console.log('        \x1b[90m' + s + '\x1b[0m'); }
 
+for(const spec of VEHICLES){
+ const v=new Vehicle(null,flat(),spec,{headless:true});v.placeAt(0,0,0);
+ const locked={throttle:0,brake:1,handbrake:1,steer:0};
+ v.gridThrottle=1;for(let n=0;n<90;n++)v.step(DT,locked);
+ ok(`${spec.id}: grid revs rise without driving`,v.rpmNorm>.8&&Math.hypot(v.pos.x,v.pos.z)<.02);
+ v.gridThrottle=0;for(let n=0;n<90;n++)v.step(DT,locked);
+ ok(`${spec.id}: releasing grid throttle returns to idle`,v.rpmNorm<.3);
+ v.gridThrottle=null;for(let n=0;n<90;n++)v.step(DT,{...locked,throttle:1,brake:0,handbrake:0});
+ ok(`${spec.id}: green flag re-engages drive`,v.speed>1);
+}
+
 const CTL = { throttle: 0, steer: 0, brake: 0, handbrake: 0 };
 const ctl = (t = 0, s = 0, b = 0, h = 0) => {
   CTL.throttle = t; CTL.steer = s; CTL.brake = b; CTL.handbrake = h; return CTL;
@@ -621,7 +632,9 @@ head('(j) VISUALS — procedural build + dispose (DOM stubbed)');
   }
 
   info(`6-car grid would be ~${Math.round(totalTris / 3 * 6)} tris — budget is 450 k in view`);
-  ok('6 cars fit the triangle budget', totalTris / 3 * 6 < 120000,
+  // Smoother tyres and merged rotor/hub hardware: reserve 150k for vehicles,
+  // leaving 300k of the 450k visible-scene budget for track and scenery.
+  ok('6 cars fit the triangle budget', totalTris / 3 * 6 < 150000,
     `${Math.round(totalTris / 3 * 6)} tris`);
   delete globalThis.document;
 }

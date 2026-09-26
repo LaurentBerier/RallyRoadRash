@@ -1,3 +1,5 @@
+import {attachRider,detachRider} from './vehicle-rider.js';
+export {setRiderSource} from './vehicle-rider.js';
 /* ============================================================
    RALLY ROAD RASH — vehicle art
    ------------------------------------------------------------
@@ -34,9 +36,15 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clamp, makeRNG } from '../core/rng.js';
 import { G } from './config.js';
+import { rivalColor } from './racer-colors.js';
 import { liveryTexture, LAYOUTS } from './vehicle-livery.js';
+import { vehicleDecal } from './vehicle-decals.js';
+let exhaustAtlas=null;
+export function setExhaustAtlas(texture){exhaustAtlas=texture;}
+export { setVehicleDecalSource } from './vehicle-decals.js';
 import { noiseCanvas } from '../world/textures.js';
 import { vehicleWear, tireWear } from './vehicle-wear.js';
+import {buildMuffler} from './vehicle-exhaust.js';
 import { attachCarcass, detachCarcass, buildArsenalRig, updateArsenalRig, mudify }
   from './vehicle-carcass.js';
 export { setCarcassSource, setCarcassRenderer } from './vehicle-carcass.js';
@@ -108,7 +116,7 @@ export function buildVehicleVisuals(v, scene, spec) {
 
   const base = new THREE.Color(spec.color);
   base.getHSL(_hsl);
-  const paint = new THREE.Color().setHSL((_hsl.h + hue) % 1, _hsl.s, _hsl.l);
+  const paint = v.livery > 0 ? new THREE.Color(rivalColor(v.livery)) : new THREE.Color(spec.color);
   const paint2 = new THREE.Color().setHSL((_hsl.h + hue + 0.5) % 1,
     _hsl.s * 0.35, _hsl.l * 0.34);
   /* The third colour. paint2 is the body's own shadow — put a graphic in it
@@ -127,6 +135,7 @@ export function buildVehicleVisuals(v, scene, spec) {
     livery: liveryTexture({
       paint, paint2, accent, number: num, layout, rng,
       team: spec.team || spec.name,
+      artwork: v.livery === 0 ? vehicleDecal(spec.id)?.image : null,
     }),
   };
 
@@ -163,6 +172,32 @@ export function buildVehicleVisuals(v, scene, spec) {
   /* The merged panels, by reference: a carcass hides these and nothing
      else on the chassis (the flare, the lamps and the launcher stay). */
   v._bodyMeshes = v.chassis.children.slice();
+  // Keep the rider separate: body-only bike imports do not contain a rider.
+  v._riderMeshes = [];
+  if (spec.bodyStyle === 'bike') {
+    const riderKit = new Kit(), start = v.chassis.children.length;
+    buildBikeRider(riderKit, spec);
+    v.geos.push(...riderKit.flush(v.chassis, M));
+    v._riderMeshes = v.chassis.children.slice(start);
+  }
+  // The bike has no broad door skin: give its graphics a real pair of rally
+  // number boards below the saddle, outside the engine and rider geometry.
+  if (spec.bodyStyle === 'bike') {
+    for (const side of [-1, 1]) {
+      const frame = roundedBox(.025, .36, .74, .012);
+      const backing = new THREE.Mesh(frame, M.dark);
+      v._bodyMeshes.push(backing);
+      backing.position.set(side * .215, .24, -.36);
+      v.chassis.add(backing); v.geos.push(frame);
+      const face = new THREE.PlaneGeometry(.70, .32);
+      const sticker = new THREE.Mesh(face, M.livery);
+      sticker.name = 'hornet-rally-number-board';
+      v._bodyMeshes.push(sticker);
+      sticker.rotation.y = side * Math.PI / 2;
+      sticker.position.set(side * .229, .24, -.36);
+      v.chassis.add(sticker); v.geos.push(face);
+    }
+  }
   buildGlowRig(v, kit, M);
   buildArsenalRig(v, spec, M);
 
@@ -176,6 +211,7 @@ export function buildVehicleVisuals(v, scene, spec) {
   v.sync();
   // last, and asynchronous: the optional GLB. Nothing above waits for it.
   attachCarcass(v, spec, M);
+  attachRider(v,spec);
 }
 
 /* ---------------- materials ----------------
@@ -215,7 +251,7 @@ function buildMaterials(v, paint, paint2, helmet) {
       ...vehicleWear(), color: 0x92958d, metalness: 0.72, roughness: 0.68, envMapIntensity: 1.10,
     }),
     rim: new THREE.MeshStandardMaterial({
-      color: 0x9aa4ad, vertexColors: true, metalness: 0.82, roughness: 0.40, envMapIntensity: 0.90,
+      color: 0x9aa4ad, vertexColors: true, metalness: 0.88, roughness: 0.29, envMapIntensity: 1.10,
     }),
     /* The one flat black on the car, and four of them per machine. Bare, it
        is a silhouette with no surface in it at any distance; `dirt` gives it
@@ -294,18 +330,29 @@ export function setMudLook(v, k01) {
    follow that and the lamp blooms must not. */
 function buildGlowRig(v, kit, M) {
   const F = kit.flameSpec;
-  const flame = new THREE.Mesh(
-    new THREE.ConeGeometry(F.r, F.len, 8, 1, true).rotateX(-Math.PI / 2), M.glow);
+  let geometry;
+  if(exhaustAtlas){
+    const a=new THREE.PlaneGeometry(F.r*6,F.len*1.5);
+    const b=a.clone().rotateY(Math.PI/2);
+    a.translate(0,F.len*.67,0);b.translate(0,F.len*.67,0);
+    a.rotateX(-Math.PI/2);b.rotateX(-Math.PI/2);
+    geometry=mergeGeometries([a,b],false);a.dispose();b.dispose();
+    v._flameUV=geometry.attributes.uv.array.slice();v._flameTime=0;v._flameFrame=-1;
+    M.glow.map=exhaustAtlas;M.glow.side=THREE.DoubleSide;M.glow.toneMapped=false;
+  }else geometry=new THREE.ConeGeometry(F.r,F.len,8,1,true).rotateX(-Math.PI/2);
+  const flame = new THREE.Mesh(geometry, M.glow);
   flame.position.set(F.x, F.y, F.z);
   flame.renderOrder = 6;
   v.chassis.add(flame);
   v.exhaust = flame;
+  flame.position.z += .12;
   v.geos.push(flame.geometry);
+  buildMuffler(v);
 
   const rig = v._glowRig = new THREE.Group();        // the lamp blooms
   const flameRig = v._flameRig = new THREE.Group();  // the flare halo
   rig.position.set(F.x, F.y, F.z);
-  flameRig.position.set(F.x, F.y, F.z);
+  flameRig.position.set(F.x, F.y, F.z + .12);
   v.chassis.add(rig, flameRig);
   const spr = (parent, mat, x, y, z, size) => {
     const s = new THREE.Sprite(mat);
@@ -342,7 +389,7 @@ function buildRunningGear(v, spec, M) {
     calGeo[s] = buildCaliperGeometry(spec.wheelR, visW, s);
   }
   const armGeo = roundedBox(sxs ? 0.075 : 0.11, sxs ? 0.075 : 0.09, 1, 0.028);
-  const coilGeo = new THREE.CylinderGeometry(sxs ? 0.075 : 0.055, sxs ? 0.075 : 0.055, 1, 9);
+  const coilGeo = new THREE.CylinderGeometry(sxs ? 0.075 : 0.055, sxs ? 0.075 : 0.055, 1, 16);
   coilGeo.rotateX(Math.PI / 2);                        // make it a +Z member too
   const shaftGeo = sxs ? (() => { const g = new THREE.CylinderGeometry(0.026, 0.026, 1, 7); g.rotateX(Math.PI / 2); return g; })() : null;
   v.geos.push(wheelGeo, rimGeo[-1], rimGeo[1], calGeo[-1], calGeo[1], armGeo, coilGeo);
@@ -476,11 +523,17 @@ export function updateVehicleVisuals(v, dt) {
     // Single track: both corners of an axle draw on the centreline. The
     // physics hub keeps its real lateral offset; only the picture moves.
     if (bike) _v1.x = 0;
+    if (w.visualFit) {
+      _v1.x += w.side * w.visualFit.outward;
+      _v1.z -= w.visualFit.rearward;
+      _v1.y += S.wheelR * (w.visualFit.radius - 1);
+    }
     w.obj.position.copy(_v1);
     w.obj.rotation.set(0, 0, 0);
     w.obj.rotateY(w.steer);
-    w.obj.rotateX(w.spin);
-    if (w.caliper) w.caliper.rotation.x = -w.spin;      // bolted to the upright
+    if (Math.hypot(v.vel.x,v.vel.z)>.15 || v.airborne) w.displaySpin=(w.displaySpin||0)+w.spinVel*dt;
+    w.obj.rotateX(w.displaySpin||0);
+    if (w.caliper) w.caliper.rotation.x = -(w.displaySpin||0);      // bolted to the upright
     if (w.hubOff) { _v2.copy(_v1); _v2.x += w.hubOff; span(w.arm, w.armRoot, _v2); }
     else span(w.arm, w.armRoot, _v1);
     if (w.coil) span(w.coil, w.coilRoot, _v1);
@@ -535,18 +588,28 @@ export function updateVehicleVisuals(v, dt) {
      either system knowing the other exists. Everything below is a cosmetic
      transient, so Math.random is allowed (hard rule 6). */
   if (v.exhaust) {
-    const heat = v.rpmNorm * Math.max(0, v._ctlThr);
+    if(v._flameUV){
+      v._flameTime=(v._flameTime+dt)%1;
+      const frame=Math.floor(v._flameTime*20)%4;
+      if(frame!==v._flameFrame){
+        const uv=v.exhaust.geometry.attributes.uv;
+        for(let i=0;i<uv.count;i++)uv.setXY(i,(v._flameUV[i*2]+frame)/4,v._flameUV[i*2+1]);
+        uv.needsUpdate=true;v._flameFrame=frame;
+      }
+    }
+    const heat = v.wrecked?0:v.rpmNorm * Math.max(0, v._ctlThr);
     const boost = clamp(Math.max(v._drift.fireTier / 3, (v.extDriveMul - 1) / 0.9), 0, 1);
-    const k = Math.max(heat > 0.35 ? (heat - 0.35) * 1.55 : 0, boost);
+    const k = v.wrecked?0:Math.max(heat > 0.35 ? (heat - 0.35) * 1.55 : 0, boost);
+    if(v._flameLight){v._flameLight.position.copy(v.exhaust.position);v._flameLight.position.z-=.1;v._flameLight.intensity=k*(.85+Math.random()*.15)*2.8;}
     const jit = 0.55 + Math.random() * 0.45;
-    const wide = 0.72 + k * 0.60, long = 0.55 + k * (1.6 + jit * 0.7);
+    const wide = 0.72 + k * 0.60, long = 0.55 + k * (.9 + jit * .3);
     v.exhaust.scale.set(wide, wide, long);
     v.exhaust.material.opacity = k * jit * flick;
     // orange at idle, blue-white at full boost — the same read as a rocket
     v.exhaust.material.color.setRGB(1 - 0.22 * boost, 0.54 + 0.30 * boost, 0.23 + 0.70 * boost);
     v.mats.flameGlow.color.setRGB(1 - 0.14 * boost, 0.56 + 0.28 * boost, 0.28 + 0.62 * boost);
-    v.mats.flameGlow.opacity = k * (0.30 + jit * 0.45) * flick;
-    const fs = 0.26 + k * 0.80;
+    v.mats.flameGlow.opacity = k * (0.16 + jit * 0.20) * flick;
+    const fs = 0.20 + k * 0.40;
     v._sprFlame.scale.set(fs, fs, 1);
     v._sprFlame.position.z = -(0.10 + k * 0.34);
   }
@@ -559,6 +622,7 @@ export function disposeVehicleVisuals(v) {
   if (!v.root) return;
   /* The carcass first, and off the graph: its geometry is shared with every
      other instance of that file, and the traverse below would dispose it. */
+  detachRider(v);
   detachCarcass(v);
   const seenG = new Set(), seenM = new Set();
   v.root.traverse(o => {
@@ -580,8 +644,9 @@ export function disposeVehicleVisuals(v) {
   v.root.parent?.remove(v.root);
   v.root = null; v.chassis = null; v.wheelRoot = null;
   v.exhaust = null; v._glowRig = null; v._flameRig = null; v._sprFlame = null;
+  v._muffler = null;
   v._ghost = null; v._uMud = null; v._bodyMeshes = null;
-  v._muzzle = null; v._rack = null; v._arsenalRig = null;
+  v._muzzle = null; v._muzzles = null; v._rack = null; v._arsenalRig = null;
   for (const w of v.wheels) { w.obj = w.hub = w.arm = w.coil = w.caliper = null; }
 }
 
@@ -698,8 +763,8 @@ function lugGeometry(sx, sy, sz, taper = 0.72) {
  *        toe  0.60   ┌───────────┐         under the flange, so the rim
  * inner wall  0.80   └───────────┘         caps the hole down the axle
  *
- * Sixteen radial segments where the old shells used twenty-four: the lugs
- * carry the silhouette, and the tread's facets are underneath them.
+ * Forty-eight radial segments keep the exposed sidewalls round in the chase
+ * camera while retaining the same closed section and physical wheel fit.
  *
  * `RIM_W` is the same 0.40 the rim builder uses — move one and move both, or
  * the flange ends up outside the rubber.
@@ -708,7 +773,7 @@ function lugGeometry(sx, sy, sz, taper = 0.72) {
  * @param {number} W    nominal tyre width (the section runs 1.2× that)
  * @param {number} seg  radial segments
  */
-export function tyreTubeGeometry(R, W, seg = 16) {
+export function tyreTubeGeometry(R, W, seg = 48) {
   const TR = R * 0.90, BEAD = R * 0.62;
   const SH = W * 0.60, BW = W * RIM_W, CW = SH * 0.78;
   /* LatheGeometry revolves about +Y and derives its normals from the
@@ -809,9 +874,35 @@ function buildRimGeometry(R, W, style, side) {
     g.setAttribute('color',new THREE.BufferAttribute(colors,3));parts.push(g);
   };
 
+  if (style === 'wire') {
+    // A bike is viewed from both sides: open rims, crossed spokes and a small
+    // rotor, never the opaque back caps used by the car wheel dish.
+    for(const sign of [-1,1]) {
+      const hoop=new THREE.TorusGeometry(RR*.95,R*.026,6,40);
+      hoop.rotateY(Math.PI/2);hoop.translate(sign*W*.34,0,0);push(hoop,0xc7cdd0);
+      for(let i=0;i<16;i++) {
+        const angle=i*Math.PI/8, tip=angle+(i%2?-.23:.23);
+        const a=new THREE.Vector3(sign*W*.22,Math.cos(angle)*R*.12,Math.sin(angle)*R*.12);
+        const b=new THREE.Vector3(sign*W*.34,Math.cos(tip)*RR*.95,Math.sin(tip)*RR*.95);
+        const direction=b.clone().sub(a);
+        const spoke=new THREE.CylinderGeometry(R*.012,R*.012,direction.length(),4);
+        spoke.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),direction.normalize()));
+        spoke.translate((a.x+b.x)/2,(a.y+b.y)/2,(a.z+b.z)/2);push(spoke,0xd5d9dc);
+      }
+    }
+    const hub=new THREE.CylinderGeometry(R*.13,R*.13,W*.66,16);
+    hub.rotateZ(Math.PI/2);push(hub,0x858d94);
+    for(const sign of [-1,1]) {
+      const rotor=new THREE.RingGeometry(R*.20,R*.30,32);
+      rotor.rotateY(sign*Math.PI/2);rotor.translate(-W*.23,0,0);push(rotor,0x747e87);
+    }
+    const geometry=mergeGeometries(parts,false);parts.forEach(p=>p.dispose());
+    geometry.computeVertexNormals();return geometry;
+  }
+
   // barrel runs a hair past the tyre bead at ±RIM_W so no grazing angle can
   // find a gap between rubber and rim
-  const barrel = new THREE.CylinderGeometry(RR, RR, W * (RIM_W * 2 + 0.05), 20, 1, true);
+  const barrel = new THREE.CylinderGeometry(RR, RR, W * (RIM_W * 2 + 0.05), 40, 1, true);
   barrel.rotateZ(Math.PI / 2); push(barrel, 0x747b82);
   /* Back of the dish, both ways. Every surface on a merged geometry is
      single-sided, so ONE disc here closes the wheel from outboard and leaves
@@ -824,10 +915,25 @@ function buildRimGeometry(R, W, style, side) {
     push(back, 0x272b31);
   }
   // brake disc: inboard of the face so it reads as being BEHIND the spokes
-  const disc = new THREE.CylinderGeometry(R * 0.50, R * 0.50, W * 0.08, 14);
+  const disc = new THREE.CylinderGeometry(R * 0.50, R * 0.50, W * 0.08, 32);
   disc.rotateZ(Math.PI / 2); disc.translate(-side * W * 0.12, 0, 0); push(disc, 0x62676b);
-  const hub = new THREE.CylinderGeometry(R * 0.17, R * 0.17, W * 0.76, 10);
+  const hub = new THREE.CylinderGeometry(R * 0.17, R * 0.17, W * 0.76, 20);
   hub.rotateZ(Math.PI / 2); push(hub);
+  // Hex wheel nuts and concentric rotor machining are real geometry merged
+  // into the spinning rim, preserving the independent upright/caliper rig.
+  for (let i = 0; i < 5; i++) {
+    const a = i * Math.PI * 2 / 5;
+    const nut = new THREE.CylinderGeometry(R*.035,R*.035,W*.045,6);
+    nut.rotateZ(Math.PI/2);
+    nut.translate(side*W*.395,Math.cos(a)*R*.115,Math.sin(a)*R*.115);
+    push(nut,0xd0d3d5);
+  }
+  for (const radius of [.35,.43,.48]) {
+    const groove = new THREE.RingGeometry(R*(radius-.005),R*radius,48);
+    groove.rotateY(side*Math.PI/2);
+    groove.translate(-side*W*.12+side*W*.041,0,0);
+    push(groove,0x343b42);
+  }
 
   /** A radial member lying in the face plane: thickness across the axle,
       width around the wheel, growing outward from `r0`. */
@@ -846,7 +952,7 @@ function buildRimGeometry(R, W, style, side) {
     push(g);
   };
   const ring = (ri, ro, dx) => {
-    const g = new THREE.RingGeometry(ri, ro, 20, 1);
+    const g = new THREE.RingGeometry(ri, ro, 40, 1);
     g.rotateY(side * Math.PI / 2); g.translate(face + side * dx, 0, 0); push(g);
   };
   const cap = (r, dx) => {
@@ -1405,6 +1511,11 @@ function buildBike(kit, spec) {
   kit.glow('head', 0, Y(HEAD + 0.22), zF + 0.06, 0.55);
   kit.glow('brake', 0, Y(1.04), zR + 0.08, 0.34);
 
+}
+
+function buildBikeRider(kit, spec) {
+  const Y = h => h - spec.comHeight;
+  const BAR = 1.28, barZ = spec.wheelbase.front - .19;
   /* ---- rider. Up on the pegs, weight over the back wheel, elbows out: the
      attack position, and the one pose that reads as motocross rather than as
      a commuter. The helmet is the highest thing on the machine and `dims.H`

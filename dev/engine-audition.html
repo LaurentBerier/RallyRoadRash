@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><base href="../"><title>Engine mix comparison</title><link rel="icon" type="image/png" href="assets/sandscape-favicon.png" />
+<link rel="apple-touch-icon" href="assets/sandscape-apple-touch-icon.png" />
+</head><body style="background:#191919;color:#eee;font:16px sans-serif;padding:24px"><h1>Engine mix comparison</h1><p>Idle, acceleration, gear change, lift-off. Music is omitted from these engine-only auditions.</p><button id="run">Render engine auditions</button><pre id="status">Ready</pre><div id="clips"></div><script type="module">
+import {Audio} from './src/core/audio.js';
+const status=document.querySelector('#status'),clips=document.querySelector('#clips');
+const db=x=>(20*Math.log10(Math.max(x,1e-9))).toFixed(1);
+function wav(buffer){const len=buffer.length,arr=new ArrayBuffer(44+len*4),v=new DataView(arr),str=(p,s)=>{for(let i=0;i<s.length;i++)v.setUint8(p+i,s.charCodeAt(i));};str(0,'RIFF');v.setUint32(4,36+len*4,true);str(8,'WAVE');str(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,2,true);v.setUint32(24,buffer.sampleRate,true);v.setUint32(28,buffer.sampleRate*4,true);v.setUint16(32,4,true);v.setUint16(34,16,true);str(36,'data');v.setUint32(40,len*4,true);for(let c=0;c<2;c++){const d=buffer.getChannelData(c);for(let i=0;i<len;i++)v.setInt16(44+i*4+c*2,Math.max(-32767,Math.min(32767,d[i]*32767)),true);}return arr;}
+document.querySelector('#run').onclick=async()=>{
+ document.querySelector('#run').disabled=true;
+ try{
+ for(const id of ['hopper','ridgeback','redline','moto']){
+  const ctx=new OfflineAudioContext(2,24000*7,24000),a=new Audio();
+  // Engine-only diagnostic: avoid decoding unused full music tracks.
+  a._music.load=async()=>{};a.init(ctx);a.setEngineCharacter(id);a.setDriving(true);
+  for(let i=0;i<200&&a._engineTextures.voices.size<4;i++)await new Promise(r=>setTimeout(r,50));
+  if(a._engineTextures.voices.size!==4)throw Error('Engine decode failed');
+  for(let t=0;t<7;t+=1/60){a.timeBase=t;let rpm=t<1?.16:t<4?.16+(t-1)*.27:t<5?.57+(t-4)*.25:.8-(t-5)*.22;const load=t<1?0:t<5?.95:.08;a.update(1/60,{rpm,load,gear:t<4?1:2,speed:0,contacts:4,engineOff:false});}
+  const b=await ctx.startRendering(),d=b.getChannelData(0);let power=0,peak=0;for(let i=48000;i<96000;i++){power+=d[i]*d[i];peak=Math.max(peak,Math.abs(d[i]));}
+  const level=Math.sqrt(power/48000);if(peak>=.99||level<.03)throw Error(id+' invalid engine output '+db(level)+' / '+db(peak));
+  status.textContent+='\n'+id+': acceleration RMS '+db(level)+' dBFS, peak '+db(peak)+' dBFS';
+  const p=document.createElement('p');p.textContent=id;const el=document.createElement('audio');el.controls=true;el.src=URL.createObjectURL(new Blob([wav(b)],{type:'audio/wav'}));clips.append(p,el);
+ }
+ status.textContent+='\nPASS: four engines rendered, level and headroom checks passed.';
+ }catch(e){status.textContent+='\nFAIL '+e.stack;}finally{document.querySelector('#run').disabled=false;}
+};
+</script></body></html>

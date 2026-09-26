@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>RALLY ROAD RASH — model viewer</title>
 <!-- ?veh=hopper|ridgeback|redline|moto  &livery=0..4  &sky=training|canyon|forest|volcano
-     &ang=0|90|180|270  &model=0|1  &ammo=N  &env=sky|image|none  — see garage.js -->
+     &ang=0|90|180|270  &model=0|1  &ammo=N  &env=sky|image|none  &speedblur=0..1 &nitro=0..1 — see garage.js -->
 
 <style>
   html,body{margin:0;height:100%;background:#0b0d10;overflow:hidden}
@@ -20,6 +20,8 @@
 <script type="importmap">
 { "imports": { "three": "../vendor/three/three.module.js", "three/addons/": "../vendor/three/examples/jsm/" } }
 </script>
+<link rel="icon" type="image/png" href="../assets/sandscape-favicon.png" />
+<link rel="apple-touch-icon" href="../assets/sandscape-apple-touch-icon.png" />
 </head>
 <body>
 <canvas id="stage"></canvas>

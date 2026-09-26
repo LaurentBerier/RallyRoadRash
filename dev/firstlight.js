@@ -24,6 +24,7 @@
    Console: FL.at(s) teleports, FL.census() counts the dressing,
    FL.frameMs() is the rolling mean frame time. */
 import * as THREE from 'three';
+import { CameraRig } from '../src/game/camera.js';
 import { Engine } from '../src/core/engine.js';
 import { bakeTrack, Terrain } from '../src/world/terrain.js';
 import { TRACKS } from '../src/world/tracks/index.js';
@@ -35,7 +36,8 @@ import { Vehicle } from '../src/game/vehicle.js';
 import { VEHICLE_BY_ID } from '../src/game/vehicles.js';
 import { SURFACES } from '../src/world/surfaces.js';
 import { loadAssets, Assets } from '../src/core/assets.js';
-import { setCarcassSource, setCarcassRenderer } from '../src/game/vehicle-art.js';
+import { setVehicleExplosionAtlas } from '../src/world/vehicle-hit-fx.js';
+import { setRiderSource, setCarcassSource, setCarcassRenderer, setVehicleDecalSource, setExhaustAtlas } from '../src/game/vehicle-art.js';
 import { setGroundTexture } from '../src/world/terrain-shader.js';
 
 const stats = document.getElementById('stats');
@@ -80,10 +82,14 @@ async function boot() {
   });
 
   const A = new Assets(await assetsJob);
+  setVehicleDecalSource(id => A.get('vehicles/' + id + '-livery'));
+  setExhaustAtlas(A.get('fx/exhaust-frames'));
+  setVehicleExplosionAtlas(A.get('fx/vehicle-explosion'));
   setHeroSource((key) => A.url(key));
-  setCarcassSource((id, level) => A.url('models/' + id + '-carcass' + (level === 'high' ? '-high' : '')));
+  setRiderSource(()=>A.url('models/hornet-rider'));
+setCarcassSource((id, level) => A.url('models/' + id + '-carcass' + (level === 'high' ? '-high' : '')));
   const terrain = new Terrain(engine.renderer, baked, engine.quality, engine.caps, def);
-  const groundProfile=def.theme==='forest'?'forest':'quarry';
+  const groundProfile=def.theme==='thunder'?'thunder':def.theme==='forest'?'forest':'quarry';
   setGroundTexture(terrain, A.get('ground'),A.get('terrain/'+groundProfile+'-ground'),
     A.get('terrain/'+groundProfile+'-normal'),A.get('terrain/quarry-cliff'),A.get('terrain/quarry-cliff-normal'));
   engine.scene.add(terrain.group);
@@ -105,6 +111,8 @@ async function boot() {
   }
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData,
     A.get('foliage/spruce'), { scrub: A.get('foliage/'+def.theme) || A.get('foliage/scrub'), sagebrush: ['training','canyon','thunder'].includes(def.theme)?A.get('foliage/training-sagebrush'):null, cliff: A.get('terrain/cliff'),
+      warningSigns:['left','right','jump'].map(n=>A.get('signage/warning-'+n)),
+      banner:{fabric:A.get('signage/rally-banner-fabric'),gantry:A.get('signage/road-rash-finished'),atlas:A.get('signage/track-banners-atlas')},
       rockHigh:A.url('models/quarry/boulder-high'),rockLow:A.url('models/quarry/boulder-low'),rockMobile:A.url('models/quarry/boulder-mobile') });
   const dust = new Dust(engine.scene, terrain, terrain.uniforms.uSunDir, engine.quality.dust, def.theme);
   const vfx = new VFX(engine.scene, dust, engine.quality, def.theme);
@@ -124,8 +132,16 @@ async function boot() {
     const d = spline.dirAt(spline.wrapS(s), {});
     veh.placeAt(p.x, p.z, Math.atan2(d.x,d.z));
   }
+  const chaseRig=q.has('chase')?new CameraRig(engine.camera,terrain):null;
+  if(chaseRig)chaseRig.snapBehind(veh);
   terrain.sunDir.copy(sky.sunDir);
   terrain.uniforms.uSunDir.value.copy(sky.sunDir);
+  // Match main.js syncSun so review frames use the playable game's key hue.
+  {
+    const c=sky.sunColor,t=terrain.uniforms.uSunCol.value;
+    const k=(.2126*t.x+.7152*t.y+.0722*t.z)/Math.max(.0001,.2126*c.r+.7152*c.g+.0722*c.b);
+    t.set(c.r*k,c.g*k,c.b*k);
+  }
 
   /* Debug handle. Everything the harness built, so a console (or an
      automation tool that cannot wait out a lap) can teleport the car to a
@@ -136,6 +152,7 @@ async function boot() {
       const p = spline.offsetPoint(spline.wrapS(s), lat, {});
       const d = spline.dirAt(spline.wrapS(s), {});
       veh.placeAt(p.x, p.z, Math.atan2(d.x, d.z));
+      if(chaseRig) chaseRig.snapBehind(veh);
       return veh.pos.clone();
     },
     /* What the dressing pass actually produced, for a quick sanity read. */
@@ -168,6 +185,7 @@ async function boot() {
     document.body.append(select);
   }
   const _out = {}, _v = new THREE.Vector3();
+  let dustPreviewAt=0;
   let elapsed = 0, last = performance.now(), frames = 0, ft = 0, fps = 0;
   let ftMean = 1 / 60;
 
@@ -257,6 +275,8 @@ async function boot() {
     // made material A/B captures incomparable after a minute of inspection.
     if(!q.has('still')) veh.step(dt,ctl);
     else if(renderedFrames<90) veh.step(1/60,ctl);
+    if(q.has('flame'))veh.extDriveMul=1.9;
+    if(q.has('ammo'))veh.ammo=Math.max(0,Math.min(12,Number(q.get('ammo'))||0));
     veh.updateVisuals(dt);
 
     // wheel dust + tyre marks, minimal port of the planned race loop
@@ -264,9 +284,10 @@ async function boot() {
       if (!w.contact) continue;
       const S = SURFACES[w.surface] || SURFACES[1];
       if (veh.speed > 1 && (w.slipLong > 0.25 || w.slipLat > 0.3) && Math.random() < S.dust * 0.5) {
+        const c=dust.groundColorAt(w.worldPos.x,w.worldPos.z,S.dustCol);
         dust.spawn(1, w.worldPos.x, w.worldPos.y - 0.2, w.worldPos.z,
           0.4 + veh.speed * 0.03, 0.25, -veh.forward.x, -veh.forward.z,
-          S.dustCol[0], S.dustCol[1], S.dustCol[2], 0);
+          c[0], c[1], c[2], 0);
       }
     }
 
@@ -284,15 +305,41 @@ async function boot() {
       engine.camera.lookAt(veh.pos.x + veh.forward.x * 6, veh.pos.y + 1, veh.pos.z + veh.forward.z * 6);
     }
 
+    if(chaseRig)chaseRig.update(dt,veh,null);
+    if(q.has('postcard')) {
+      veh.root.visible=false;
+      if(engine.canvas.width!==1024 || engine.canvas.height!==1024){
+      engine.renderer.setPixelRatio(1);engine.renderer.setSize(1024,1024,false);
+      engine.camera.aspect=1;engine.camera.updateProjectionMatrix();
+      if(engine.composer){engine.composer.setPixelRatio(1);engine.composer.setSize(1024,1024);engine.final.uniforms.uRes.value.set(1024,1024);}
+      }
+      const s=Number(q.get('s'))||900,eye=spline.offsetPoint(s-25,-10,{}),target=spline.posAt(s+55,{});
+      engine.camera.position.set(eye.x,terrain.heightAt(eye.x,eye.z)+12,eye.z);
+      engine.camera.lookAt(target.x,terrain.heightAt(target.x,target.z)+3,target.z);
+    }
+    if(q.has('hero')) {
+      const model=props.heroModels.find(m=>m.name===q.get('hero'));
+      if(model){const box=new THREE.Box3().setFromObject(model),c=box.getCenter(new THREE.Vector3());engine.camera.position.set(c.x+19,c.y+9,c.z+21);engine.camera.lookAt(c);}
+    }
     if (fxOn) exerciseVfx(dt);
+    if(q.has('hit') && renderedFrames%150===0) vfx.vehicleHit(veh.pos.x,veh.pos.y,veh.pos.z,veh.spec.color);
 
     engine.renderer.info.reset();
     terrain.update(dt, engine.camera, sky.sunDir);
     sky.update(dt, engine.camera, elapsed);
     if (envMode === 'none') engine.scene.environment = null;
     props.update(dt, elapsed, engine.camera);
+    if(q.has('dust')&&elapsed>=dustPreviewAt){
+      dustPreviewAt=elapsed+1.5;
+      dust.burst(veh.pos.x,terrain.heightAt(veh.pos.x,veh.pos.z),veh.pos.z,0,.8);
+      if(q.get('dust')==='range') for(const d of [35,90,170]){
+        const x=veh.pos.x+veh.forward.x*d,z=veh.pos.z+veh.forward.z*d;
+        dust.burst(x,terrain.heightAt(x,z),z,0,.8);
+      }
+    }
     dust.update(dt);
     vfx.update(dt, engine.camera);
+    if(q.get('hit')==='hold'){vfx.hits.effects[0].age=.28;}
     sky.projectSun(engine.camera, engine.final.uniforms.uSunUV.value);
     engine.aimShadow(veh.pos, sky.sunDir);
     engine.render(dt);

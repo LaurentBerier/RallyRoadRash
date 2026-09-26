@@ -1,0 +1,5 @@
+# Hornet higher three-quarter view
+
+Built-in ImageGen. Output: assets/vehicles/moto-unarmed-views/threequarter-high.png.
+
+Edit the reference to a slightly higher front three-quarter camera view of the EXACT same HORNET RACING #41 yellow motocross static carcass. Raise camera to about 35 degrees above horizontal looking down so clearly more of the saddle, fuel tank cap, handlebars and top surfaces of both fenders are visible. Preserve same azimuth and visible side, front points image right. Not top down. Preserve proportions, all weathered yellow riveted armor, hornet graphic, 41, HORNET RACING, DUST FUEL and GRIT TYRE lettering, black seat, exposed engine/frame, normal engine exhaust, headlight and fender spikes. No cannon, rockets, launchers, weapon brackets, wheels, tyres, hubs, lower forks, shocks, suspension, swingarm or rider. Change camera elevation only, no new accessories. Entire body fits with comfortable margins on same neutral light gray studio background. Crisp high resolution realistic concept render. One standalone image no labels or collage.

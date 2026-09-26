@@ -1,0 +1,37 @@
+[
+  {
+    "source": "hopper-sunstrike.glb",
+    "output": "hopper-sunstrike-stream.glb",
+    "before": 26911016,
+    "after": 10836560,
+    "geometryBytesPreserved": 703722
+  },
+  {
+    "source": "ridgeback-custom.glb",
+    "output": "ridgeback-custom-stream.glb",
+    "before": 46267644,
+    "after": 19206200,
+    "geometryBytesPreserved": 741956
+  },
+  {
+    "source": "redline-custom.glb",
+    "output": "redline-custom-stream.glb",
+    "before": 52214384,
+    "after": 22766616,
+    "geometryBytesPreserved": 813616
+  },
+  {
+    "source": "moto-custom.glb",
+    "output": "moto-custom-stream.glb",
+    "before": 25848368,
+    "after": 11102200,
+    "geometryBytesPreserved": 687828
+  },
+  {
+    "source": "hornet-rider.glb",
+    "output": "hornet-rider-stream.glb",
+    "before": 3884948,
+    "after": 2251476,
+    "geometryBytesPreserved": 349728
+  }
+]

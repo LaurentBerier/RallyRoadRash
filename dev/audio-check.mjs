@@ -24,6 +24,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Audio } from '../src/core/audio.js';
 import { MusicBank, MUSIC_CUES } from '../src/core/music.js';
+import { ENGINE_CUES, EngineTextures } from '../src/core/engine-textures.js';
 import { SfxBank, SFX_CUES } from '../src/core/sfx.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -70,6 +71,10 @@ function checkSection(sectionName, cueNames, dirName, sourceFile) {
 }
 checkSection('music', MUSIC_CUES, 'music', 'music.js MUSIC_CUES');
 checkSection('sfx', SFX_CUES, 'sfx', 'sfx.js SFX_CUES');
+checkSection('engines', ENGINE_CUES, 'engines', 'engine-textures.js');
+const emptyEngine = new EngineTextures({ctx:null,now:()=>0});
+await emptyEngine.load();
+emptyEngine.update(.5,1,0);
 
 /* ---- 3: `new Audio()` with no context never throws, for every cue ---- */
 try {

@@ -54,7 +54,7 @@ const LAYER_SIZE = 512;      // every ground layer is resampled to this square
  * @param {string} manifestUrl  relative, e.g. 'assets/manifest.json'
  * @returns {Promise<Map<string, THREE.Texture|null>>} never rejects
  */
-export async function loadAssets(manifestUrl = 'assets/manifest.json', onProgress = () => {}, quality = 'HIGH') {
+export async function loadAssets(manifestUrl = 'assets/manifest.json', onProgress = () => {}, quality = 'HIGH', include = () => true) {
   const out = new Map();
   let manifest = null;
   try {
@@ -73,23 +73,30 @@ export async function loadAssets(manifestUrl = 'assets/manifest.json', onProgres
   if (!manifest || typeof manifest !== 'object') return out;
 
   const base = manifestUrl.replace(/[^/]*$/, '');       // 'assets/'
-  const jobs = [];
-  for (const id of Object.keys(manifest)) {
-    const spec = manifest[id] || {};
-    if (spec.kind === 'model') {
-      // A url, resolved against the manifest, and no request. models.js does
-      // the fetching; a missing file is its problem and its fallback.
-      if (spec.url) out.set(id, base + spec.url);
-    } else if (spec.kind === 'layers') {
-      jobs.push(loadLayers(base, spec).then(t => out.set(id, t)));
-    } else {
-      const low=['LOW','MEDIUM'].includes(String(quality).toUpperCase());
-      jobs.push(loadOne(base + (low && spec.lowUrl || spec.url), spec.kind).then(t => out.set(id, t)));
-    }
+  const pending=new Map(), active=new Map(), cache=new Map();
+  const low=['LOW','MEDIUM'].includes(String(quality).toUpperCase());
+  for(const [id,spec] of Object.entries(manifest)) {
+    if(spec.kind==='model'){if(spec.url)out.set(id,base+spec.url);continue;}
+    pending.set(id,()=>{
+      const url=base+(low&&spec.lowUrl||spec.url);
+      const key=spec.kind==='layers'?JSON.stringify(spec.layers):spec.kind+':'+url;
+      if(!cache.has(key))cache.set(key,spec.kind==='layers'?loadLayers(base,spec):loadOne(url,spec.kind));
+      return cache.get(key);
+    });
   }
-  let completed = 0;
-  await Promise.all(jobs.map(job => job.finally(() => onProgress(++completed / jobs.length))));
-  onProgress(1);
+  // Deferred groups share the same map and in-flight promises. Six workers
+  // avoid a request/decode storm, and aliases share one texture allocation.
+  out.ensure=async(predicate=()=>true,progress=()=>{})=>{
+    const ids=[...pending.keys()].filter(predicate);let cursor=0,done=0;
+    await Promise.all(Array.from({length:Math.min(6,ids.length)},async()=>{
+      while(cursor<ids.length){const id=ids[cursor++];
+        if(!active.has(id))active.set(id,pending.get(id)().then(t=>{out.set(id,t);pending.delete(id);}));
+        await active.get(id);progress(++done/ids.length);
+      }
+    }));
+    progress(1);
+  };
+  await out.ensure(include,onProgress);
   return out;
 }
 
@@ -289,6 +296,7 @@ export class Assets {
       A `model` entry is a url string and deliberately does NOT answer here —
       handing a string to something expecting a Texture fails deep inside
       three, a long way from the manifest typo that caused it. */
+  ensure(predicate, onProgress) { return this.map.ensure?.(predicate,onProgress) || Promise.resolve(); }
   get(id) {
     const v = this.map.get(id);
     return (v && typeof v !== 'string') ? v : null;
@@ -301,7 +309,7 @@ export class Assets {
   /** True if anything at all loaded — for a one-line boot log. */
   get any() { return [...this.map.values()].some(Boolean); }
   dispose() {
-    for (const t of this.map.values()) if (t && typeof t !== 'string') t.dispose();
+    for (const t of new Set(this.map.values())) if (t && typeof t !== 'string') t.dispose();
     this.map.clear();
   }
 }

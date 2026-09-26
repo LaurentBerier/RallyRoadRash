@@ -682,6 +682,13 @@ export function rampRise(u, h) { return h * (0.25 * u + 0.75 * u * u); }
 export const DROP_RUN = 8;
 
 /* ---------------- checkpoints ---------------- */
+// Shared with barriers: legal shoulder/jump lines must also clear checkpoints.
+export function raceCorridorHalfWidth(spline, jumps, s) {
+  const L=spline.length;
+  const nearJump=(jumps||[]).some(j=>{const d=Math.abs(spline.wrapS(s)-spline.wrapS(j.s));return Math.min(d,L-d)<100;});
+  return spline.widthAt(s)*(nearJump?1.85:1.5)+2.5;
+}
+
 function buildCheckpoints(trackDef, spline, routes, jumps) {
   const L = spline.length;
   const TARGET = 125;
@@ -723,7 +730,7 @@ function buildCheckpoints(trackDef, spline, routes, jumps) {
     const p = spline.posAt(s, { x: 0, y: 0, z: 0 });
     const w = spline.widthAt(s);
     cps.push({
-      x: p.x, z: p.z, y: p.y, r: Math.max(10, w + 4), s, idx: i,
+      x: p.x, z: p.z, y: p.y, r: Math.max(10, w + 4), captureR: raceCorridorHalfWidth(spline,jumps,s), s, idx: i,
       // Gates every other checkpoint: enough to read the course ahead without
       // building a slalom out of scenery. Never on a jump lip — a gantry there
       // is something to land on.
@@ -750,7 +757,7 @@ function buildCheckpoints(trackDef, spline, routes, jumps) {
       const p = rt.spline.posAt(ss, { x: 0, y: 0, z: 0 });
       const w = rt.spline.widthAt(ss);
       cps.push({
-        x: p.x, z: p.z, y: p.y, r: Math.max(10, w + 4),
+        x: p.x, z: p.z, y: p.y, r: Math.max(10, w + 4), captureR: raceCorridorHalfWidth(rt.spline,rt.jumps,ss),
         s: main.s, idx: main.idx, big: false, jump: false,
         alt: true, altS: ss, route: rt.idx
       });

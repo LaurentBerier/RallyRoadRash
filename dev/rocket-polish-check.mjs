@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import * as THREE from 'three';
+import { Vehicle } from '../src/game/vehicle.js';
+import { VEHICLES } from '../src/game/vehicles.js';
+import { Arsenal } from '../src/game/arsenal.js';
+import { makeArsenal } from '../src/game/weapons.js';
+import { VehicleHitFX, setVehicleExplosionAtlas } from '../src/world/vehicle-hit-fx.js';
+const terrain={heightAt:()=>0,normalAt:(x,z,e,out)=>out.set(0,1,0),surfaceAt:()=>1,onRoad:()=>1};
+for(const spec of VEHICLES){
+ const v=new Vehicle(null,terrain,spec,{headless:true});v.placeAt(0,0);
+ let burst=0,killed=0;
+ const a={pX:[0],pY:[1],pZ:[0],pOwner:[1],pVX:[0],pVZ:[10],pArm:[0],st:[{ars:makeArsenal(spec.id)},{ars:makeArsenal(spec.id)}],racers:[{vehicle:v},{id:42,finished:true,vehicle:{}}],terrain,audio:{},playerIdx:0,spline:{nearest:()=>({s:123})},vfx:{shock(){},sparks(){},vehicleHit(){burst++}},_hear:()=>false,_blastFeel(){},_spin(){},_launch(){v.vel.y=4},_killProj(){killed++}};
+ Arsenal.prototype._explode.call(a,0,0);
+ assert.equal(v.wrecked,true);assert.equal(v.wreckS,123);assert.equal(v.wreckAttacker,42);assert.equal(burst,1);assert.equal(killed,1);assert.equal(v.vel.y,4);
+ Arsenal.prototype._explode.call(a,0,0);assert.equal(burst,1,'wreck cannot retrigger');
+ v.placeAt(4,4);assert.equal(v.wrecked,false);assert.equal(v.wreckS,null);assert.equal(v.wreckAttacker,null);
+}
+const scene=new THREE.Scene();const texture=new THREE.Texture();setVehicleExplosionAtlas(texture);
+const fx=new VehicleHitFX(scene,terrain,true);
+for(let i=0;i<20;i++)fx.hit(0,1,0);
+assert.equal(fx.shards.length,24);assert.equal(fx.effects.length,6);
+fx.update(.2);assert.ok(fx.fire.visible);assert.ok(fx.debris.visible);assert.ok(fx.light.intensity>0);
+assert.ok(fx.chunks.visible,'impact includes small solid chunks');
+assert.ok(fx.debris.material.map?.isDataTexture&&fx.debris.material.roughnessMap,'debris uses vehicle wear and roughness textures');
+assert.ok(fx.debris.geometry.attributes.uv&&fx.chunks.geometry.attributes.uv,'both shapes have texture coordinates');
+const plates=fx.shards.filter(p=>p.life>0&&!p.chunk),chunks=fx.shards.filter(p=>p.life>0&&p.chunk);
+assert.ok(plates.length>=chunks.length*2,'medium plates dominate the burst');
+assert.ok(plates.every(p=>p.sx>=.30&&p.sz>=.38&&p.sy<=.045),'plates retain thin sheet-metal proportions');
+assert.ok(chunks.every(p=>p.sx<.20&&p.sz<.23),'solid chunks remain small');
+for(let i=0;i<180;i++)fx.update(1/60);
+assert.equal(fx.fire.visible,false);assert.equal(fx.debris.visible,false);assert.equal(fx.light.intensity,0);
+assert.equal(fx.chunks.visible,false);
+fx.dispose();assert.equal(scene.children.length,0);
+console.log('rocket-polish: direct hits, all vehicle resets, bounded FX and cleanup pass');

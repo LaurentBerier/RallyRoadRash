@@ -1,0 +1,15 @@
+# Hornet rider and rocket recovery — September 25
+
+The Hornet now uses `assets/models/hornet-rider.glb`: a posed, textured motocross character, 5,296 triangles, three embedded 1024px maps, 3.9 MB. Geometry/textures share the model cache; instances own only materials. The character follows the existing bike lean/chassis hierarchy. The primitive fallback is hidden only after the imported rider loads, and cannot reappear when the body LOD resolves. The garage preload includes the rider. This is a static riding pose, not a separately animated skeletal rig.
+
+Concept generated with the built-in image tool; mesh generated with the Sandscape asset skill. The server rejected mesh reduction flags without charging, so generation used the default mesh pipeline. The resulting mesh was already below the intended 12k triangle budget. Charged 80 coins; approved balance remaining 100.
+
+## Concept prompt
+Create one production 3D character concept for image-to-3D reconstruction: a single full-body adult motocross rider in a compact seated motorcycle riding pose, WITHOUT ANY MOTORCYCLE or seat or props. Weathered death-race desert motorsport art direction, realistic game character, worn ochre mustard and charcoal protective textile suit, molded knee guards and elbow guards, rugged dusty brown motocross boots, black gloves, scratched full-face motocross helmet with goggles and angular visor, protective chest armor. Lean torso forward about 25 degrees, both arms forward with elbows bent and fists holding imaginary handlebars shoulder width apart, thighs forward and knees bent, boots down under knees. Correct human anatomy. Entire character clearly visible isolated on plain light gray background, studio soft lighting, front three-quarter view slightly elevated, no shadows obscuring limb separation. No gun, no bike, no pedestal, no text, no additional views. High detail fabric seams, straps and buckles, readable clean silhouette. Square 1024 image.
+
+## Recovery
+Rocket wreck hold is 2.25 seconds minimum and 3.4 seconds maximum in flight, with grounded settling. Explosion atlas lasts 1.6 seconds; debris 2.6–3.2 seconds with unchanged pool limits. The direct projectile owner is retained until reset. Recovery aims 14 metres behind an attacker up to 100 metres ahead, with at most 65 metres of catch-up before terrain safety adjustment. Behind/lapped/finished/missing attackers do not award catch-up.
+
+Recovery checks the pending checkpoint including its capture radius, ramps, takeoffs, gaps, landings, ground height/slope across the vehicle footprint, 18 metres of forward runout and solid props. It prefers a safe spot behind the target; tight sectors can retreat to the previous approach without granting a checkpoint. These checks run only at reset.
+
+Validation: full test suite; recovery at 194 baked terrain positions over all five stages; attacker fairness, track seam, consecutive jumps, ditch, obstacles and no checkpoint bypass. Imported rider visually inspected in garage and the low-quality Canyon chase view without browser warnings/errors. Low-quality desktop preview is not a physical mobile-device benchmark.

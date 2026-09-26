@@ -1612,7 +1612,7 @@ export function makeGridProfiles(count, difficulty01, rng) {
   const r = typeof rng === 'function' ? rng : Math.random;
   const d = clamp(difficulty01 === undefined ? 0.5 : difficulty01, 0, 1);
   const cnt = Math.max(1, count | 0);
-  const base = 0.30 + 0.55 * d;              // difficulty 0 → 0.30, 1 → 0.85
+  const base = 0.38 + 0.53 * d;              // stronger field: 0.38 easy floor, 0.91 hard ceiling
   const out = new Array(cnt);
 
   // names without repeats, deterministic
@@ -1629,7 +1629,7 @@ export function makeGridProfiles(count, difficulty01, rng) {
        who will not move over is the most memorable car on the grid. */
     const aggression = clamp(0.22 + 0.56 * r() + 0.22 * d, 0, 1);
     // …consistency is, though. Fast drivers make fewer mistakes.
-    const consistency = clamp(0.34 + 0.52 * skill + (r() - 0.5) * 0.16, 0.05, 0.99);
+    const consistency = clamp(0.42 + 0.52 * skill + (r() - 0.5) * 0.16, 0.05, 0.99);
     const p = {
       name: pool[i % pool.length] + (i >= pool.length ? ' ' + (i + 1) : ''),
       skill, aggression, consistency,

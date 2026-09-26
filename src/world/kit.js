@@ -180,7 +180,7 @@ export const KIT_PALETTE = {
      every one of those is either rim-lit or a silhouette, and a muted accent
      would simply disappear. */
   thunder: {
-    wood: 0x9a7448, timber: 0x74522e, metal: 0x9a9088, rust: 0xa85a24,
+    wood: 0x8f785b, timber: 0x645548, metal: 0x555d62, rust: 0x86604a,
     paint: 0xe4d2b0, paintAlt: 0xff5edc, canvas: 0xf0dcb4, canvasAlt: 0x2ad2ff,
     foliage: 0x5a6c3a, foliageAlt: 0x84904a, bark: 0x66502e, dead: 0xb09a68,
     concrete: 0xa89478, dirt: 0xba9660, glass: 0x2e2420, hazard: 0xf0b21a,

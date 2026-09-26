@@ -93,18 +93,16 @@ export const THEMES = {
     surf: { 4: [0.19, 0.20, 0.22], 1: [0.25, 0.23, 0.22], 2: [0.25,0.25,0.27] }
   },
   thunder: {
-    // The canyon family an hour later. Sun nine degrees off the deck, so the
-    // ground reads almost entirely by its own ambient — which is why the
-    // hemisphere is violet and lifted rather than the usual desert blue.
+    // Muted earth and cool fill preserve separation from warm sandstone.
     // sun MUST equal SKY_THEMES.thunder.sunDir: the occlusion mask is baked
     // against exactly this vector.
-    name: 'THUNDER MESA',
+    name: 'THUNDER PARK',
     albedoScale: 0.68,
-    sun: [-0.463692, 0.156434, -0.872076], sunCol: [1.56, 1.10, 0.76],
-    sky: [0.30, 0.28, 0.46], ground: [0.40, 0.26, 0.18], ambient: 0.60,
-    haze: [0.86, 0.55, 0.32], hazeDensity: 0.00042, hazeStart: 110,
-    tint: [1.10, 0.94, 0.82],
-    surf: { 4: [0.50, 0.28, 0.20], 1: [0.48, 0.33, 0.22] }
+    sun: [0.719846, 0.342020, 0.604023], sunCol: [1.65, 1.38, 1.04],
+    sky: [0.43, 0.55, 0.72], ground: [0.32, 0.28, 0.22], ambient: 0.52,
+    haze: [0.58, 0.65, 0.73], hazeDensity: 0.00125, hazeStart: 65,
+    tint: [1.00, 1.00, 1.00],
+    surf: { 4: [0.36, 0.25, 0.18], 1: [0.34, 0.25, 0.18], 2: [0.44, 0.35, 0.245], 5: [0.25, 0.25, 0.16] }
   }
 };
 
@@ -370,6 +368,11 @@ export function buildTerrainMaterial(t) {
          would draw a visible ring on the ground where the effects stop. */
       float dnear = 1.0 - smoothstep(30.0, 82.0, dist);
       float gnear = 1.0 - smoothstep(24.0, 60.0, dist);
+      #ifdef THUNDER_PARK
+      // Mip-filtered base colour remains on distant jump faces. Micro-normal
+      // work still uses dnear and ends before the coarse geometry rings.
+      gnear=1.0-smoothstep(65.0,240.0,dist);
+      #endif
 
       /* ---- which surface are we standing on ----
          The map is NEAREST because an id has no meaning halfway between two
@@ -617,6 +620,9 @@ export function buildTerrainMaterial(t) {
           vec2 qUV=vW.xz*((sid==0||sid==1)? .38 : .22);
           vec3 fine=texture2D(uQuarryGround,qUV).rgb;
           fine=mix(fine,texture2D(uQuarryGround,RA*qUV*.51+.31).rgb,.18);
+          #ifdef THUNDER_PARK
+          fine=vec3(dot(fine,vec3(.2126,.7152,.0722)));
+          #endif
           #ifdef FOREST_GROUND
           sampleGround=mix(sampleGround,fine,.90*(1.-smoothstep(.05,.8,vRoad)*.8));
           #else
@@ -656,6 +662,15 @@ export function buildTerrainMaterial(t) {
       albedo*=1.0-cliffMask*(.12+.14*smoothstep(.3,1.1,beds));
       albedo=mix(albedo,albedo*vec3(.89,.95,1.06),cliffMask*.65);
       #endif
+      #ifdef THUNDER_PARK
+      // Compacted lanes have broad tonal variation, not sharp gravel everywhere.
+      float raceBed=smoothstep(.02,.5,vRoad);
+      float compact=smoothstep(.35,.68,fb(vW.xz*.085))*raceBed;
+      albedo*=mix(.89,1.09,fb(vW.xz*.043));
+      photoRelief*=mix(.65,.38,compact);
+      gritK*=.42;
+      rough=mix(.96,.84,compact);
+      #endif
       vec3 Nr = N;
       #ifndef FAR
       if (dnear > 0.002 && gritK > 0.01){
@@ -683,7 +698,11 @@ export function buildTerrainMaterial(t) {
         vec3 tangent=normalize(vec3(N.y,-N.x,0.0));
         vec3 bitangent=normalize(cross(tangent,N));
         vec3 scanned=normalize(tangent*detail.x+bitangent*detail.y+N*max(detail.z,.25));
+        #ifdef THUNDER_PARK
+        Nr=normalize(mix(Nr,scanned,dnear*.34));
+        #else
         Nr=normalize(mix(Nr,scanned,dnear*.72));
+        #endif
       }
       #endif
       // Triplanar scanned normals follow the exposed cliff faces.
@@ -787,7 +806,17 @@ export function buildTerrainMaterial(t) {
 
       /* ---- distance haze toward the theme horizon ---- */
       float fogAmt = 1.0 - exp(-max(0.0, dist - uHaze.y) * uHaze.x * uFogK);
+      #ifdef THUNDER_PARK
+      // Low dusty valleys catch the warm key, while high ridges retain cool
+      // rock shadows. Forward scattering makes the gradient follow the sun.
+      float sunward=pow(max(dot(-V,uSunDir),0.),3.);
+      float valley=exp(-max(vW.y,0.)*.016);
+      vec3 aerial=mix(uHazeCol*vec3(.87,.94,1.02),vec3(.78,.65,.48),sunward*.78);
+      fogAmt=1.-exp(-max(0.,dist-45.)*.00165*(.42+.85*valley));
+      col=mix(col,aerial,clamp(fogAmt,0.,.92));
+      #else
       col = mix(col, uHazeCol, clamp(fogAmt, 0.0, 1.0));
+      #endif
       gl_FragColor = vec4(col, 1.0);
     }`;
 
@@ -819,7 +848,8 @@ export function setGroundTexture(t, tex, quarry = null, normal = null, cliff = n
   if(t.theme==='training') D.QUARRY_PROFILE=1;
   if(t.theme==='forest') D.FOREST_GROUND=1;
   if(t.theme==='volcano') D.VOLCANIC_GROUND=1;
-  if(t.theme==='canyon') D.CANYON_STRATA=1;
+  if(t.theme==='canyon'||t.theme==='thunder') D.CANYON_STRATA=1;
+  if(t.theme==='thunder') D.THUNDER_PARK=1;
   const cliffOn=!!(cliff&&cliffNormal);
   const quarryChanged=!!D.QUARRY_GROUND!==!!quarry || !!D.QUARRY_NORMAL!==!!normal || !!D.QUARRY_CLIFF!==cliffOn;
   u.uQuarryGround.value=quarry;
@@ -846,7 +876,8 @@ export function setGroundTexture(t, tex, quarry = null, normal = null, cliff = n
       if(t.theme==='training') m.defines.QUARRY_PROFILE=1;
       if(t.theme==='forest') m.defines.FOREST_GROUND=1;
       if(t.theme==='volcano') m.defines.VOLCANIC_GROUND=1;
-      if(t.theme==='canyon') m.defines.CANYON_STRATA=1;
+      if(t.theme==='canyon'||t.theme==='thunder') m.defines.CANYON_STRATA=1;
+      if(t.theme==='thunder') m.defines.THUNDER_PARK=1;
       m.needsUpdate = true;
     }
   }

@@ -152,9 +152,10 @@ export class Input {
         `<div class="rbtn fire">FIRE</div>
         <div class="rbtn drift">DRIFT</div>` +
         `<div class="rbtn reset">RESET</div>` +
-        `<div class="rbtn cam">CAM</div>` +
         `<div class="rbtn pause">&#10073;&#10073;</div>` +
       `</div>`;
+    // Keep secondary actions out of the two-thumb driving cluster.
+    wrap.append(wrap.querySelector('.rbtn.reset'),wrap.querySelector('.rbtn.pause'));
     this.touchEl = wrap;
     /* Published so the HUD can arm it when an item is ready. The keycap on the
        item card names a key, which is meaningless on touch — the button IS the
@@ -207,7 +208,6 @@ export class Input {
     this._bindBtn(wrap.querySelector('.rbtn.fire'), { key: 'KeyF' });
     this._bindBtn(wrap.querySelector('.rbtn.drift'), { key: 'Space', hold: true });
     this._bindBtn(wrap.querySelector('.rbtn.reset'), { key: 'KeyR', hold: true });
-    this._bindBtn(wrap.querySelector('.rbtn.cam'), { key: 'KeyC' });
     this._bindBtn(wrap.querySelector('.rbtn.pause'), { key: 'Escape' });
 
     /* Backstop against a stuck control: after every touch start/end/cancel,

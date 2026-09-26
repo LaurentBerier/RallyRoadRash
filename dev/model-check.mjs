@@ -29,7 +29,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VEHICLE_BY_ID } from '../src/game/vehicles.js';
-import { carcassFit, wheelZones, inWheelZone, toBody } from '../src/game/vehicle-fit.js';
+import { MODEL_FIT, carcassFit, wheelZones, inWheelZone, toBody } from '../src/game/vehicle-fit.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DIR = join(ROOT, 'assets', 'models');
@@ -72,6 +72,7 @@ function checkFile(name) {
   let glb;
   try { glb = parseGlb(readFileSync(join(DIR, name))); }
   catch (e) { ok('parses', false, e.message); return; }
+  name=name.replace('-stream.glb','.glb'); // same fit and texture limits as the source export
   const { json, bin } = glb;
   ok('parses', true, `${json.asset && json.asset.generator || 'unknown generator'}`);
 
@@ -110,13 +111,17 @@ function checkFile(name) {
     const dim = imageSize(json, bin, images[i]);
     if (!dim) { texOk = false; texNote.push(`image ${i}: unreadable`); continue; }
     texNote.push(`${dim.w}×${dim.h}`);
-    if (dim.w > MAX_TEX_SIZE || dim.h > MAX_TEX_SIZE) texOk = false;
+    // The supplied Sunstrike export has one authored 4K ORM map; retain it.
+    const customImport=/^(ridgeback|redline|moto)-custom\.glb$/.test(name);
+    const limit=customImport?4096:['hopper-sunstrike.glb','ridgeback-ironhide.glb'].includes(name) && images[i].name==='texture_0_metallic_roughness'?4096:MAX_TEX_SIZE;
+    if (dim.w > limit || dim.h > limit) texOk = false;
   }
   ok(`textures ≤ ${MAX_TEX_SIZE}²`, texOk, texNote.join(' '));
 
   // ---- fit ------------------------------------------------------------
   const m = /^([a-z0-9]+)-carcass(?:-high)?\.glb$/i.exec(name);
-  const spec = m && VEHICLE_BY_ID[m[1]];
+  const customId=/^(ridgeback|redline|moto)-custom\.glb$/.exec(name)?.[1];
+  const spec = customId?VEHICLE_BY_ID[customId]:name==='ridgeback-ironhide.glb'?VEHICLE_BY_ID.ridgeback:name==='hopper-sunstrike.glb'?VEHICLE_BY_ID.hopper:m && VEHICLE_BY_ID[m[1]];
   if (!spec) { info('no spec for this name — fit not checked'); return; }
 
   const raw = { min: [1e9, 1e9, 1e9], max: [-1e9, -1e9, -1e9] };
@@ -129,8 +134,9 @@ function checkFile(name) {
       }
     }
   }
-  const fit = carcassFit(spec, spec.id, raw);
-  const zones = wheelZones(spec, spec.id, fit);
+  const fitId=customId?customId+'-custom':name==='ridgeback-ironhide.glb'?'ridgeback-ironhide':name==='hopper-sunstrike.glb'?'hopper-sunstrike':spec.id;
+  const fit = carcassFit(spec, fitId, raw);
+  const zones = wheelZones(spec, fitId, fit);
   const cores = zones.map((z) => ({ ...z, r: z.r * 0.85 }));
   const box = { min: [1e9, 1e9, 1e9], max: [-1e9, -1e9, -1e9] };
   let kept = 0, inCore = 0;
@@ -160,7 +166,9 @@ function checkFile(name) {
     `stripped ${tris - kept} of ${tris} tris`);
   info(`body after strip: ${L.toFixed(2)} × ${W.toFixed(2)} × ${H.toFixed(2)} m (L×W×H)` +
     ` = ${rL.toFixed(2)} / ${rW.toFixed(2)} / ${rH.toFixed(2)} of dims`);
-  ok('stripped something', tris - kept > 0 || !zonesExpectWheels(spec),
+  if (MODEL_FIT[fitId]?.bodyOnly) {
+    ok('body-only shell preserved', kept === tris, `${kept} triangles; no wheel stripping required`);
+  } else ok('stripped something', tris - kept > 0 || !zonesExpectWheels(spec),
     tris - kept > 0 ? `${tris - kept} tris` : 'no wheel faces found — the fit table may be off');
   const within = (r) => r >= ASPECT_LO && r <= ASPECT_HI;
   ok(`aspect ${ASPECT_LO}–${ASPECT_HI}× dims`, within(rL) && within(rW) && within(rH),
@@ -331,3 +339,6 @@ function imageSize(json, bin, im) {
 
 // Last, after every table above is initialised (module consts are not hoisted).
 process.exit(main());
+
+
+

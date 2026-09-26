@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset="utf-8"><base href="../"><title>Audio sound pass verification</title><link rel="icon" type="image/png" href="assets/sandscape-favicon.png" />
+<link rel="apple-touch-icon" href="assets/sandscape-apple-touch-icon.png" />
+</head><body style="background:#181818;color:#eee;font:18px monospace;padding:30px"><h1>Sound pass verification</h1><button id="run">Run audio verification</button><pre id="status">Ready</pre><script type="module">
+import {Audio} from './src/core/audio.js';
+import {SFX_CUES} from './src/core/sfx.js';
+const status=document.querySelector('#status');
+window.addEventListener('error',e=>status.textContent+='\nERROR '+e.message);
+document.querySelector('#run').onclick=async()=>{
+ try{
+ const a=new Audio();a.init();a.setVolumes(.35,.3);a.setMusicMode('menu');
+ for(let i=0;i<200&&(!a._sfx.ready||!a._music.ready||a._engineTextures.voices.size<4);i++)await new Promise(r=>setTimeout(r,100));
+ status.textContent=`Context: ${a.ctx.state}\nSFX decoded: ${a._sfx.buffers.size}/${SFX_CUES.length}\nEngines decoded: ${a._engineTextures.voices.size}/4\nMusic ready: ${a._music.ready}`;
+ if(a._sfx.buffers.size!==SFX_CUES.length||a._engineTextures.voices.size!==4||!a._music.ready)throw Error('Missing audio');
+ for(const name of SFX_CUES)if(!a._sfx.play(name,{gain:0}))throw Error('Cue failed: '+name);
+ await a.preloadRaceTheme('training');a.setRaceTheme('training');
+ status.textContent+='\nSelected race music decoded: '+a._music.tracks.has('training');
+ a.setDriving(true);
+ for(const id of ['hopper','ridgeback','redline','moto']){a.setEngineCharacter(id);a.update(.016,{rpm:.7,load:.8,speed:12,contacts:4,rivalId:'ridgeback',rivalRpm:.6,rivalDistance:12});status.textContent+='\nEngine update OK: '+id;}
+ a.setDriving(false);a.setMusicMode('off');
+ status.textContent+='\nPASS: all assets decoded and runtime engine/cue paths exercised.';
+ }catch(e){status.textContent+='\nFAIL '+e.stack;}
+};
+</script></body></html>

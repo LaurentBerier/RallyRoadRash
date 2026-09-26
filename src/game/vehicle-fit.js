@@ -75,6 +75,48 @@ const WIDTH_SLACK = 1.30;
 const GROUND_LIFT = 0.02;
 
 export const MODEL_FIT = {
+  'moto-custom': {
+    // Unarmed, wheel-less Hornet export; nose points along -X.
+    yaw: Math.PI / 2, axles: { front: -.61, rear: .61 },
+    dy: .30, dz: 0, tint: [], bodyOnly: true, bakedLivery: true, keepRider: true, riderLift: .16, launcher: {dx:0,dy:-.35,dz:-.10},
+    lamps: { head: { dx: 0, dy: -.06, dz: -.22 }, brake: { dx: 0, dy: -.03, dz: -.30 } },
+    flame: { x: .17, y: .58, z: -.90 },
+    bikePickups: { fork: [-.39,.25], swingarm: [.12,-.26], shock: [.08,.08] },
+  },
+  'ridgeback-custom': {
+    yaw: Math.PI / 2, axles: { front: -.58, rear: .59 },
+    // Raw X is length: retain axle alignment while widening/lifting the arches.
+    axisScale: [1, 1.08, 1.04], archClearance: .63, dy: .40, dz: 0, tint: [], flame: null, bodyOnly: true, bakedLivery: true,
+    lamps: { head: { dx: 0, dy: .36, dz: .28 }, brake: { dx: -.04, outward: .18, dy: .52, dz: -.22, width: .24, height: .34 } },
+    hideRoofGlow: true, launcher: { dx: 0, dy: .68, dz: -.65 },
+    launcherSupports: true,
+  },
+  'redline-custom': {
+    // Rear hubs sit 4 cm behind the nominal axle to center the imported arches.
+    rearWheels: { width: 1.35, radius: 1.04, outward: .11, rearward: .04 },
+    yaw: Math.PI / 2, axles: { front: -.57, rear: .56 },
+    dy: .15, dz: 0, tint: [], flame: null, bodyOnly: true, bakedLivery: true,
+    lamps: { head: { dx: 0, dy: .02, dz: .26 }, brake: { dx: 0, dy: .10, dz: -.12 } },
+    launcher: { dx: 0, dy: .20, dz: 0 },
+  },
+  'ridgeback-ironhide': {
+    yaw: Math.PI / 2,
+    axles: { front: -0.609, rear: 0.506 },
+    dy: .28, dz: 0, tint: [], flame: null,
+    bodyOnly: true, bakedLivery: true,
+    lamps: { head: { dx: 0, dy: .24, dz: -.14 }, brake: { dx: 0, dy: .17, dz: -.46 } },
+    hideRoofGlow: true,
+    launcher: { dx: 0, dy: .16, dz: 0 },
+  },
+  // Meshy Sunstrike body-only import. Its lower bound is the sill, not tyres.
+  'hopper-sunstrike': {
+    yaw: Math.PI / 2,
+    axles: { front: -0.710, rear: 0.620 },
+    dy: 0.22, dz: 0, tint: [], flame: null,
+    bodyOnly: true, bakedLivery: true,
+    lamps: { head: { dx: 0, dy: .15, dz: -.07 }, brake: { dx: 0, dy: .22, dz: .04 } },
+    launcher: { dx: 0, dy: .12, dz: 0 },
+  },
   /* bbox 1.897 × 0.831 × 1.256 (X×Y×Z), 6,149 tris, nose at −X. Wheel
      clusters at x −0.71 / +0.62, z ±0.40..0.61, contact at y −0.474. */
   hopper: {
@@ -200,21 +242,22 @@ export function carcassFit(spec, id, raw) {
     if (alongX) mx = mid; else mz = mid;
     targetZ = (spec.wheelbase.front + spec.wheelbase.rear) * 0.5;
   }
-  const ax = (mx * c + mz * sn) * s, az = (-mx * sn + mz * c) * s;
+  const sx = s * (F.axisScale?.[0] ?? 1), sy = s * (F.axisScale?.[1] ?? 1), sz = s * (F.axisScale?.[2] ?? 1);
+  const ax = mx * sx * c + mz * sz * sn, az = -mx * sx * sn + mz * sz * c;
   const bottom = -spec.comHeight + GROUND_LIFT + (F.dy || 0);
   return {
-    yaw, s, c, sn, bottom,
+    yaw, s, sx, sy, sz, c, sn, bottom,
     x: -ax + (F.dx || 0),
-    y: bottom - raw.min[1] * s,
+    y: bottom - raw.min[1] * sy,
     z: targetZ - az + (F.dz || 0),
   };
 }
 
 /** Model point → body space, into `out` (an array or Vector3-like). */
 export function toBody(fit, px, py, pz, out) {
-  const sx = px * fit.s, sz = pz * fit.s;
+  const sx = px * (fit.sx ?? fit.s), sz = pz * (fit.sz ?? fit.s);
   out.x = sx * fit.c + sz * fit.sn + fit.x;
-  out.y = py * fit.s + fit.y;
+  out.y = py * (fit.sy ?? fit.s) + fit.y;
   out.z = -sx * fit.sn + sz * fit.c + fit.z;
   return out;
 }
@@ -227,6 +270,7 @@ export function toBody(fit, px, py, pz, out) {
  */
 export function wheelZones(spec, id, fit) {
   const F = MODEL_FIT[id] || {};
+  if (F.bodyOnly) return [];
   const bike = spec.bodyStyle === 'bike';
   const k = (F.strip && F.strip.r) || STRIP_R;
   const zones = [];
@@ -267,4 +311,22 @@ export function inWheelZone(zones, x, y, z) {
     if (dy * dy + dz * dz <= w.r * w.r) return true;
   }
   return false;
+}
+
+
+/** Expand the imported arch lip in body space without moving live running gear. */
+export function clearBodyArches(p, spec, radius) {
+  const lateral = Math.abs(p.x);
+  // Blend into the underside, keeping the central chassis/cabin untouched.
+  const blend = Math.max(0, Math.min(1, (lateral - .55) / .24));
+  if (!blend) return p;
+  const hubY = spec.wheelR - spec.comHeight + .08;
+  for (const axle of [spec.wheelbase.front, spec.wheelbase.rear]) {
+    const z = p.z - axle, y = p.y - hubY, r = Math.hypot(z, y);
+    if (r >= radius || r < 1e-6) continue;
+    const scale = 1 + (radius / r - 1) * blend;
+    p.z = axle + z * scale;
+    p.y = hubY + y * scale;
+  }
+  return p;
 }

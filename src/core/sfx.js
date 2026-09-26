@@ -1,3 +1,5 @@
+import {countdownBuffer} from './countdown-tone.js';
+import { SFX_MIX } from './audio-mix.js';
 /* ============================================================
    RALLY ROAD RASH — sampled one-shots over the synth fallback
    ------------------------------------------------------------
@@ -30,14 +32,16 @@ export const SFX_CUES = [
   'crashHeavy', 'crashLight', 'landHeavy', 'landSoft', 'metalScrape',
   'spinOutSkid', 'checkpointChime', 'lapBell', 'finalLapHorn',
   'countdownBeep', 'countdownGo', 'finishCrowd',
+  'landHopper','landRidgeback','landRedline','landHornet','metalImpactA','metalImpactB',
   'positionUp', 'positionDown', 'uiTick', 'uiConfirm', 'uiBack',
+  'uiHover','uiReject','uiWarn','gearShift','suspensionImpact',
 ];
 
 export class SfxBank {
   constructor(audio) {
     this.audio = audio;
     this.buffers = new Map();      // name -> AudioBuffer, peak-normalised
-    this.ready = false;
+    this.ready = false;this.lastPlayed=new Map();
     this._voices = [];             // built lazily, capped at MAX_VOICES
   }
 
@@ -93,30 +97,39 @@ export class SfxBank {
         one line is `if (this._sfx.play('name', {...})) return;` followed
         by the existing synth code, unchanged. */
   play(name, opts = {}) {
-    if (!this.ready) return false;
-    const buf = this.buffers.get(name);
+    const countdown=name==='countdownBeep'||name==='countdownGo';
+    if (!this.ready && !countdown) return false;
+    const buf = this.buffers.get(name) || (countdown && this.audio.ctx ? countdownBuffer(this.audio.ctx,name==='countdownGo') : null);
     if (!buf) return false;
     const A = this.audio, ctx = A.ctx;
     if (!ctx) return false;
 
     const when = opts.when != null ? opts.when : A.now();
-    const gain = opts.gain != null ? opts.gain : 1;
+    const profile=SFX_MIX[name]||[1,3,0];
+    const cooldownKey=opts.cooldownKey||name;
+    if(when-(this.lastPlayed.get(cooldownKey)??-Infinity)<profile[2])return true;
+    this.lastPlayed.set(cooldownKey,when);
+    const gain = (opts.gain != null ? opts.gain : 1)*profile[0];
     let pan = opts.pan != null ? opts.pan : 0;
     pan = pan < -1 ? -1 : pan > 1 ? 1 : pan;
-    const jitter = 1 + (Math.random() * 2 - 1) * RATE_JITTER;
+    const jitter = countdown ? 1 : 1 + (Math.random() * 2 - 1) * RATE_JITTER;
     const rate = (opts.rate != null ? opts.rate : 1) * jitter;
 
     const v = this._voice();
-    const src = ctx.createBufferSource();
+    if(v.source){try{v.source.stop(when);v.source.disconnect();}catch{}}
+    const src = ctx.createBufferSource();v.source=src;
     src.buffer = buf;
     src.playbackRate.value = rate;
     src.connect(v.gain);
     v.gain.gain.cancelScheduledValues(when);
     v.gain.gain.setValueAtTime(Math.max(gain, 0.0001), when);
     v.pan.pan.setValueAtTime(pan, when);
-    src.start(when);
-    v.until = when + buf.duration / rate;
-    src.onended = () => { try { src.disconnect(); } catch { /* already gone */ } };
+    const duration=Math.min(buf.duration/rate,profile[1]);
+    v.gain.gain.setValueAtTime(Math.max(gain,.0001),when+Math.max(0,duration-.012));
+    v.gain.gain.linearRampToValueAtTime(.0001,when+duration);
+    src.start(when,0,duration*rate);
+    v.until = when + duration;
+    src.onended = () => { if(v.source===src)v.source=null;try { src.disconnect(); } catch { /* already gone */ } };
     return true;
   }
 }

@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><base href="../"><title>Pause layout QA</title><link rel="icon" type="image/png" href="assets/sandscape-favicon.png" />
+<link rel="apple-touch-icon" href="assets/sandscape-apple-touch-icon.png" />
+</head><body><script type="module">
+const text=await(await fetch('index.html')).text();const doc=new DOMParser().parseFromString(text,'text/html');
+for(const link of doc.querySelectorAll('link[rel="stylesheet"]'))document.head.append(link.cloneNode(true));
+document.body.style.background='center/cover url(assets/art/canyon-gameplay-v1.webp)';
+const screens=document.createElement('div');screens.className='screens';const pause=doc.querySelector('#scr-pause');pause.classList.remove('hidden');screens.append(pause);document.body.append(screens);
+pause.querySelector('#pauseTrack').textContent='SUNSTRIKE CANYON';pause.querySelector('#pauseCtx').textContent='POSITION 03 / LAP 2 OF 3';
+</script></body></html>

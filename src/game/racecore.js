@@ -18,7 +18,10 @@
       a racer who takes the slot canyon still clears every slot in order, and
       a racer who cuts the corner without passing a gate does not.
 
-   2. raceS WITHOUT the spline. Standings need a distance-along-the-race for
+   2. raceS uses road arc length when a spline is supplied (the live game),
+      mapping alternate routes back onto their main-road span. Checkpoint
+      order still caps progress. The pure-data fallback estimates raceS
+      WITHOUT the spline. Standings need a distance-along-the-race for
       every car on every frame, and asking the spline for it means an O(1)
       but not free `nearest()` per car per frame plus a wrap-around special
       case. Instead each racer carries the `s` of the checkpoint it last
@@ -86,7 +89,7 @@ function buildSlots(checkpoints) {
     if (!g) byIdx.set(k, g = { idx: k, s: +c.s || 0, x: +c.x || 0, z: +c.z || 0, r: 12, big: false, entries: [] });
     const e = {
       x: +c.x || 0, z: +c.z || 0,
-      r: c.r > 0 ? +c.r : 12,
+      r: c.captureR > 0 ? +c.captureR : c.r > 0 ? +c.r : 12,
       s: +c.s || 0,
       big: !!c.big, alt: !!c.alt,
       altS: c.altS === undefined ? -1 : +c.altS
@@ -108,7 +111,9 @@ export class RaceTracker {
    * @param {number}   o.lapLength    spline.length, metres
    * @param {Array}    o.checkpoints  trackData.checkpoints {x,z,r,s,idx,big,alt,altS}
    */
-  constructor({ ids = [], laps = 3, lapLength = 1000, checkpoints = [] } = {}) {
+  constructor({ ids = [], laps = 3, lapLength = 1000, checkpoints = [], spline = null, routes = [] } = {}) {
+    this.spline=spline; this.routes=routes;
+    this._near={}; this._routeNear={}; this._direction={};
     this.laps = Math.max(1, laps | 0);
     this.lapLength = lapLength > 0 ? lapLength : 1000;
     this.slots = buildSlots(checkpoints);
@@ -185,6 +190,8 @@ export class RaceTracker {
        file stays free of any physics import and the check script can drive it
        with nothing but coordinates. */
     const dt = r.hasPos ? Math.max(0, tNow - r.lastT) : 0;
+    const prevX=r.lastX, prevZ=r.lastZ;
+    const mx=x-prevX, mz=z-prevZ;
     let speed = 0;
     if (dt > 1e-6) {
       const mx = x - r.lastX, mz = z - r.lastZ;
@@ -204,7 +211,12 @@ export class RaceTracker {
       for (let i = 0; i < slot.entries.length; i++) {
         const e = slot.entries[i];
         const dx = x - e.x, dz = z - e.z;
-        if (dx * dx + dz * dz > e.r * e.r) continue;
+        // Sweep the actual motion: a fast car can cross the edge of a gate
+        // between samples. Teleports clear hasPos, so they cannot earn gates.
+        const move2=mx*mx+mz*mz;
+        const u=dt>0 && speed<150 && move2>0 ? Math.max(0,Math.min(1,((e.x-prevX)*mx+(e.z-prevZ)*mz)/move2)) : 1;
+        const sx=prevX+mx*u-e.x, sz=prevZ+mz*u-e.z;
+        if (dx*dx+dz*dz>e.r*e.r && sx*sx+sz*sz>e.r*e.r) continue;
         ev = ev || [];
         ev.push({ type: 'checkpoint', idx: slot.idx, big: e.big });
         this._clearSlot(r, slot, e, tNow, ev);
@@ -216,8 +228,20 @@ export class RaceTracker {
     this._project(r, x, z);
 
     /* ---- 3. wrong way ---- */
+    let backwards=r.rawS < r.prevRaw-WRONG_EPS && speed>WRONG_SPEED;
+    if(this.spline && dt>0){
+      // Direction follows the local road, independent of any missed gate.
+      let road=this.spline;
+      const n=road.nearest(x,z,this._near);let best=n.d, along=n.s;
+      for(const rt of this.routes){
+        const q=rt.spline.nearest(x,z,this._routeNear);
+        if(q.d<best){best=q.d;along=q.s;road=rt.spline;}
+      }
+      const dir=road.dirAt(along,this._direction);
+      backwards=(mx*dir.x+mz*dir.z)/dt < -WRONG_SPEED;
+    }
     if (r.hasRaw) {
-      if (r.rawS < r.prevRaw - WRONG_EPS && speed > WRONG_SPEED) {
+      if (backwards) {
         r.wrongT = Math.min(WRONG_ARM * 2, r.wrongT + dt);
       } else {
         r.wrongT = Math.max(0, r.wrongT - dt * WRONG_DECAY);
@@ -294,7 +318,26 @@ export class RaceTracker {
        corner: the single-sided form is 13 m out there, the mean is 3.
        Both terms shrink when a racer turns round, so the wrong-way signal is
        if anything sharper. */
-    const ratio = segD > 1e-3 ? 0.5 * ((segD - bestD) + fromD) / segD : 0;
+    let ratio = segD > 1e-3 ? 0.5 * ((segD - bestD) + fromD) / segD : 0;
+    if(this.spline){
+      // Road distance is lateral-position independent. Chord interpolation
+      // can rank a leader behind an inside-line rival on a tight bend.
+      const n=this.spline.nearest(x,z,this._near);
+      let distance=n.d, along=n.s;
+      for(const rt of this.routes){
+        const q=rt.spline.nearest(x,z,this._routeNear);
+        if(q.d<distance){
+          distance=q.d;
+          const span=(rt.s1-rt.s0+this.lapLength)%this.lapLength;
+          along=rt.s0+span*q.s/rt.spline.length;
+        }
+      }
+      // Unwrap around the current checkpoint interval, including the grid
+      // just behind the start and routes crossing the finish seam.
+      const mid=r.fromS+segLen*.5;
+      along+=Math.round((mid-along)/this.lapLength)*this.lapLength;
+      ratio=(along-r.fromS)/segLen;
+    }
 
     // Reported estimate: clamped and monotonic. Nothing downstream may ever
     // see a racer lose ground it has already covered.
@@ -399,6 +442,14 @@ export class RaceTracker {
     r.hasRaw = false;
     r.wrongT = 0;
     if (r.wrongOn) r.wrongOn = false;
+  }
+
+  safeRespawnS(id, requested) {
+    const r=this.racers.get(id);if(!r)return requested;
+    const L=this.lapLength, next=this.slots[r.nextSlot];
+    const span=(next.s-r.fromS+L)%L || L;
+    const advance=(requested-r.fromS+L)%L;
+    return advance<span ? requested : (r.fromS+3)%L;
   }
 
   /** Has anyone crossed the line? Cheap poll for the finish sequence. */

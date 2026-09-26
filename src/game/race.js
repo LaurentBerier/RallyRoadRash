@@ -25,6 +25,8 @@
    one allocation left on a normal frame — none.
    ============================================================ */
 import * as THREE from 'three';
+import {tickWreck,WRECK_CTL} from './wreck.js';
+import {rocketRecoveryTarget,safeRecoveryS} from './recovery.js';
 import { Vehicle, resolveVehiclePair } from './vehicle.js';
 import { VEHICLES } from './vehicles.js';
 import { TUNE } from './config.js';
@@ -69,7 +71,7 @@ const AI_NAMES = ['MARA', 'JUKKA', 'REY', 'OTTO', 'SANNE'];
 const WEAPON_NAME = 'ROCKET';
 /* Minimap dots have to be told apart at four pixels across, which the three
    car colours cannot do on their own. The player keeps their car's colour. */
-const RIVAL_COLORS = [0x36a8ff, 0x7ee06a, 0xffd23f, 0xc46bff, 0xff5f56];
+import { RIVAL_COLORS } from './racer-colors.js';
 
 /* ---------------- module scratch ---------------- */
 const _v1 = new THREE.Vector3();
@@ -159,6 +161,7 @@ export class Race {
       ids: this.racers.map(r => r.id),
       laps: this.laps,
       lapLength: this.trackData.lapLength || this.spline.length,
+      spline: this.spline, routes: this.routes,
       checkpoints: this.trackData.checkpoints
     });
 
@@ -311,7 +314,7 @@ export class Race {
         if (profiles[i] && profiles[i].name) r.name = profiles[i].name;
       }
       this.racers.push(r);
-      if (isPlayer) this.player = r;
+      if (isPlayer) {this.player = r;v._flameLight=new THREE.PointLight(0xff8c24,0,4,2);v.chassis.add(v._flameLight);}
     }
   }
 
@@ -411,6 +414,7 @@ export class Race {
     this.ui.show('pause', {
       trackName: this.trackDef.name,
       position: this._playerPos,
+      laps: this.laps,
       lap: Math.min(this.laps, this.tracker.progress(this.player.id).lap + 1)
     });
   }
@@ -595,7 +599,8 @@ export class Race {
           if (r.ai.notifyFired) r.ai.notifyFired();
         }
       }
-      v.step(dt, ctl);
+      v.gridThrottle=locked ? (r.isPlayer?clamp(raw.throttle||0,0,1):0) : null;
+      v.step(dt, v.wrecked?WRECK_CTL:ctl);
 
       if (r.ghostT > 0) {
         r.ghostT -= dt;
@@ -706,24 +711,8 @@ export class Race {
       const emit = r.isPlayer ? 1 : camD < 60 ? 0.7 : camD < 130 ? 0.3 : 0;
       const ground = r.isPlayer || camD < 90;
 
-      /* ---- mini-turbo: the whole visible half of the feature ----
-         The charge is READ OFF THE TYRE DUST rather than drawn as anything
-         new: while a tier is building, the rooster tail is tinted by tier
-         instead of by the surface. That costs zero extra particles, which
-         matters because the pool is 500 at LOW and shared with six cars —
-         an item VFX budget that starves the tyre dust would be a bad trade.
-         The colours go in OVER-BRIGHT (× glow): dust.js writes cr/cg/cb
-         straight into the colour attribute with no clamp, so a value past 1
-         clears the bloom threshold and the sparks actually glow. */
+      // Drift charge stays in the boost/flame presentation; dirt stays earth toned.
       const D = v._drift;
-      /* Tinted from the FIRST frame of a drift, not from the first banked
-         tier. Waiting for tier 1 means the most important quarter-second in
-         the mechanic — the one where you are deciding whether to commit —
-         looks identical to not drifting at all. Pre-tier sparks use the
-         tier-1 hue at roughly half the glow, so "it has started" and "you
-         have banked something" are still different pictures. */
-      const bcol = D.active ? BOOST.col[D.tier > 0 ? D.tier - 1 : 0] : null;
-      const bglow = D.tier > 0 ? BOOST.glow : BOOST.glow * 0.5;
       this.fx.boost(r, D, camD);
 
       for (let i = 0; i < 4; i++) {
@@ -790,17 +779,21 @@ export class Race {
           const patch = Math.abs(w.spinVel) * v.spec.wheelR;
           const slip = w.slipLong + w.slipLat * 0.7;
           const rate = (patch * 0.085 + slip * 20) * S.dust * emit * dt;
+          if(ground && patch>3 && Math.random()<Math.min(.3,patch*.025*S.dust*emit*dt)) {
+            const c=this.dust.groundColorAt(gx,gz,S.dustCol);
+            this.dust.spawn(1,gx,w.worldPos.y-v.spec.wheelR,gz,.8+Math.min(patch,30)*.025,.15,-v.vel.x,-v.vel.z,c[0],c[1],c[2],DUST_KIND.CLOD);
+          }
           let n = rate | 0;
           if (Math.random() < rate - n) n++;
           if (n > 0) {
             const sx = v.vel.x, sz = v.vel.z;
             const m = Math.hypot(sx, sz) || 1;
-            const c = bcol || S.dustCol;
-            const k = bcol ? bglow : 1;
+            const c = this.dust.groundColorAt(gx,gz,S.dustCol);
+            const k = 1;
             this.dust.spawn(n > 3 ? 3 : n, gx, w.worldPos.y - v.spec.wheelR * 0.55, gz,
               0.26 + patch * 0.011 + slip * 0.55, 0.22, -sx / m, -sz / m,
               c[0] * k, c[1] * k, c[2] * k,
-              bcol ? DUST_KIND.PUFF : (S.sink > 0.6 ? DUST_KIND.CLOD : DUST_KIND.PUFF));
+              S.sink > 0.6 ? DUST_KIND.CLOD : DUST_KIND.PUFF);
           }
         }
       }
@@ -828,6 +821,10 @@ export class Race {
     for (const r of this.racers) {
       const v = r.vehicle;
       if (r.finished || this.state === RS.RESULTS) continue;
+      if(v.wrecked){
+        if(tickWreck(v,dt))this._respawn(r,'BACK IN THE RACE','rocket');
+        continue;
+      }
 
       if (r.isPlayer) {
         /* HOLD, not a tap: the contract has T7 mapping pad B and the touch
@@ -941,22 +938,17 @@ export class Race {
     const v = r.vehicle;
     r.resetWhy = why || null;
     const slot = this.tracker.lastSlotOf(r.id);
-    // A few metres past the gate: dropping exactly on it spawns you in the
-    // middle of a gantry and, on the line, facing a stationary grid.
-    let s = slot.s + 3;
-    /* Gates sit ON jump lips, so slot.s + 3 can land inside a gap jump's
-       carved void. QA watched a car clear the Caldera Leap's lip gate, fall
-       short, and then respawn INTO the lava floor at zero speed — scorched,
-       respawned there again, forever. Any respawn that falls in a void's
-       span goes to the landing side of the gap instead. */
-    const jumps = this.trackDef.jumps;
-    if (jumps) {
-      for (const j of jumps) {
-        const gap = j.gap || 0;
-        if (gap && s > j.s - 4 && s < j.s + gap + 6) { s = j.s + gap + 8; break; }
-      }
+    let target=slot.s+3;
+    if(why==='rocket'&&Number.isFinite(v.wreckS)){
+      const attacker=this.racers.find(other=>other.id===v.wreckAttacker&&other!==r&&!other.vehicle.wrecked);
+      target=rocketRecoveryTarget(v.wreckS,this.tracker.progress(r.id),
+        attacker?this.tracker.progress(attacker.id):null,
+        attacker?this.spline.nearest(attacker.vehicle.pos.x,attacker.vehicle.pos.z,{}).s:NaN,this.spline.length);
     }
-    if (this.spline.length > 0) s %= this.spline.length;
+    const s=safeRecoveryS({target,tracker:this.tracker,id:r.id,spline:this.spline,
+      jumps:this.trackData.jumps,terrain:this.terrain,colliders:this.props?.colliders});
+    // Retain the wreck instead of placing it at a point that failed clearance.
+    if(s===null)return;
     this.spline.posAt(s, _sp);
     this.spline.dirAt(s, _sd);
     const yaw = Math.atan2(_sd.x, _sd.z);
@@ -990,7 +982,8 @@ export class Race {
   _mixAudio(dt) {
     const v = this.player.vehicle;
     const a = this._as;
-    a.rpm = v.rpmNorm; a.load = v.motorLoad; a.speed = v.speed;
+    a.gear = v.ghost ? null : v.gear;
+    a.engineOff = !!v.wrecked; a.rpm = v.wrecked ? 0 : v.rpmNorm; a.load = v.wrecked ? 0 : v.motorLoad; a.speed = v.speed;
     a.slipLat = v.slipLat; a.slipLong = v.slipLong;
     a.surface = v.surfaceId; a.airborne = v.airborne; a.contacts = v.contacts;
 
@@ -1013,7 +1006,7 @@ export class Race {
       const d = rv.pos.distanceTo(v.pos);
       if (d > RIVAL_RANGE * 1.4) { this._rivalId = -1; a.rivalRpm = null; }
       else {
-        a.rivalRpm = rv.rpmNorm;
+        a.rivalRpm = rv.rpmNorm; a.rivalId=rv.spec.id; a.rivalDistance=d;
         a.rivalPan = clamp(_v1.subVectors(rv.pos, v.pos).dot(v.right) / 18, -1, 1);
       }
     } else a.rivalRpm = null;

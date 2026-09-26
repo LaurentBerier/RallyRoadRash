@@ -42,7 +42,7 @@ import { Engine } from '../src/core/engine.js';
 import { Sky, SKY_THEMES } from '../src/world/sky.js';
 import { Vehicle } from '../src/game/vehicle.js';
 import { VEHICLES, VEHICLE_BY_ID } from '../src/game/vehicles.js';
-import { setGhostLook, setMudLook, setCarcassSource, setCarcassRenderer } from '../src/game/vehicle-art.js';
+import { setGhostLook, setMudLook, setRiderSource, setCarcassSource, setCarcassRenderer, setVehicleDecalSource } from '../src/game/vehicle-art.js';
 import { muzzleLocal } from '../src/game/vehicle-carcass.js';
 import { loadAssets, Assets } from '../src/core/assets.js';
 import { SURF } from '../src/world/surfaces.js';
@@ -52,6 +52,7 @@ const err = document.getElementById('err');
 window.addEventListener('error', (e) => { err.textContent += (e.message || e.error) + '\n'; });
 
 const q = new URLSearchParams(location.search);
+if (q.get('stats') === '0') stats.style.display = 'none';
 const num = (k, d) => {
   if (!q.has(k)) return d;
   const v = parseFloat(q.get(k));
@@ -87,6 +88,8 @@ document.body.append(lodControls);
    up from here. Set BEFORE the Vehicle is built: the source is read at
    build time and the load starts there. */
 const garageAssets = new Assets(await loadAssets('../assets/manifest.json'));
+setVehicleDecalSource(id => garageAssets.get('vehicles/' + id + '-livery'));
+setRiderSource(()=>garageAssets.url('models/hornet-rider'));
 setCarcassSource(useModel ? (id, level) => garageAssets.url('models/' + id + '-carcass' +
   (level === 'high' && q.get('lod') !== 'low' ? '-high' : '')) : null);
 
@@ -179,7 +182,7 @@ let census = takeCensus(), censusFor = veh.carcass;
    derives from the published node every shot. */
 const muzzleAt = muzzleLocal(spec, new THREE.Vector3(), new THREE.Vector3());
 
-const NO_CTL = { throttle: 0, steer: 0, brake: 0, handbrake: 0 };
+const NO_CTL = { throttle: 0, steer: 0, brake: num('brake',0), handbrake: 0 };
 let t = 0, last = performance.now(), fps = 0, frames = 0, ft = 0;
 
 function frame(now) {
@@ -213,6 +216,9 @@ function frame(now) {
   sky.update(dt, engine.camera);
   if (envMode === 'none') engine.scene.environment = null;
   engine.aimShadow(veh.pos, sky.sunDir);
+  // Reproduce bright-trim postprocessing under maximum racing/boost blur.
+  engine.final.uniforms.uSpeedBlur.value = num('speedblur', 0);
+  engine.final.uniforms.uNitro.value = num('nitro', 0);
   engine.render(dt);
 
   frames++; ft += dt;

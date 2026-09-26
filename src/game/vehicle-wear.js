@@ -6,7 +6,7 @@ let cached;
 let tireCached;
 export function tireWear() {
   if(tireCached)return tireCached;
-  const n=512,albedo=new Uint8Array(n*n*4),rough=new Uint8Array(n*n*4);
+  const n=1024,albedo=new Uint8Array(n*n*4),rough=new Uint8Array(n*n*4);
   let seed=7831;
   for(let y=0;y<n;y++)for(let x=0;x<n;x++){
     seed=(Math.imul(seed,1664525)+1013904223)>>>0;
@@ -42,18 +42,23 @@ export function wearUV(geometry) {
 }
 export function vehicleWear() {
   if (cached) return cached;
-  const n=256, color=new Uint8Array(n*n*4), rough=new Uint8Array(n*n*4);
+  const n=2048, color=new Uint8Array(n*n*4), rough=new Uint8Array(n*n*4);
   let seed=1937;
   for(let y=0;y<n;y++)for(let x=0;x<n;x++){
     seed=(Math.imul(seed,1664525)+1013904223)>>>0;
     const grain=seed/4294967296;
     const cloud=noise(x/n*8,y/n*8,8)*.7+noise(x/n*32,y/n*32,32)*.3;
     const dust=Math.max(0,Math.min(1,(cloud-.35)*1.7));
-    const i=(y*n+x)*4, shade=.78+grain*.22;
+    // Fine machining lines and occasional narrow scratches now have their
+    // own texels instead of disappearing into the broad dust colour tile.
+    const scratch=(y%173===0&&x%389<235)?1:0;
+    const brushed=Math.sin(y*.85)*.018;
+    const i=(y*n+x)*4, shade=.85+grain*.12+brushed+scratch*.09;
     for(let c=0;c<3;c++) color[i+c]=(210*(1-dust)+[119,93,62][c]*dust)*shade;
     color[i+3]=255;
-    rough[i]=rough[i+1]=rough[i+2]=170+75*dust+grain*10;rough[i+3]=255;
+    rough[i]=rough[i+1]=rough[i+2]=170+75*dust+grain*10-scratch*35;rough[i+3]=255;
   }
   const make=(data,srgb)=>{const t=new THREE.DataTexture(data,n,n);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.generateMipmaps=true;t.minFilter=THREE.LinearMipmapLinearFilter;t.magFilter=THREE.LinearFilter;t.colorSpace=srgb?THREE.SRGBColorSpace:THREE.NoColorSpace;t.needsUpdate=true;return t;};
-  return cached={map:make(color,true),roughnessMap:make(rough,false)};
+  const roughnessMap=make(rough,false);
+  return cached={map:make(color,true),roughnessMap,bumpMap:roughnessMap,bumpScale:.0007};
 }

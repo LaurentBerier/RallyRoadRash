@@ -25,8 +25,18 @@ export function buildCanyonVista(p) {
   // in every quality tier so lowering quality cannot change the horizon.
   const material=p._keepMat(rockMaterial(0x755c52,p.recipe?.dust||0xb49b78,p.environmentAssets?.cliff));
   const shade=material.onBeforeCompile;
-  material.onBeforeCompile=shader=>{shade(shader);shader.fragmentShader=shader.fragmentShader.replace('vRkW.y*3.2','vRkW.y*.65');};
-  material.customProgramCacheKey=()=> 'canyon-vista-strata-v3';
+  material.onBeforeCompile=shader=>{
+    shade(shader);shader.fragmentShader=shader.fragmentShader.replace('vRkW.y*3.2','vRkW.y*.65');
+    if(p.theme==='thunder') shader.fragmentShader=shader.fragmentShader.replace('#include <fog_fragment>',`
+      vec3 vistaView=normalize(vRkW-cameraPosition);
+      float vistaSun=pow(max(dot(vistaView,vec3(.719846,.342020,.604023)),0.),3.);
+      float vistaValley=exp(-max(vRkW.y,0.)*.016);
+      float vistaFog=1.-exp(-max(length(vRkW-cameraPosition)-45.,0.)*.00165*(.42+.85*vistaValley));
+      vec3 vistaAir=mix(vec3(.505,.611,.745),vec3(.78,.65,.48),vistaSun*.78);
+      gl_FragColor.rgb=mix(gl_FragColor.rgb,vistaAir,clamp(vistaFog,0.,.92));
+    `);
+  };
+  material.customProgramCacheKey=()=> 'canyon-vista-strata-v4-'+p.theme;
   for(let i=0;i<14;i++) {
     const a=i/14*Math.PI*2+.17, radius=790+(i%3)*175;
     const x=Math.cos(a)*radius,z=Math.sin(a)*radius;

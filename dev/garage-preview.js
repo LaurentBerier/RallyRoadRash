@@ -1,10 +1,12 @@
 import {GarageViewport} from '../src/ui/garage-viewport.js';
 import {Assets,loadAssets} from '../src/core/assets.js';
-import {setCarcassSource,setCarcassRenderer} from '../src/game/vehicle-art.js';
+import {setRiderSource,setCarcassSource,setCarcassRenderer,setVehicleDecalSource} from '../src/game/vehicle-art.js';
 const assets=new Assets(await loadAssets('assets/manifest.json'));
+setVehicleDecalSource(id=>assets.get('vehicles/'+id+'-livery'));
+setRiderSource(()=>assets.url('models/hornet-rider'));
 setCarcassSource((id,level)=>assets.url('models/'+id+'-carcass'+(level==='high'?'-high':'')));
-const host=document.getElementById('garageInset');let view=new GarageViewport(host);setCarcassRenderer(view.renderer);let id='hopper';view.setVehicle(id);
+const host=document.getElementById('garageInset');let view=new GarageViewport(host, new URLSearchParams(location.search).has('mobile')?{mobile:true}:{});setCarcassRenderer(view.renderer);let id='hopper';view.setVehicle(id);
 for(const b of document.querySelectorAll('[data-id]'))b.onclick=()=>{id=b.dataset.id;view.setVehicle(id);};
 document.getElementById('background').onclick=()=>{view.hideVehicle=!view.hideVehicle;if(view.hideVehicle){view.controls.target.set(0,3,-3);view.camera.position.set(-7,4.5,8);view.controls.update();}else view.resetCamera();};
-document.getElementById('rebuild').onclick=()=>{view.dispose();view=new GarageViewport(host);setCarcassRenderer(view.renderer);view.setVehicle(id);};
+document.getElementById('rebuild').onclick=()=>{view.dispose();view=new GarageViewport(host, new URLSearchParams(location.search).has('mobile')?{mobile:true}:{});setCarcassRenderer(view.renderer);view.setVehicle(id);};
 let last=performance.now();function frame(now){const dt=(now-last)/1000;last=now;view.update(dt);view.contact.visible=!view.hideVehicle;if(view.hideVehicle){view.vehicle.root.visible=false;view.renderer.render(view.scene,view.camera);}document.getElementById('status').textContent=JSON.stringify({vehicle:id,environment:host.dataset.environment,lod:host.dataset.lod,texture:host.dataset.texture,busy:host.getAttribute('aria-busy'),camera:view.camera.position.toArray().map(x=>+x.toFixed(2)),pixels:[view.renderer.domElement.width,view.renderer.domElement.height],triangles:view.renderer.info.render.triangles,calls:view.renderer.info.render.calls},null,2);requestAnimationFrame(frame);}requestAnimationFrame(frame);

@@ -1,0 +1,22 @@
+# Body-only reference images
+
+Created with built-in ImageGen, using docs/vehicles/livery-benchmark.png. Static body concepts only; no game mesh changes.
+
+## hopper
+
+Create ONE clean isolated game-asset reference image of ONLY the specified vehicle's static body/carcass from the reference sheet. Front three-quarter view, whole body centered with generous margins, neutral light gray seamless background, even studio lighting, sharp high-resolution photoreal materials. Preserve the existing worn wasteland rally art direction, original proportions, colored racing livery, sponsor stickers, number, armor, rivets, roll cage, cabin/seat, engine, exhaust and body-mounted launcher. Clean means uncluttered presentation, NOT removing its weathered paint. CRITICAL: REMOVE ALL wheels, tires, rims, wheel hubs, brake discs/calipers, shock absorbers, coil springs, suspension control arms and axles. Empty wheel openings, no detached parts, no stands, no ground contact props. Static body suspended in space. No people or driver, no environment, no captions, no inset images, no collage, one vehicle only. DUNE HOPPER: the upper-left blue SUNSTRIKE WORKS dune buggy, number 7.
+
+## ridgeback
+
+Create ONE clean isolated game-asset reference image of ONLY the specified vehicle's static body/carcass from the reference sheet. Front three-quarter view, whole body centered with generous margins, neutral light gray seamless background, even studio lighting, sharp high-resolution photoreal materials. Preserve the existing worn wasteland rally art direction, original proportions, colored racing livery, sponsor stickers, number, armor, rivets, roll cage, cabin/seat, engine, exhaust and body-mounted launcher. Clean means uncluttered presentation, NOT removing its weathered paint. CRITICAL: REMOVE ALL wheels, tires, rims, wheel hubs, brake discs/calipers, shock absorbers, coil springs, suspension control arms and axles. Empty wheel openings, no detached parts, no stands, no ground contact props. Static body suspended in space. No people or driver, no environment, no captions, no inset images, no collage, one vehicle only. RIDGEBACK: the upper-right forest-green IRONHIDE HAUL armored pickup, number 12.
+
+## redline
+
+Create ONE clean isolated game-asset reference image of ONLY the specified vehicle's static body/carcass from the reference sheet. Front three-quarter view, whole body centered with generous margins, neutral light gray seamless background, even studio lighting, sharp high-resolution photoreal materials. Preserve the existing worn wasteland rally art direction, original proportions, colored racing livery, sponsor stickers, number, armor, rivets, roll cage, cabin/seat, engine, exhaust and body-mounted launcher. Clean means uncluttered presentation, NOT removing its weathered paint. CRITICAL: REMOVE ALL wheels, tires, rims, wheel hubs, brake discs/calipers, shock absorbers, coil springs, suspension control arms and axles. Empty wheel openings, no detached parts, no stands, no ground contact props. Static body suspended in space. No people or driver, no environment, no captions, no inset images, no collage, one vehicle only. REDLINE: the lower-left red REDLINE MOTORSPORT wedge sports car, number 23.
+
+## moto
+
+Create ONE clean isolated game-asset reference image of ONLY the specified vehicle's static body/carcass from the reference sheet. Front three-quarter view, whole body centered with generous margins, neutral light gray seamless background, even studio lighting, sharp high-resolution photoreal materials. Preserve the existing worn wasteland rally art direction, original proportions, colored racing livery, sponsor stickers, number, armor, rivets, roll cage, cabin/seat, engine, exhaust and body-mounted launcher. Clean means uncluttered presentation, NOT removing its weathered paint. CRITICAL: REMOVE ALL wheels, tires, rims, wheel hubs, brake discs/calipers, shock absorbers, coil springs, suspension control arms and axles. Empty wheel openings, no detached parts, no stands, no ground contact props. Static body suspended in space. No people or driver, no environment, no captions, no inset images, no collage, one vehicle only. HORNET: the lower-right yellow HORNET RACING dirt bike, number 41. Remove front fork legs and rear swingarm as part of suspension too. Keep handlebars, steering head, seat, fuel tank, fairings, frame, engine, exhaust and launcher; no rider.
+
+Hornet corrective edit: remove the remaining rear coil spring and dangling front fork tubes, preserving the body, livery, lighting and framing.
+

@@ -6,14 +6,13 @@
 <title>RALLY ROAD RASH — Off-Road Championship</title>
 <meta name="description" content="Arcade off-road rally: four machines, five dramatic stages, rockets, drift boosts and big air. Race directly in your browser." />
 <meta name="theme-color" content="#0a0a0c" />
-<!-- Procedural favicon: tyre + chequer. Data URI so the game still ships with
-     zero asset files (see docs/ARCHITECTURE.md hard rule 1). -->
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230a0a0c'/><g fill='%23f2efe9'><rect x='18' y='4' width='5' height='5'/><rect x='23' y='9' width='5' height='5'/></g><g fill='%23ff7a1a'><rect x='23' y='4' width='5' height='5' opacity='.55'/><rect x='18' y='9' width='5' height='5' opacity='.55'/></g><circle cx='13' cy='20' r='8.4' fill='none' stroke='%23ff7a1a' stroke-width='4.2'/><circle cx='13' cy='20' r='2.4' fill='%23f2efe9'/></svg>" />
 <!-- ?v= is a cache buster: static hosts serve assets with max-age=600, so a
      returning player keeps the old layout for ten minutes after a deploy.
      Bump this whenever styles.css changes in a way players must see. -->
 <link rel="stylesheet" href="src/ui/styles.css?v=12" />
-<link rel="stylesheet" href="src/ui/menu-polish.css?v=3" />
+<link rel="stylesheet" href="src/ui/menu-polish.css?v=7" />
+<link rel="stylesheet" href="src/ui/cinematic-screens.css?v=2" />
+<link rel="preload" as="image" href="assets/art/splash-championship.jpg" crossorigin="anonymous" fetchpriority="high" />
 <script type="importmap">
 {
   "imports": {
@@ -22,6 +21,9 @@
   }
 }
 </script>
+<link rel="stylesheet" href="src/ui/pause-polish.css" />
+<link rel="icon" type="image/png" href="assets/sandscape-favicon.png" />
+<link rel="apple-touch-icon" href="assets/sandscape-apple-touch-icon.png" />
 </head>
 <body>
 
@@ -39,19 +41,32 @@
 
 <!-- ============ BOOT / LOADING ============
      Also reused as the per-race bake progress screen: UI.boot(p, msg). -->
-<div id="boot" class="overlay boot">
+<div id="boot" class="overlay boot" aria-label="Rally Road Rash — loading">
   <!-- Stage key art behind the bake bar when assets/ has any; empty and
        invisible otherwise, which is the normal case (ARCHITECTURE §6.11). -->
-  <div class="boot-art" id="bootArt"></div>
+  <div class="boot-art" id="bootArt"><img id="bootKeyArt" src="assets/art/splash-championship.jpg" crossorigin="anonymous" fetchpriority="high" alt="" /></div>
   <div class="boot-inner">
     <canvas class="logo" id="bootLogo" width="620" height="210"
             data-lines="RALLY ROAD|RASH" aria-label="RALLY ROAD RASH"></canvas>
     <p class="strap">OFF-ROAD CHAMPIONSHIP</p>
+    <div class="load-heading"><span>PREPARING THE GRID</span><strong id="bootPercent">0%</strong></div>
     <div class="loadbar" role="progressbar" aria-label="Loading game assets" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bootBar"></i></div>
     <p class="loadmsg" id="bootMsg">warming up the engine…</p>
-    <p class="boot-legal">FIVE STAGES · SIX-CAR GRID · BUILT FOR THE BROWSER</p>
+    <aside class="first-launch-note" id="firstLaunchNotice" role="note" aria-label="First launch loading time">
+      <strong>FIRST LAUNCH? GIVE US A MOMENT.</strong>
+      <p>The first launch may take a little longer while game files download. Your browser caches downloaded files, so future launches should be faster.</p>
+    </aside>
+    <p class="boot-legal">FOUR MACHINES · FIVE STAGES · NO EASY FINISHES</p>
   </div>
 </div>
+
+<script>
+// Show the notice before module downloads; storage can be unavailable in embeds.
+try {
+  document.getElementById('firstLaunchNotice').hidden =
+    localStorage.getItem('rally-road-rash:first-launch-complete') === '1';
+} catch { /* Keep the helpful notice visible when storage is unavailable. */ }
+</script>
 
 <!-- ============ SCREENS ============
      Static chrome lives here; every data-driven list is filled by src/ui/ui.js.
@@ -59,7 +74,7 @@
 <div id="screens" class="screens hidden" aria-live="polite">
 
   <!-- ---- main menu ---- -->
-  <section id="scr-main" class="screen main hidden">
+  <section id="scr-main" class="screen main hidden" aria-label="Rally Road Rash — main menu">
     <div class="main-wrap">
       <div class="main-brand">
         <canvas class="logo big" id="mainLogo" width="900" height="306"
@@ -180,17 +195,20 @@
   </section>
 
   <!-- ---- pause ---- -->
-  <section id="scr-pause" class="screen pause hidden">
+  <section id="scr-pause" class="screen pause hidden" aria-labelledby="pauseTitle">
     <div class="pause-card">
-      <h2>PAUSED</h2>
+      <div class="pause-brand">ROAD RASH <span>/ RACE CONTROL</span></div>
+      <h2 id="pauseTitle">PAUSED</h2>
+      <p class="pause-track" id="pauseTrack"></p>
       <p class="pause-ctx" id="pauseCtx"></p>
       <nav class="pause-actions">
-        <button class="btn primary" data-focus data-act="pause-resume">RESUME</button>
+        <button class="btn primary" data-focus data-act="pause-resume">RESUME RACE <span aria-hidden="true">&#8594;</span></button>
         <button class="btn" data-focus data-act="pause-restart">RESTART STAGE</button>
         <button class="btn" data-focus data-act="pause-playbook">HOW TO PLAY</button>
         <button class="btn" data-focus data-act="pause-settings">SETTINGS</button>
         <button class="btn ghost danger" data-focus data-act="pause-quit">QUIT TO MENU</button>
       </nav>
+      <p class="pause-help"><span class="pause-key"><kbd>ESC</kbd> / RESUME</span><span class="pause-touch">TOUCH RESUME TO RETURN</span><span>RACE ON HOLD</span></p>
     </div>
   </section>
 
@@ -316,3 +334,4 @@
 <script type="module" src="src/main.js"></script>
 </body>
 </html>
+

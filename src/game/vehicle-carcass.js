@@ -48,8 +48,11 @@ import { clamp } from '../core/rng.js';
 import { kitPalette } from '../world/kit.js';
 import { launcherGeo, rocketGeo } from '../world/kit-arsenal.js';
 import { LAUNCHERS } from './weapons.js';
-import { MODEL_FIT, carcassFit, wheelZones, inWheelZone } from './vehicle-fit.js';
+import { MODEL_FIT, carcassFit, wheelZones, inWheelZone, clearBodyArches } from './vehicle-fit.js';
 import { VehicleBodyLOD } from './vehicle-lod.js';
+import { applyVehicleDecals } from './vehicle-decals.js';
+import { addVehicleSurface } from './vehicle-surface.js';
+import { addIronhideWindshield, addCustomWindowGrilles } from './vehicle-windshield.js';
 
 /* Where the tube axis and the muzzle sit in launcherGeo's own frame. These
    mirror kit-arsenal.js (`AXIS` and `TL / 2`) — a rocket spawned anywhere
@@ -171,16 +174,15 @@ function fitCarcass(v, spec, M, group, url, secondary = false) {
   if (_box.isEmpty()) { _models.disposeModel(group); return; }
   _raw.min[0] = _box.min.x; _raw.min[1] = _box.min.y; _raw.min[2] = _box.min.z;
   _raw.max[0] = _box.max.x; _raw.max[1] = _box.max.y; _raw.max[2] = _box.max.z;
-  const fit = carcassFit(spec, spec.id, _raw);
-  const zones = wheelZones(spec, spec.id, fit);
-  _fitM.compose(_p.set(fit.x, fit.y, fit.z), _q.setFromAxisAngle(_yUp, fit.yaw), _s3.setScalar(fit.s));
+  const fitId = url.includes(spec.id + '-custom') ? spec.id + '-custom' : url.includes('ridgeback-ironhide') ? 'ridgeback-ironhide' : spec.id === 'hopper' && url.includes('hopper-sunstrike') ? 'hopper-sunstrike' : spec.id;
+  const fit = carcassFit(spec, fitId, _raw);
+  const zones = wheelZones(spec, fitId, fit);
+  _fitM.compose(_p.set(fit.x, fit.y, fit.z), _q.setFromAxisAngle(_yUp, fit.yaw), _s3.set(fit.sx, fit.sy, fit.sz));
 
-  const F = MODEL_FIT[spec.id] || {};
+  const F = MODEL_FIT[fitId] || {};
   const tintAll = !F.tint || F.tint.length === 0;
-  /* AI variants: the paint hue over the scan, lifted toward white so a
-     saturated team colour tints the steel rather than painting it black.
-     The works car keeps the raw scan — that is the point of the scan. */
-  const tint = v.livery > 0 ? new THREE.Color(v.paintColor).lerp(_white, 0.45) : null;
+  // AI paint is hue-replaced selectively in the atlas; the player keeps authored paint.
+  const tint = v.livery > 0 ? new THREE.Color(v.paintColor) : null;
 
   let tris = 0, kept = 0;
   const aniso = maxAniso();
@@ -189,7 +191,7 @@ function fitCarcass(v, spec, M, group, url, secondary = false) {
     if (!o.isMesh || !o.geometry) return;
     o.castShadow = true; o.receiveShadow = true;
     _m.multiplyMatrices(_fitM, o.matrixWorld);        // geometry → body space
-    const rec = stripGeometry(o.geometry, _m, zones);
+    const rec = stripGeometry(o.geometry, _m, zones, F.archClearance ? { spec, radius: F.archClearance } : null);
     o.geometry = rec.geometry;
     tris += rec.tris; kept += rec.kept;
     kbox.union(rec.box);
@@ -205,7 +207,7 @@ function fitCarcass(v, spec, M, group, url, secondary = false) {
       const mat = new THREE.MeshPhysicalMaterial();
       THREE.MeshStandardMaterial.prototype.copy.call(mat, old);
       mat.defines = { STANDARD: '', PHYSICAL: '' };
-      mat.clearcoat = 0.32; mat.clearcoatRoughness = 0.24;
+      mat.clearcoat = 0.55; mat.clearcoatRoughness = 0.22;
       old.dispose();
       return mat;
     };
@@ -237,16 +239,20 @@ function fitCarcass(v, spec, M, group, url, secondary = false) {
           if (nm) { mat.normalMap = nm; mat.normalScale.set(0.6, 0.6); }
         }
       }
-      mudify(mat, v._uMud, row, paintTint);
+      mudify(mat, v._uMud, row, paintTint, tint ? ({hopper:.60,ridgeback:.36,redline:0,moto:.12}[spec.id] ?? 0) : -1);
+      addVehicleSurface(mat, _m);
+      if (spec.bodyStyle !== 'bike' && !F.bakedLivery) applyVehicleDecals(mat, spec.id, _m);
       v._ghost.mats.push(mat);
       if (v._ghost.k > 0) { mat.transparent = true; mat.opacity = 1 - 0.58 * v._ghost.k; }
       mat.needsUpdate = true;
     }
   });
 
+  if (fitId === 'ridgeback-ironhide') addIronhideWindshield(group, v, aniso);
+  if ((spec.bodyStyle !== 'bike' && fitId.endsWith('-custom')) || fitId === 'hopper-sunstrike') addCustomWindowGrilles(group, v, aniso, spec.id);
   group.position.set(fit.x, fit.y, fit.z);
   group.rotation.set(0, fit.yaw, 0);
-  group.scale.setScalar(fit.s);
+  group.scale.set(fit.sx, fit.sy, fit.sz);
   group.name = 'carcass';
   const info = group.userData.carcassInfo = { url, tris, kept, box: kbox, fit };
   // Fitting a second LOD must not move lights, exhaust or the launcher twice.
@@ -254,6 +260,25 @@ function fitCarcass(v, spec, M, group, url, secondary = false) {
   v.chassis.add(group);
   v.carcass = group;
   v._carcassInfo = info;
+
+  // Imported rear arches are wider and farther back than the procedural shell.
+  // Move the rendered hub before spanning its suspension; physics stays stable.
+  for (const w of v.wheels) {
+    w.visualFit = !w.front ? F.rearWheels || null : null;
+    const R = w.visualFit;
+    w.obj.scale.set(R?.width || 1, R?.radius || 1, R?.radius || 1);
+  }
+
+  // Attach the live fork and rear linkage to this export's frame pickups.
+  // Only visual roots move; wheel contact, spring travel and physics stay intact.
+  if (F.bikePickups) {
+    const anchor = (out, point, lateral) => out.set(lateral,
+      point[1] * fit.s + fit.y, -point[0] * fit.sn * fit.s + fit.z);
+    for (const w of v.wheels) {
+      anchor(w.armRoot, w.front ? F.bikePickups.fork : F.bikePickups.swingarm, w.hubOff);
+      if (w.coil) anchor(w.coilRoot, F.bikePickups.shock, 0);
+    }
+  }
 
   /* The frame the GLB resolves: the merged body panels go, and the lamp and
      brake panels go with them — a painted carcass draws its own headlights,
@@ -263,6 +288,7 @@ function fitCarcass(v, spec, M, group, url, secondary = false) {
      What has to survive either way is the light: the blooms are Sprites under
      `_glowRig`, which the shadow pass skips and which no carcass can draw
      for itself, so they are moved by the measured delta instead of hidden. */
+  for (const mesh of v._riderMeshes || []) {mesh.visible = !!F.keepRider && !v.rider;mesh.position.y=F.riderLift||0;}
   for (const mesh of v._bodyMeshes) {
     if (F.keepLamps && (mesh.material === M.lamp || mesh.material === M.brake)) continue;
     mesh.visible = false;
@@ -275,11 +301,14 @@ function fitCarcass(v, spec, M, group, url, secondary = false) {
        delta per kind is the contract, and the fit table records what that does
        to the pod on the machines that have one. */
     for (const s of v._glowRig.children) {
+      // Ironhide has no central roof light bar; avoid a floating bloom on its screen.
+      if (F.hideRoofGlow && s.material === M.headGlow && Math.abs(s.position.x) < .01) { s.visible = false; continue; }
       const d = s.material === M.headGlow ? F.lamps.head
         : s.material === M.brakeGlow ? F.lamps.brake : null;
       if (!d) continue;
-      s.position.set(s.position.x + (d.dx || 0),
+      s.position.set(s.position.x + (d.dx || 0) + Math.sign(s.position.x+v._glowRig.position.x)*(d.outward||0),
         s.position.y + (d.dy || 0), s.position.z + (d.dz || 0));
+      if(d.width)s.scale.set(d.width,d.height||d.width,1);
     }
   }
   /* The launcher is bolted to a roof or a deck, and a carcass's roof is not
@@ -290,9 +319,31 @@ function fitCarcass(v, spec, M, group, url, secondary = false) {
     const p = v._arsenalRig.position, L = F.launcher;
     p.set(p.x + (L.dx || 0), p.y + (L.dy || 0), p.z + (L.dz || 0));
   }
+  if (F.launcherSupports && v._arsenalRig) {
+    // Transverse cradle ties the four cannon feet into both bed roll rails.
+    // It moves with the launcher, preserving muzzle and recoil alignment.
+    for (const z of [-.22, .22]) {
+      const crossbar = new THREE.BoxGeometry(1.64, .095, .11);
+      crossbar.translate(0, -.385, z);
+      addPart(v._arsenalRig, crossbar, M.dark, v);
+      for (const x of [-.76, .76]) {
+        const saddle = new THREE.BoxGeometry(.18, .045, .20);
+        saddle.translate(x, -.43, z);
+        addPart(v._arsenalRig, saddle, M.metal, v);
+      }
+    }
+    for (const x of [-.25,.25]) for (const z of [-.22,.22]) {
+      const leg=new THREE.BoxGeometry(.055,.34,.07);
+      leg.translate(x,-.17,z);addPart(v._arsenalRig,leg,M.dark,v);
+      const foot=new THREE.BoxGeometry(.16,.035,.16);
+      foot.translate(x,-.33,z);addPart(v._arsenalRig,foot,M.metal,v);
+    }
+  }
   if (F.flame && v.exhaust) {
     v.exhaust.position.set(F.flame.x, F.flame.y, F.flame.z);
+    v.exhaust.position.z+=.12;
     if (v._flameRig) v._flameRig.position.copy(v.exhaust.position);
+    if (v._muffler) v._muffler.position.copy(v.exhaust.position);
   }
 }
 
@@ -350,9 +401,24 @@ function sharpen(mat, aniso) {
  * vertices that remain, and recomputing them across the UV seams of a
  * fused scan would facet every panel.
  */
-function stripGeometry(geo, m, zones) {
+function stripGeometry(geo, m, zones, arch = null) {
   const hit = _stripped.get(geo);
   if (hit) return hit;
+  const source = geo;
+  if (arch) {
+    geo = geo.clone();
+    const inverse = m.clone().invert(), point = new THREE.Vector3();
+    const positions = geo.attributes.position;
+    for (let i = 0; i < positions.count; i++) {
+      point.fromBufferAttribute(positions, i).applyMatrix4(m);
+      clearBodyArches(point, arch.spec, arch.radius);
+      point.applyMatrix4(inverse);
+      positions.setXYZ(i, point.x, point.y, point.z);
+    }
+    positions.needsUpdate = true;
+    geo.computeVertexNormals();
+    geo.computeBoundingBox(); geo.computeBoundingSphere();
+  }
   const pos = geo.attributes.position;
   const idx = geo.index;
   const n = idx ? idx.count : pos.count;
@@ -385,7 +451,7 @@ function stripGeometry(geo, m, zones) {
     if (!geometry.boundingSphere) geometry.computeBoundingSphere();
   }
   const rec = { geometry, tris: triCount, kept: k / 3, box };
-  _stripped.set(geo, rec);
+  _stripped.set(source, rec);
   return rec;
 }
 
@@ -404,9 +470,10 @@ function stripGeometry(geo, m, zones) {
  * three keys its program cache on `onBeforeCompile.toString()`, so one
  * program serves every mudified panel and the uniforms do the varying.
  */
-export function mudify(mat, uMud, row = MUD_ROW_BODY, paintTint = null) {
+export function mudify(mat, uMud, row = MUD_ROW_BODY, paintTint = null, sourceHue = -1) {
   const uRow = { value: row };
   mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uPaintSourceHue = { value: sourceHue };
     sh.uniforms.uMud = uMud;
     sh.uniforms.uMudRow = uRow;
     sh.uniforms.uPaintTint = { value: paintTint || _white };
@@ -416,7 +483,17 @@ export function mudify(mat, uMud, row = MUD_ROW_BODY, paintTint = null) {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvMudP = position;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>',
-        '#include <common>\nuniform float uMud;\nuniform vec4 uMudRow;\nuniform vec3 uPaintTint;\nuniform float uAtlasPaint;\nvarying vec3 vMudP;\n' +
+        `#include <common>
+uniform float uPaintSourceHue;
+vec3 racerHSV(vec3 c){
+ vec4 K=vec4(0.,-1./3.,2./3.,-1.);
+ vec4 p=mix(vec4(c.bg,K.wz),vec4(c.gb,K.xy),step(c.b,c.g));
+ vec4 q=mix(vec4(p.xyw,c.r),vec4(c.r,p.yzx),step(p.x,c.r));
+ float d=q.x-min(q.w,q.y);
+ return vec3(abs(q.z+(q.w-q.y)/(6.*d+1e-6)),d/(q.x+1e-6),q.x);
+}
+vec3 racerRGB(vec3 c){return c.z*mix(vec3(1.),clamp(abs(fract(c.xxx+vec3(0.,2./3.,1./3.))*6.-3.)-1.,0.,1.),c.y);}
+` + '\nuniform float uMud;\nuniform vec4 uMudRow;\nuniform vec3 uPaintTint;\nuniform float uAtlasPaint;\nvarying vec3 vMudP;\n' +
         'float mudMask(){\n' +
         // body space: height above the centre of mass, so low = dirty
         '  float h = 1.0 - smoothstep(-0.35, 0.45, dot(uMudRow, vec4(vMudP, 1.0)));\n' +
@@ -427,7 +504,20 @@ export function mudify(mat, uMud, row = MUD_ROW_BODY, paintTint = null) {
         '\tfloat _hi = max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b));\n' +
         '\tfloat _lo = min(diffuseColor.r, min(diffuseColor.g, diffuseColor.b));\n' +
         '\tfloat _paint = smoothstep(0.12, 0.38, (_hi-_lo)/max(_hi,0.01));\n' +
-        '\tdiffuseColor.rgb *= mix(vec3(1.0), uPaintTint, _paint*uAtlasPaint);\n' +
+        `
+ if(uPaintSourceHue>=0.){
+   vec3 hsv=racerHSV(diffuseColor.rgb);
+   vec3 target=racerHSV(uPaintTint);
+   float dh=abs(hsv.x-uPaintSourceHue);dh=min(dh,1.-dh);
+   // Restrict recolouring to painted hues; neutral decals/metal and rusty browns stay authored.
+   float mask=(1.-smoothstep(.035,.095,dh))*smoothstep(.18,.48,hsv.y)*smoothstep(.018,.075,hsv.z);
+   float rust=smoothstep(.025,.055,hsv.x)*(1.-smoothstep(.105,.15,hsv.x));
+   mask*=1.-rust*.95;
+   vec3 recolor=racerRGB(vec3(target.x,mix(hsv.y,target.y,.65),hsv.z));
+   recolor*=dot(diffuseColor.rgb,vec3(.2126,.7152,.0722))/max(dot(recolor,vec3(.2126,.7152,.0722)),.001);
+   diffuseColor.rgb=mix(diffuseColor.rgb,recolor,mask);
+ }
+` +
         '\tdiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.105, 0.078, 0.050), _mud);')
       .replace('#include <roughnessmap_fragment>',
         '#include <roughnessmap_fragment>\n\troughnessFactor = mix(roughnessFactor, 0.94, _mud);')
@@ -456,7 +546,7 @@ export function mudify(mat, uMud, row = MUD_ROW_BODY, paintTint = null) {
  * other side.
  */
 export function buildArsenalRig(v, spec, M) {
-  v._muzzle = null; v._rack = null; v._rackShown = -1; v._arsenalRig = null;
+  v._muzzle = null; v._muzzles = null; v._rack = null; v._rackShown = -1; v._arsenalRig = null;
   const L = spec.launcher;
   if (!L) return;
   const P = kitPalette('training');
@@ -471,8 +561,28 @@ export function buildArsenalRig(v, spec, M) {
   v.chassis.add(rig);
   v._arsenalRig = rig;
 
-  const lg = wearUV(launcherGeo(P, seed, tubes));
-  addPart(rig, lg, M.arsenal, v);
+  // The bike needs a compact side tube, without a hanging car-style cradle.
+  let launcherGeometry;
+  if (spec.bodyStyle === 'bike') {
+    launcherGeometry = new THREE.CylinderGeometry(.075, .075, .72, 12);
+    launcherGeometry.rotateX(Math.PI / 2);
+    launcherGeometry.translate(0, MUZZLE_Y, 0);
+    const colors=new Float32Array(launcherGeometry.attributes.position.count*3).fill(.24);
+    launcherGeometry.setAttribute('color',new THREE.BufferAttribute(colors,3));
+  } else launcherGeometry=launcherGeo(P,seed,tubes);
+  const lg = wearUV(launcherGeometry);
+  if(L.sideMount){
+    for(const side of [-1,1]){
+      const tube=addPart(rig,side<0?lg:lg.clone(),M.arsenal,v);
+      tube.position.x=side*L.sideMount;
+      tube.name=side<0?'launcher-left':'launcher-right';
+    }
+    // Short cross-brackets visibly bolt both pods to the bike's subframe.
+    for(const z of [-.20,.20]){
+      const g=new THREE.BoxGeometry(L.sideMount*2,.035,.065);
+      g.translate(0,.035,z);addPart(rig,g,M.dark,v);
+    }
+  } else addPart(rig, lg, M.arsenal, v);
   if (L.base > 0) {
     const g = new THREE.BoxGeometry(plateW + 0.02, L.base, 0.36);
     g.translate(0, -L.base * 0.5, 0);
@@ -511,9 +621,13 @@ export function buildArsenalRig(v, spec, M) {
      reads both position and forward off one matrixWorld. */
   const mz = new THREE.Object3D();
   mz.name = 'muzzle';
-  mz.position.set(0, MUZZLE_Y, MUZZLE_Z);
+  mz.position.set(-(L.sideMount||0), MUZZLE_Y, MUZZLE_Z);
   rig.add(mz);
   v._muzzle = mz;
+  if(L.sideMount){
+    const other=mz.clone();other.name='muzzle-right';other.position.x=L.sideMount;
+    rig.add(other);v._muzzles=[mz,other];
+  }
 }
 
 function addPart(rig, geometry, material, v) {
@@ -534,7 +648,7 @@ export function muzzleLocal(spec, outPos, outDir) {
   const L = spec.launcher;
   if (!L) { outPos.set(0, 0, spec.dims.L * 0.5); outDir.set(0, 0, 1); return outPos; }
   const cp = Math.cos(L.pitch), sp = Math.sin(L.pitch);
-  outPos.set(L.x, L.y + MUZZLE_Y * cp + MUZZLE_Z * sp, L.z - MUZZLE_Y * sp + MUZZLE_Z * cp);
+  outPos.set(L.x-(L.sideMount||0), L.y + MUZZLE_Y * cp + MUZZLE_Z * sp, L.z - MUZZLE_Y * sp + MUZZLE_Z * cp);
   outDir.set(0, sp, cp);
   return outPos;
 }
@@ -544,6 +658,10 @@ export function muzzleLocal(spec, outPos, outDir) {
    row; an off-centre mount racks a two-column pannier at its mirror point,
    so a bike carries its rounds on the far side from the tube. */
 function rackSlot(L, plateW, i, out) {
+  if(L.sideMount){
+    out.set((i&1?1:-1)*L.sideMount,-.025+(i>>1)*RACK_PITCH,-.02);
+    return;
+  }
   if (L.x !== 0) {
     const col = i & 1, row = i >> 1;
     out.set(-2 * L.x + (col - 0.5) * RACK_PITCH, 0.02 + row * RACK_PITCH, 0);
@@ -563,6 +681,7 @@ export function updateArsenalRig(v) {
   const n = v.ammo | 0;
   if (n !== v._rackShown) {
     v._rackShown = n;
+    if(v._muzzles) v._muzzle=v._muzzles[n&1];
     const R = v._rack;
     for (let i = 0; i < R.length; i++) R[i].visible = i < n;
   }
@@ -587,3 +706,5 @@ const _fitM = new THREE.Matrix4(), _m = new THREE.Matrix4();
 const _p = new THREE.Vector3(), _s3 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const _pa = new THREE.Vector3(), _pb = new THREE.Vector3(), _pc = new THREE.Vector3();
 const _cen = new THREE.Vector3();
+
+

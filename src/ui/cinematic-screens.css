@@ -1,0 +1,75 @@
+/* Art contains the title. UI occupies its reserved dark areas; no duplicate
+   logo or heavy scrim over the vehicles. Original screen is the fallback. */
+body.cinematic-title .hero-art { background-position:center; }
+body.cinematic-title .hero-veil {
+  background:linear-gradient(0deg,#05090dd9,transparent 38%);
+}
+body.cinematic-title #scr-main::before,
+body.cinematic-title #scr-main::after { display:none; }
+body.cinematic-title #scr-main .main-wrap {
+  position:absolute;left:5%;bottom:5%;width:min(370px,35vw);
+  height:auto;max-height:none;margin:0;padding:0;
+  display:flex;flex-direction:column;gap:12px;
+}
+body.cinematic-title #scr-main .main-brand { margin:0; }
+body.cinematic-title #mainLogo,
+body.cinematic-title #scr-main .main-brand>.strap { display:none; }
+body.cinematic-title #scr-main .main-progress { margin:0;height:auto;min-height:0; }
+body.cinematic-title #scr-main .prog-step em,
+body.cinematic-title #scr-main .prog-note { color:#c0c8d0;text-shadow:0 1px 4px #000; }
+body.cinematic-title #scr-main .prog-step.off em { color:#919ca8; }
+body.cinematic-title #scr-main .badge-slot:empty { display:none; }
+body.cinematic-title #scr-main .main-actions { display:flex;gap:8px;max-width:none; }
+body.cinematic-title #scr-main .main-actions .btn {
+  min-height:46px;padding:12px 22px;font-size:13px;
+  background:#0a101bce;border:1px solid #ffffff29;
+  backdrop-filter:blur(12px);transition:background .18s,transform .18s;
+}
+body.cinematic-title #scr-main .main-actions .btn.primary {
+  background:linear-gradient(110deg,#ff982d,#ed6714);color:#121416;border-color:#ffad58;
+}
+body.cinematic-title #scr-main .main-actions .btn:hover { transform:translateX(4px);border-color:#ff9a46; }
+body.cinematic-title #scr-main .hintline { font-size:10px;color:#b1b8bf; }
+#bootKeyArt { width:100%;height:100%;object-fit:cover;display:block; }
+.boot:not(.cinematic-loading) #bootKeyArt { visibility:hidden; }
+.boot.cinematic-loading { align-items:flex-end;justify-content:flex-start;padding:4vh 5vw; }
+.boot.cinematic-loading .boot-art { opacity:1; }
+.boot.cinematic-loading .boot-art::after {
+  background:linear-gradient(0deg,#03070bf2,rgba(3,7,11,.7) 16%,transparent 40%);
+}
+.boot.cinematic-loading .boot-inner { width:100%;max-width:none; }
+.boot.cinematic-loading #bootLogo,
+.boot.cinematic-loading .boot-inner>.strap { display:none; }
+.load-heading { display:flex;align-items:baseline;justify-content:space-between;gap:20px;
+  font-size:11px;letter-spacing:.24em;font-weight:800;color:#eef1f3; }
+.load-heading strong { font-family:var(--mono);font-size:24px;letter-spacing:0;color:#ff992e; }
+.boot.cinematic-loading .loadbar { margin:12px 0 12px;height:3px;background:#ffffff26; }
+.boot.cinematic-loading .loadbar i { border-radius:0;box-shadow:0 0 16px #ff8a27; }
+.boot.cinematic-loading .loadmsg { margin:0;height:auto;min-height:18px;font-size:10px;color:#bcc4cd; }
+.boot.cinematic-loading .boot-legal { margin:16px 0 0;color:#8c949d;font-size:9px;letter-spacing:.2em; }
+.first-launch-note { max-width:560px;margin:18px 0 0;padding:12px 16px;border-left:3px solid #ff992e;
+  background:#0b111be8;color:#d9e0e8;text-align:left;border-radius:0 6px 6px 0; }
+.first-launch-note strong { display:block;color:#ffbb72;font-size:11px;letter-spacing:.1em; }
+.first-launch-note p { margin:6px 0 0;font-size:13px;line-height:1.5;letter-spacing:normal; }
+.first-launch-note[hidden] { display:none; }
+@media(max-height:550px) {
+  .first-launch-note { margin-top:10px;padding:8px 12px; }
+  .first-launch-note p { font-size:12px;line-height:1.4; }
+}
+@media (max-aspect-ratio:4/3) {
+  body.cinematic-title .hero-art { background-size:contain;background-position:center top;background-color:#060b10; }
+  #bootKeyArt { object-fit:contain;object-position:center top;background:#060b10; }
+  body.cinematic-title #scr-main .main-wrap { left:6%;bottom:5%;width:88%;max-width:440px; }
+  body.cinematic-title .hero-veil { background:linear-gradient(0deg,#05090d 10%,transparent 70%); }
+}
+@media (max-height:550px) and (min-aspect-ratio:4/3) {
+  body.cinematic-title #scr-main .main-wrap { bottom:3%;gap:5px; }
+  body.cinematic-title #scr-main .main-actions { gap:4px; }
+  body.cinematic-title #scr-main .main-actions .btn { min-height:36px;padding:8px 16px; }
+  body.cinematic-title #scr-main .main-progress,
+  body.cinematic-title #scr-main .hintline { display:none; }
+  .boot.cinematic-loading .boot-legal { margin-top:8px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  body.cinematic-title #scr-main .main-actions .btn { transition:none; }
+}

@@ -96,19 +96,22 @@ export class MusicBank {
     this._buildGraph();
     let manifest = null;
     try {
-      const res = await fetch(manifestUrl, { cache: 'no-cache' });
+      const res = await fetch(manifestUrl, { cache: 'no-cache', signal: AbortSignal.timeout(15000) });
       if (res.ok) manifest = await res.json();
     } catch { /* no manifest is the normal pre-launch case, not an error */ }
     const music = manifest && manifest.music;
     if (!music || typeof music !== 'object') { this.ready = true; return; }
 
     const base = manifestUrl.replace(/[^/]*$/, '');
-    await Promise.all(Object.keys(music).map(async (key) => {
+    const pending=new Map();
+    this._ensureTrack=key=>{
+      if(pending.has(key))return pending.get(key);
+      const job=(async()=>{
       const spec = music[key] || {};
       if (!spec.url) return;
       let buf = null;
       try {
-        const res = await fetch(base + spec.url);
+        const res = await fetch(base + spec.url, {signal:AbortSignal.timeout(15000)});
         if (res.ok) buf = await A.ctx.decodeAudioData(await res.arrayBuffer());
       } catch { /* missing or undecodable file -> that theme stays generative-only */ }
       if (!buf || !A.ctx) return;              // ctx can vanish if the tab unloads mid-fetch
@@ -117,7 +120,10 @@ export class MusicBank {
       const loopStart = Math.min(prime / buf.sampleRate, buf.duration * 0.25);
       const loopEnd = Math.min(loopStart + durationSec, buf.duration);
       this.tracks.set(key, { buffer: buf, loopStart, loopEnd });
-    }));
+      })();pending.set(key,job);return job;
+    };
+    await this._ensureTrack(MENU_KEY);
+    if(this._theme)await this._ensureTrack(this._theme);
     this.ready = true;
     if (!A.ctx) return;
     this._startAll();
@@ -129,6 +135,7 @@ export class MusicBank {
     const A = this.audio, ctx = A.ctx;
     if (!ctx) return;
     for (const [key, t] of this.tracks) {
+      if(key===MENU_KEY ? this._menuGain : this._raceGain.has(key))continue;
       const src = ctx.createBufferSource();
       src.buffer = t.buffer; src.loop = true;
       src.loopStart = t.loopStart; src.loopEnd = t.loopEnd;
@@ -164,10 +171,16 @@ export class MusicBank {
       this file existed. Crossfades over 0.8 s when a theme is already
       live; applies instantly (fadeSec 0) the first time, including the
       replay once load() resolves after an early call. */
+  preloadTheme(theme) { return this._ensureTrack?.(theme) || Promise.resolve(); }
+
   setRaceTheme(theme) {
     this._theme = theme || null;
     if (!this.ready) return;                    // replayed by load() once decoded
     this._activateRace(this._theme, 0.8);
+    this._ensureTrack?.(this._theme)?.then(()=>{
+      if(!this.audio.ctx)return;
+      this._startAll();this._activateRace(this._theme,.8);
+    });
   }
 
   _activateRace(theme, fadeSec) {

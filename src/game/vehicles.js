@@ -240,12 +240,12 @@ export const VEHICLES = [
          lean is cosmetic, so the body underneath has to stay flat or the
          drawn lean stacks on top of a real roll and the bike looks drunk.
        • Everything a player actually feels — 245 kg, the lowest yaw inertia
-         on the grid, the sharpest rack, and the least grip — is real.
+         on the grid, the sharpest rack, and the strongest grip — is real.
 
      Character: it out-accelerates and out-jumps everything (a quarter of the
-     Ridgeback's mass off the same lip is a different sport), and it has less
-     grip than anything else here, so it arrives at every corner asking to be
-     slid. Contact is what kills it: 245 kg against 1680 kg of Ridgeback is
+     Ridgeback's mass off the same lip is a different sport), with the strongest
+     grip and power-to-weight in the field. Contact is what kills it:
+     245 kg against 1680 kg of Ridgeback is
      not an argument you win.
      ----------------------------------------------------------------- */
   {
@@ -256,10 +256,8 @@ export const VEHICLES = [
     number: 41,
     color: 0xe8c21a,
     bodyStyle: 'bike',
-    /* Rear rack, on the RIGHT (−X) beside the subframe: a single tube can
-       fire past the rider's leg, where a centreline mount would fire
-       through his back. The pannier of rounds hangs off the other side. */
-    launcher: { x: -0.30, y: 0.46, z: -0.30, pitch: 0.04, tubes: 1, brace: true },
+    // A compact launcher on each side of the rear subframe.
+    launcher: { x: 0, y: 0.46, z: -0.30, pitch: 0.04, tubes: 2, sideMount: 0.28, brace: false },
 
     mass: 245,                        // kg — 110 kg bike + rider + arcade fudge
     dims: { L: 2.18, W: 0.86, H: 1.55 },  // W is BAR width, not body width; H is
@@ -281,36 +279,26 @@ export const VEHICLES = [
     suspK: 11700,                     // N/m per corner → 2.20 Hz, sag 0.067 m = 16.8 %
     suspC: 1320,                      // → ζ = 0.78
 
-    motorForce: 3050,                 // N → 12.45 m/s² on paper. It never sees that:
-                                      //   rear-biased drive on 245 kg is traction
-                                      //   limited off the line, so it wheelspins,
-                                      //   TC catches it, and it still leaves.
-    brakeForce: 6200,                 // above the friction limit, like the cars
-    topSpeed: 40,                     // m/s (144 km/h)
-    revRange: [1400, 11500],          // a 450 single. Screams higher than the Redline.
-
-    gripF: 1.42,                      // knobblies in loose dirt genuinely hook up, so the
-    gripR: 1.48,                      //   bike is not the low-grip machine — the front is
-                                      //   simply the end that lets go first, and tucking
-                                      //   it makes you a passenger. Rear-biased, because
-                                      //   a bike drives out of a corner on the back wheel.
-    driveSplit: 0.12,                 // chain drive is 0.00; 0.12 is the smallest front
-                                      //   share that keeps a 1.44 m wheelbase pointing
-                                      //   where it was aimed under the shared solver
-    brakeBias: 0.66,                  // front-brake dominant, the way a bike stops
-
-    comHeight: 0.40,                  // rollover threshold 23.7 m/s² vs 18.9 peak lateral
-                                      //   → 1.25× margin
+    motorForce: 3900,                 // strongest power/weight; traction still limits launches
+    brakeForce: 6700,
+    topSpeed: 46,                     // 166 km/h — fastest clean-air race pace
+    revRange: [1400, 11500],
+    gripF: 1.70,                      // front authority without corner-entry washout
+    gripR: 1.72,
+    driveSplit: 0.22,                 // virtual outrigger traction stabilises corner exits
+    brakeBias: 0.62,
+    comHeight: 0.36,                  // 1.19x rollover margin; mass remains only 245 kg
     antiRollBonus: 1.55,              // the invisible outrigger's spring — see above
     /* LOW, and that is not a typo. The wheelbase is 1.44 m against the
        Hopper's 2.64, so the same rack angle asks for twice the yaw rate;
        past the tyre's peak slip angle the surplus is not cornering, it is
        scrubbing, and full lock at 1.22 measured 32.6 m of radius against the
        Hopper's 24.0. At 0.78 the bike turns inside every car on the grid at
-       walking pace (3.1 m against the Hopper's 4.3) and is grip-limited, not
-       scrub-limited, everywhere above it. The sharpest steering RESPONSE in
+       walking pace (3.1 m against the Hopper's 4.3). The additional speed
+       taper avoids scrubbing that short wheelbase at race pace. Steering response in
        the game comes from the yaw inertia, which is a third of a car's. */
     steerLockScale: 0.78,
+    steerHighSpeedScale: 0.72,        // preserve tight slow turns, reduce tyre scrub at race speed
 
     liveryHues: [0.00, 0.11, 0.28, 0.55, 0.81],
   },
@@ -324,7 +312,7 @@ export const VEHICLE_BY_ID = Object.fromEntries(VEHICLES.map(v => [v.id, v]));
    ------------------------------------------------------------
    Four 0..1 numbers. The ranges below are FIXED, not derived from the roster:
    when the Hornet joined, the bars on the other three did not move by a pixel,
-   which is the entire point. The bike pins `accel` and bottoms out `grip` and
+   which is the entire point. The bike pins `accel` and `grip` and bottoms out
    `weight` — all three are true statements about it, and the 0.05 floor in
    `bar()` is what keeps a bottomed-out bar visible rather than absent.
    ============================================================ */

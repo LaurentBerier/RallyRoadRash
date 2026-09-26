@@ -533,6 +533,7 @@ head('8. AIRBORNE — boom eases out, FOV opens, horizon stays level, calm shake
   info(`continuous rumble ${f(groundRumble, 3)} on the ground → ${f(airRumble, 3)} in the air`);
   info(`peak camera roll with the car at 29° of body roll: ${f(maxRoll, 3)}°`);
   ok('boom eases out in the air', airDist > groundDist * 1.03, `${f(airDist / groundDist, 3)}×`);
+  ok('airborne framing stays restrained', airDist < groundDist * 1.20 && airFov < groundFov + 3.1);
   ok('FOV opens in the air', airFov > groundFov + 1.5, `+${f(airFov - groundFov)}°`);
   ok('horizon stays level (camera roll < 0.01°)', maxRoll < 0.01, `${f(maxRoll, 4)}°`);
   ok('continuous shake goes calm in the air', airRumble < groundRumble * 0.25,

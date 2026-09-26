@@ -160,29 +160,24 @@ export const SKY_THEMES = {
     plume: { dir: { x: -0.62, z: 0.78 }, dist: 3400, baseY: 120, height: 2600, count: 1.0 }
   },
 
-  /* THUNDER MESA: the canyon family an hour later. Same red rock, same warm
-     air, but the sun is nine degrees off the deck and every vertical surface
-     on the stage is either rim-lit or in silhouette. High cirrus catches the
-     last of it, which is what the 0.70 buys. */
+  /* Thunder Park's concept-art direction: a warm afternoon key against cool
+     skylight. Terrain's baked sun vector is updated alongside this table. */
   thunder: {
-    sunEl: 9, sunAz: -118,
-    sunDir: { x: -0.463692, y: 0.156434, z: -0.872076 },
-    sunColor: 0xffb070, sunIntensity: 2.60,
-    hemiSky: 0x7c6ea4, hemiGround: 0x6e4630, hemiIntensity: 0.62,
-    zenith: 0x1f2a68, horizon: 0xff9a3c, hazeColor: 0xdd8846,
-    /* mie 0.012 rather than the 0.02 a nine-degree sun wants: at 0.02 the
-       aureole peaked at 6x the bloom threshold, seven times the old dome's
-       brightest pixel. 0.012 halves that and still glows. Raise it once
-       somebody has looked at it. */
-    turbidity: 8.0, rayleigh: 2.6, mie: 0.012, mieG: 0.80, skyExposure: 0.3704,
-    groundHaze: 0x8a5030,
-    cloudAmount: 0.78, cloudTint: 0xeed4b5, cloudShade: 0x636471,
-    cloudY: 1350, cirrus: 0.70,
-    sunDiscColor: 0xffc078, sunAngDeg: 2.4, haloStrength: 1.25, sunGlow: 1.35,
-    fogHint: 0.00058,
-    grade: [0.94, 0.96, 1.00],
-    shaft: 0.20, sat: 0.88, con: 1.04,
-    vista: 'buttes', vistaColor: 0x5a2c30, vistaFade: 0.34
+    sunEl: 20, sunAz: 40,
+    sunDir: { x: 0.719846, y: 0.342020, z: 0.604023 },
+    sunColor: 0xffdfad, sunIntensity: 3.10,
+    hemiSky: 0xb2c9e4, hemiGround: 0x786957, hemiIntensity: 0.58,
+    zenith: 0x6085b1, horizon: 0xd6d5d1, hazeColor: 0xbac4cd,
+    // Calibrated by sky-check against the new neutral horizon reference.
+    turbidity: 3.8, rayleigh: 1.7, mie: 0.005, mieG: 0.80, skyExposure: 0.36,
+    groundHaze: 0xa69d91,
+    cloudAmount: 0.62, cloudTint: 0xfff1db, cloudShade: 0x8d9dab,
+    cloudY: 1350, cirrus: 0.45,
+    sunDiscColor: 0xfff0d2, sunAngDeg: 1.2, haloStrength: 0.70, sunGlow: 1.05,
+    fogHint: 0.00125,
+    grade: [0.87, 0.90, 0.94],
+    shaft: 0.12, sat: 1.00, con: 1.06,
+    vista: 'buttes', vistaColor: 0x777d89, vistaFade: 0.55
   }
 };
 
@@ -1203,8 +1198,8 @@ export class Sky {
       const material=new THREE.ShaderMaterial({
         side:THREE.BackSide,depthWrite:false,depthTest:false,fog:false,
         uniforms:{uMap:{value:tex},uCloudMap:{value:cloudTexture||tex},uCloudOn:{value:cloudTexture?1:0},
-          uVertical:{value:cloudTexture?1.8:1.0},uLift:{value:cloudTexture?1.25:this.themeName==='thunder'?1.0:1.6},
-          uBackdropSat:{value:this.themeName==='thunder'?.72:1.0},
+          uVertical:{value:cloudTexture?1.8:this.themeName==='thunder'?1.55:1.0},uLift:{value:cloudTexture?1.25:this.themeName==='thunder'?0.95:1.6},
+          uBackdropSat:{value:this.themeName==='thunder'?.94:1.0},
           uBackdropHaze:{value:cloudTexture?new THREE.Color(.28,.37,.47):new THREE.Color(this.theme.hazeColor)}},
         vertexShader:`varying vec3 vDirection;void main(){vDirection=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
         fragmentShader:`uniform sampler2D uMap,uCloudMap;uniform float uCloudOn,uVertical,uLift,uBackdropSat;uniform vec3 uBackdropHaze;varying vec3 vDirection;
@@ -1229,7 +1224,8 @@ export class Sky {
             gl_FragColor=vec4(color*uLift,1.0);}`
       });
       this.backdrop=new THREE.Mesh(new THREE.SphereGeometry(4500,48,24),material);
-      this.backdrop.rotation.y=-1.60;
+      // Bright longitude in the Thunder panorama follows the actual +X/+Z key.
+      this.backdrop.rotation.y=this.themeName==='thunder'?2.44346:-1.60;
       this.backdrop.renderOrder=-1001;this.backdrop.frustumCulled=false;
       this.group.add(this.backdrop);this.setEnvImage(tex);
       this.backdropEnvScene=new THREE.Scene();

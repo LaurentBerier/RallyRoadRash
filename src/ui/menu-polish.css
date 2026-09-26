@@ -37,6 +37,8 @@ body.menu3d #scr-garage .garage-hero { opacity:0; border:0; clip-path:none; }
 #trackGrid .card,#garageGrid .card { min-height:0; overflow:hidden; border-radius:0; }
 #trackGrid button,#garageGrid button { min-width:0; min-height:0; overflow:hidden; padding:0; border-radius:0; background:#0d141b; }
 #trackGrid canvas,#garageGrid canvas { width:100%; height:calc(18vh - 42px); object-fit:cover; aspect-ratio:auto; }
+/* Track maps are redrawn to the card bounds; never crop the course outline. */
+#trackGrid canvas { object-fit:contain; }
 #trackGrid .sel,#garageGrid .sel { border-color:#ff8524; box-shadow:inset 0 -3px #ff8524; transform:none; }
 #scr-playbook > .scr-body { display:flex; flex-direction:column; overflow:hidden; }
 #playbookTabs { flex:none; margin:0 0 16px; }
@@ -111,9 +113,12 @@ body.menu3d #scr-garage::before { background:#0c1217; clip-path:polygon(0 0,100%
 #scr-results .results-grid { min-height:280px; }
 #resultsRecord { min-height:32px; }
 #resultsRecord.hidden { display:block!important; visibility:hidden; }
-#unlockList { height:64px; overflow:auto; }
-#scr-results .unlocks .unlock { animation:none; }
+#unlockList { height:auto; overflow:visible; grid-auto-rows:minmax(min-content,auto); }
+#unlockList:empty { display:none; }
+#scr-results .unlocks .unlock { animation:none; flex-wrap:wrap; min-width:0; overflow-wrap:anywhere; }
+#scr-results .unlocks .unlock b { flex-shrink:0; }
 @media(max-width:700px) { #resultsBtns { gap:6px; } #resultsBtns .btn { font-size:10px; padding:6px; } }
+@media(max-width:700px) { #scr-results > .scr-head { height:auto; } }
 #tracksDetail .pick-meta { overflow:auto; }
 .screen * { scrollbar-width:thin; scrollbar-color:#5d6b77 #11191f; }
 @media(max-width:700px) {
@@ -141,6 +146,9 @@ body.menu3d #scr-garage::before { background:#0c1217; clip-path:polygon(0 0,100%
 /* Isolated garage canvas: native viewport resolution, no race grain or blur. */
 body.menu3d #scr-garage::before { clip-path:none; }
 #garageInset { pointer-events:auto; overflow:hidden; background:#10151c; z-index:1; }
+/* The interactive preview replaces the old decorative turntable. Keep it
+   visible at tablet widths too; the legacy <=980px rule hid this area. */
+body.menu3d #scr-garage #garageInset { display:block!important; }
 #garageInset::before { content:'INSPECT VEHICLE'; z-index:3; pointer-events:none; }
 .garage-canvas { width:100%; height:100%; display:block; touch-action:none; cursor:grab; outline:none; }
 .garage-canvas:active { cursor:grabbing; }
@@ -171,3 +179,63 @@ body.menu3d #scr-garage::before { clip-path:none; }
  #tracksDetail { grid-template-rows:64px 34px 52px minmax(100px,1fr) 24px; }
 }
 @media(prefers-reduced-motion:reduce) { #trackGrid .card,#garageGrid .card { transition:none; } }
+/* Full-screen inspection garage; only the edge panels intercept input. */
+body.menu3d #scr-garage #garageInset { position:absolute; inset:0; width:100%; height:100%; border:0; box-shadow:none; z-index:0; }
+#scr-garage #garageInset::before { display:none; }
+#scr-garage > .scr-head { position:absolute; inset:0 0 auto; height:76px; min-height:0; z-index:2; pointer-events:none; background:linear-gradient(#080d13cc,transparent); border:0; }
+#scr-garage > .scr-head .scr-sub { display:none; }
+#scr-garage > .scr-body { position:absolute; inset:0; padding:0; display:block; pointer-events:none; z-index:2; }
+#scr-garage #garageDetail { position:absolute; top:88px; left:24px; width:220px; height:auto; margin:0; padding:14px; display:block; background:#0b151ba8; border:1px solid #81969c33; pointer-events:auto; }
+#scr-garage #garageDetail .pick-top { height:auto; min-height:60px; }
+#scr-garage #garageDetail .pick-name { font-size:24px; height:auto; line-height:1.1; padding-bottom:28px; }
+#scr-garage #garageDetail .pick-tag { height:auto; min-height:0; font-size:11px; }
+#scr-garage #garageDetail .stats { gap:8px; margin:12px 0 0; }
+#scr-garage #garageGrid { position:absolute; bottom:76px; left:50%; transform:translateX(-50%); width:min(740px,88%); height:100px; display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); gap:8px; pointer-events:auto; }
+#scr-garage #garageGrid canvas { height:65px; }
+#scr-garage #garageGrid .pick-name { font-size:12px; }
+#scr-garage #garageGrid .pick-top { padding:5px 8px; }
+#scr-garage #garageGrid .chip { display:none; }
+#scr-garage > .scr-foot { position:absolute; inset:auto 0 0; height:64px; min-height:0; z-index:3; background:linear-gradient(transparent,#080d13dd); border:0; }
+#scr-garage .garage-camera-tools { bottom:188px; right:20px; left:auto; background:none; }
+#scr-garage .garage-camera-tools span { display:none; }
+.garage-camera-tools button { min-width:44px; min-height:44px; }
+@media (max-width:700px), (max-height:520px) {
+ #scr-garage > .scr-head { height:54px; padding:8px 14px; }
+ #scr-garage #garageDetail { top:60px; left:14px; width:180px; padding:8px; background:#0b151b80; }
+ #scr-garage #garageDetail .pick-name { font-size:20px; padding-bottom:24px; }
+ #scr-garage #garageDetail .pick-tag,#scr-garage #garageDetail .stats { display:none; }
+ #scr-garage #garageDetail .pick-top { min-height:44px; }
+ #scr-garage #garageGrid { bottom:68px; width:calc(100% - 28px); height:76px; gap:6px; }
+ #scr-garage #garageGrid canvas { height:46px; }
+ #scr-garage #garageGrid .pick-name { font-size:10px; white-space:nowrap; }
+ #scr-garage #garageGrid .lock { font-size:8px; }
+ #scr-garage .garage-camera-tools { bottom:154px; right:14px; padding:0; }
+ #scr-garage > .scr-foot { padding:8px 14px max(8px,env(safe-area-inset-bottom)); }
+ #scr-garage .scr-foot .btn { min-height:44px; padding:8px 18px; }
+}
+@media (pointer:coarse) {
+ #touch .pad,#touch .pedal,#touch .rbtn { backdrop-filter:none; -webkit-backdrop-filter:none; }
+ #touch .rbtn.cam { display:none; }
+ #touch .rbtn.pause { position:fixed; top:max(12px,env(safe-area-inset-top)); right:max(12px,env(safe-area-inset-right)); width:48px; height:48px; }
+ #touch .rbtn.reset { position:fixed; top:max(12px,env(safe-area-inset-top)); right:calc(max(12px,env(safe-area-inset-right)) + 58px); width:48px; height:48px; font-size:8px; }
+ #touch .rcol { grid-template-columns:1fr; gap:8px; }
+}
+@media (pointer:coarse) and (orientation:portrait) {
+ #touch .rcol { grid-template-columns:repeat(2,auto); }
+}
+@media(max-width:700px) {
+ #scr-garage #garageGrid .pick-top { padding:5px 3px; }
+ #scr-garage #garageGrid .lock { display:none; }
+ #scr-garage #garageGrid .pick-name { font-size:9px; }
+}
+#touch > .rbtn.pause { position:absolute; top:max(12px,env(safe-area-inset-top)); right:max(12px,env(safe-area-inset-right)); width:48px; height:48px; }
+#touch > .rbtn.reset { position:absolute; top:max(12px,env(safe-area-inset-top)); right:calc(max(12px,env(safe-area-inset-right)) + 58px); width:48px; height:48px; font-size:8px; }
+@media(max-height:520px) and (orientation:landscape) {
+ #scr-garage #garageGrid { height:44px; bottom:64px; width:min(640px,80%); }
+ #scr-garage #garageGrid canvas { display:none; }
+ #scr-garage #garageGrid .pick-top { height:40px; display:flex; align-items:center; }
+ #scr-garage .garage-camera-tools { bottom:116px; }
+}
+
+/* Match the display contrast of the main race renderer in the garage. */
+#garageInset canvas{filter:contrast(var(--scene-contrast,1.08))}

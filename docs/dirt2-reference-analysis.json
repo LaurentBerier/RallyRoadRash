@@ -1,0 +1,103 @@
+{
+  "reference": "Dirt2_mix_sfx_ref.mov",
+  "durationSeconds": 46.15,
+  "scope": "Full mixed recording, including any commentary; not isolated engine measurements. Capture gain is unknown, so absolute loudness is not a game volume target.",
+  "windows": [
+    {
+      "seconds": [
+        0,
+        8
+      ],
+      "rmsDB": -24.7,
+      "peakDB": -11.2,
+      "crestDB": 13.6,
+      "bandsPercent": {
+        "sub": 7.3,
+        "body": 47.6,
+        "mid": 40.8,
+        "detail": 3.7,
+        "air": 0.6
+      }
+    },
+    {
+      "seconds": [
+        8,
+        16
+      ],
+      "rmsDB": -24.8,
+      "peakDB": -11.0,
+      "crestDB": 13.8,
+      "bandsPercent": {
+        "sub": 5.7,
+        "body": 53.8,
+        "mid": 37.5,
+        "detail": 2.7,
+        "air": 0.3
+      }
+    },
+    {
+      "seconds": [
+        16,
+        24
+      ],
+      "rmsDB": -24.9,
+      "peakDB": -11.9,
+      "crestDB": 13.1,
+      "bandsPercent": {
+        "sub": 4.3,
+        "body": 58.0,
+        "mid": 35.6,
+        "detail": 1.9,
+        "air": 0.2
+      }
+    },
+    {
+      "seconds": [
+        24,
+        32
+      ],
+      "rmsDB": -25.1,
+      "peakDB": -12.8,
+      "crestDB": 12.3,
+      "bandsPercent": {
+        "sub": 3.7,
+        "body": 45.6,
+        "mid": 47.6,
+        "detail": 2.9,
+        "air": 0.1
+      }
+    },
+    {
+      "seconds": [
+        32,
+        40
+      ],
+      "rmsDB": -25.3,
+      "peakDB": -13.3,
+      "crestDB": 12.0,
+      "bandsPercent": {
+        "sub": 4.8,
+        "body": 43.9,
+        "mid": 47.6,
+        "detail": 3.6,
+        "air": 0.2
+      }
+    },
+    {
+      "seconds": [
+        40,
+        46
+      ],
+      "rmsDB": -24.9,
+      "peakDB": -11.5,
+      "crestDB": 13.4,
+      "bandsPercent": {
+        "sub": 5.4,
+        "body": 50.1,
+        "mid": 42.0,
+        "detail": 2.3,
+        "air": 0.2
+      }
+    }
+  ]
+}

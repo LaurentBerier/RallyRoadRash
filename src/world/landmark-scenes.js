@@ -51,6 +51,7 @@ export function dressLandmarkSite(p, h, site) {
   const rock=p.theme==='canyon', forest=p.theme==='forest';
   const base=rock ? 0x704b39 : forest ? 0x454b42 : 0x525356;
   const depth=Math.max(0.4,site.y-site.low+0.18), radius=h.r*0.94;
+  if(h.id!=='tailsection') {
   const foundation=tint(new THREE.CylinderGeometry(h.natural ? radius*0.68 : radius,radius*1.025,depth,rock?11:8),h.natural ? 0x995b39 : base);
   if(h.natural) {
     const a=foundation.attributes.position;
@@ -62,6 +63,7 @@ export function dressLandmarkSite(p, h, site) {
     foundation.computeVertexNormals();
   }
   foundation.translate(site.x,site.y-depth/2,site.z);parts.push(foundation);
+  }
   // A segmented lip breaks up the broad footing; all pieces stay within the
   // authored collider. The darker inset reads as a service deck, not a pedestal.
   if(!rock) {

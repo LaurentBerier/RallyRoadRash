@@ -32,6 +32,7 @@
      recipe's accent.
    ============================================================ */
 import * as THREE from 'three';
+import { texturedBanner } from './banner-art.js';
 
 /* ============================================================
    1.  SCATTER RECIPES
@@ -112,7 +113,7 @@ export const RECIPES = {
      promoter would not have bothered to clear. */
   thunder: {
     accent: '#ff5edc',
-    rock: 0x8a4a30, dust: 0xb99a6a,
+    rock: 0x805940, dust: 0xa88e6d,
     kinds: [
       { id: 'hoodoo', share: 0.03, min: 1.6, max: 3.8, solid: true, r: 1.15, slope: 26, clear: 2.0, shadow: true },
       { id: 'rock0', share: 0.11, min: 1.2, max: 4.6, solid: true, r: 0.72, slope: 32, clear: 1.7, shadow: true },
@@ -549,7 +550,9 @@ export function canvasTex(w, h, draw, srgb = true) {
   return t;
 }
 
-export function gantryTex(accent) {
+export function gantryTex(accent, fabric = null) {
+  const artwork = texturedBanner('ROAD RASH', accent, fabric, 'START / FINISH');
+  if (artwork) return artwork;
   return canvasTex(1024, 160, (g, w, h) => {
     g.fillStyle = '#14161c'; g.fillRect(0, 0, w, h);
     g.fillStyle = accent; g.fillRect(0, 0, w, 10); g.fillRect(0, h - 10, w, 10);
@@ -570,7 +573,9 @@ export function gantryTex(accent) {
   });
 }
 
-export function bannerTex(label, accent) {
+export function bannerTex(label, accent, fabric = null) {
+  const artwork = texturedBanner(label, accent, fabric);
+  if (artwork) return artwork;
   return canvasTex(512, 96, (g, w, h) => {
     g.fillStyle = '#171a20'; g.fillRect(0, 0, w, h);
     g.fillStyle = accent; g.fillRect(0, h - 8, w, 8);
@@ -585,7 +590,10 @@ export function bannerTex(label, accent) {
  * with boards is not the same picture eight times — two textures is two
  * draw calls, and three would be one too many.
  */
-export function sponsorTex(label, accent, variant = 0) {
+export function sponsorTex(label, accent, variant = 0, fabric = null) {
+  const artwork = texturedBanner(label, accent, fabric,
+    variant ? 'TYRES / SUSPENSION / GLORY' : 'OFFICIAL FUEL OF THE SERIES');
+  if (artwork) return artwork;
   return canvasTex(1024, 512, (g, w, h) => {
     if (variant === 0) {
       g.fillStyle = '#101318'; g.fillRect(0, 0, w, h);

@@ -1,0 +1,5 @@
+# Redline top view
+
+Built-in ImageGen. Output: assets/vehicles/redline-views/top.png.
+
+Create a precise straight TOP VIEW of the exact Redline Motorsport #23 vehicle carcass in the reference. Camera directly overhead at 90 degrees, orthographic projection, no three-quarter perspective. Front/nose toward bottom of image and rear wing toward top, longitudinal axis perfectly vertical, full vehicle centered with ample margins. Preserve exact red weathered metal body design, roof panel, hood white number 23, rear deck markings, rivets, seams, spikes along front fenders, rear wing, mirrors, exhaust, chipped paint and stickers. Preserve closed solid roof and open windshield/window apertures without grilles or glass. Static body only: NO wheels, tyres, hubs, suspension, shocks, axles, cannons, launchers or weapons. Match reference proportions and high detail realistic game concept rendering. Neutral light gray studio background, soft even studio illumination, sharp high resolution. One standalone top view, no labels, no collage. Change only camera view.

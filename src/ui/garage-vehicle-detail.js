@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { vehicleWear, tireWear } from '../game/vehicle-wear.js';
 
 // Inspection-only geometry: the race keeps its cheaper running gear.
@@ -8,7 +8,7 @@ export function addShowroomDetails(v) {
   const own=g=>(geo.push(g),g);
   const material=p=>{const m=new THREE.MeshStandardMaterial({...vehicleWear(),...p});mats.push(m);return m;};
   const rubber=material({...tireWear(),color:0xffffff,roughness:1,metalness:0});
-  const machined=material({color:0xb9c1c5,roughness:.65,metalness:.72});
+  const machined=material({color:0xb9c1c5,roughness:.34,metalness:.88});
   const armor=material({color:0x454d50,roughness:.43,metalness:.75});
   const recess=material({color:0x080c10,roughness:.85,metalness:.1});
   const mesh=(g,m,parent,x=0,y=0,z=0)=>{const o=new THREE.Mesh(g,m);o.position.set(x,y,z);o.castShadow=true;o.receiveShadow=true;parent.add(o);return o;};
@@ -40,7 +40,8 @@ export function addShowroomDetails(v) {
   const detail=new THREE.Group();detail.name='showroom-machined-details';v.chassis.add(detail);groups.push(detail);
   const box=(w,h,d,x,y,z,m=armor)=>mesh(own(new THREE.BoxGeometry(w,h,d)),m,detail,x,y,z);
   const tube=(a,b,r=.035)=>{const p=new THREE.Vector3(...a),q=new THREE.Vector3(...b),delta=q.clone().sub(p);const o=mesh(own(new THREE.CylinderGeometry(r,r,delta.length(),16)),machined,detail);o.position.copy(p).add(q).multiplyScalar(.5);o.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),delta.normalize());return o;};
-  if(!bike){
+  const authoredHardware=/hopper-sunstrike|ridgeback-ironhide|ridgeback-custom|redline-custom/.test(v._carcassInfo?.url || '');
+  if(!bike&&!authoredHardware){
     const W=spec.dims.W,L=spec.dims.L;
     // Machined front bumper, lower skid and frame fasteners.
     tube([-W*.42,-.12,L*.46],[W*.42,-.12,L*.46],.055);
@@ -57,7 +58,7 @@ export function addShowroomDetails(v) {
       const y=spec.id==='ridgeback'?.53:.29;
       for(let i=0;i<7;i++)box(W*.33,.018,.03,0,y,.65+i*.07,recess);
     }
-  }else{
+  }else if(bike){
     // Small mechanical fasteners read at close range on the bike engine.
     for(const x of [-.15,.15])for(let j=0;j<6;j++)box(.018,.022,.28,x,-.1+j*.035,0,machined);
   }
@@ -65,15 +66,13 @@ export function addShowroomDetails(v) {
   // baked rust. HDR reflections stay crisp on exposed metal and machined rims.
   const carcass=v.carcass?.high||v.carcass;
   carcass?.traverse(o=>{
-    if(o.isMesh&&o.geometry){
-      const copy=o.geometry.clone();copy.deleteAttribute('normal');
-      const smooth=mergeVertices(copy,1e-5);copy.dispose();smooth.computeVertexNormals();o.geometry=own(smooth);
-    }
+    // Retain authored normals/tangents: rebuilding them at UV seams creates
+    // shading breaks and invalidates the tangent-space normal texture.
     for(const m of (Array.isArray(o.material)?o.material:[o.material])){
     if(!m?.isMeshStandardMaterial)continue;
     m.envMapIntensity=1.25;
-    if(m.isMeshPhysicalMaterial){m.clearcoat=.1;m.clearcoatRoughness=.3;}
-    if(m.normalMap)m.normalScale.set(.35,.35);
+    // Keep the shared selective clearcoat/mud shader and authored normals.
+    // Flattening them here made the inspection view less detailed than races.
   }});
   for(const group of groups)for(const material of mats){
     const meshes=group.children.filter(o=>o.isMesh&&!o.isInstancedMesh&&o.material===material);
@@ -84,3 +83,4 @@ export function addShowroomDetails(v) {
   }
   return ()=>{for(const group of groups)group.removeFromParent();for(const g of geo)g.dispose();for(const m of mats)m.dispose();};
 }
+

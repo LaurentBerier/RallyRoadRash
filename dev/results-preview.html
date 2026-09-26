@@ -1,0 +1,15 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base href="../"><title>Results layout review</title>
+<link rel="icon" type="image/png" href="assets/sandscape-favicon.png">
+<link rel="apple-touch-icon" href="assets/sandscape-apple-touch-icon.png">
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/examples/jsm/"}}</script>
+</head><body><script type="module">
+import {UI} from './src/ui/ui.js';
+const text=await(await fetch('index.html')).text(),doc=new DOMParser().parseFromString(text,'text/html');
+for(const link of doc.querySelectorAll('link[rel="stylesheet"]'))document.head.append(link.cloneNode(true));
+const screens=doc.querySelector('#screens');screens.classList.remove('hidden');document.body.append(screens);
+const ui=new UI();
+ui.show('results',{trackId:'volcano',playerPos:1,medal:'gold',
+placements:['YOU','BRICK LOMAX','MAREK HALL','VOSS','SILT','GRAV'].map((name,i)=>({name,isPlayer:i===0,total:308.52+i*5,bestLap:77.47+i,dnf:i>2,color:i===0?0x83ba77:0xa3a8b4})),
+unlocks:['HORNET UNLOCKED','THUNDER PARK UNLOCKED — Championship complete. Take your new dirt bike to the bonus stunt track.'],
+newRecord:{total:308.52,lap:77.47}});
+</script></body></html>

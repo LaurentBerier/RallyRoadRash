@@ -23,7 +23,7 @@
      s 700  a second kicker, taken at speed off the banking
      s 760  a pair of pads, one each side, so the line matters
      s 835  FINISH FLYER, unchanged, through the start gantry
-   One lap: this is a shakedown, not a race.
+   Three laps, matching the other championship stages.
    ============================================================ */
 import { SURF } from '../surfaces.js';
 
@@ -33,7 +33,7 @@ export default {
   tagline: 'Learn the car. Nothing here bites.',
   theme: 'training',
   seed: 4101,
-  laps: 1,
+  laps: 3,
   difficulty: 0.25,
 
   /* Closed loop, racing direction = increasing index. Authored y is the ROAD

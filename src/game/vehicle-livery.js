@@ -1,7 +1,7 @@
 /* ============================================================
    RALLY ROAD RASH — liveries
    ------------------------------------------------------------
-   The 2D half of vehicle art: one 1024×512 panel per car, painted once at
+   The 2D half of vehicle art: one 2048×1024 panel per car, painted once at
    build time and never touched again. Split out of vehicle-art.js because
    canvas work and geometry work have nothing to say to each other, and
    together they were past the 1400-line ceiling.
@@ -54,8 +54,11 @@ const SPON_TAIL = ['', '', '', ' HD', ' 24', ' XR', '·GP', ' PRO'];
  */
 export function liveryTexture(o) {
   const c = document.createElement('canvas');
-  c.width = W; c.height = H;
+  c.width = W * 2; c.height = H * 2;
   const g = c.getContext('2d');
+  // Draw the original layout directly at double resolution, including text
+  // and hairlines, rather than enlarging an already rasterized decal.
+  g.scale(2, 2);
   const rng = o.rng;
 
   const P = {
@@ -66,15 +69,19 @@ export function liveryTexture(o) {
     deep: shade(o.paint, 0.52),
   };
 
-  base(g, P);
-  const roundel = (LAYOUT_FN[o.layout] || LAYOUT_FN.blade)(g, P, rng);
-  drawRoundel(g, roundel, o.number);
-  sponsors(g, P, roundel, o.team, rng);
-  wear(g, rng);
+  if (o.artwork) {
+    g.drawImage(o.artwork, 0, 0, W, H);
+  } else {
+    base(g, P);
+    const roundel = (LAYOUT_FN[o.layout] || LAYOUT_FN.blade)(g, P, rng);
+    drawRoundel(g, roundel, o.number);
+    sponsors(g, P, roundel, o.team, rng);
+    wear(g, rng);
+  }
 
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
+  t.anisotropy = 16;
   return t;
 }
 

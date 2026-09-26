@@ -1,3 +1,4 @@
+import { raceCorridorHalfWidth } from './track.js';
 import { gateTerrainProfile } from './grounding.js';
 /* ============================================================
    THINGS BESIDE THE ROAD
@@ -39,6 +40,7 @@ import { gateTerrainProfile } from './grounding.js';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { makeRNG, clamp } from '../core/rng.js';
+import { buildThunderPolish } from './thunder-polish.js';
 import { buildEnvironmentDressing, setEnvironmentQuality, concreteBarrierGeo } from './environment-dressing.js';
 import { patchFoliageMaterial } from './props-shapes.js';
 import { PLAYABLE_EXT } from './terrain.js';
@@ -130,6 +132,7 @@ export class Props {
     this.buildScatter();
     this.buildFurniture();
     buildEnvironmentDressing(this);
+    if(this.theme==='thunder') buildThunderPolish(this);
     this.setScatterDensity(quality.boulders);
     /* Last, because the pool holds references to the colliders the line above
        just finished assembling. Fixed size, allocated once: from here on the
@@ -150,7 +153,8 @@ export class Props {
     if (this.terrain.onRoad(x, z) > 0.05) return false;
     const sp = this.data.spline;
     sp.nearest(x, z, _near);
-    if (_near.d < sp.widthAt(_near.s) * clearW) return false;
+    const jumpClear=(this.data.jumps||[]).some(j=>{const d=Math.abs(sp.wrapS(_near.s)-sp.wrapS(j.s));return Math.min(d,sp.length-d)<100;});
+    if (_near.d < sp.widthAt(_near.s) * Math.max(clearW,jumpClear?1.8:0)) return false;
     const sc = this.data.shortcutSpline;
     if (sc) {
       sc.nearest(x, z, _near);
@@ -189,7 +193,7 @@ export class Props {
       if (id === 'rock0') g = boulderGeo(1.7, 2);
       else if (id === 'rock1') g = boulderGeo(5.3, 1);
       else if (id === 'rock2') g = boulderGeo(9.1, 0);
-      else if (id === 'hoodoo') g = hoodooGeo(3,this.theme==='canyon');
+      else if (id === 'hoodoo') g = hoodooGeo(3,this.theme==='canyon'||this.theme==='thunder');
       else if (id === 'pine0') g = pineGeo(1);
       else if (id === 'pine1') g = pineGeo(2);
       else if (id === 'pine2') g = pineGeo(3);
@@ -279,7 +283,12 @@ export class Props {
            plants get a token 5 cm so their base never floats on a slope. */
         const sink = KIT_KINDS.has(K.id) ? 0.05
           : K.id.startsWith('pine') ? size * 0.05 : size * 0.20;
-        const y = this.terrain.heightAt(x, z) - sink;
+        let y = this.terrain.heightAt(x, z) - sink;
+        if(this.theme==='thunder' && (K.id.startsWith('rock')||K.id==='hoodoo')) {
+          // Plant the whole footprint into a sloping cut, not just its centre.
+          for(let a=0;a<8;a++) y=Math.min(y,this.terrain.heightAt(
+            x+Math.cos(a*Math.PI/4)*size*.65,z+Math.sin(a*Math.PI/4)*size*.65)-sink);
+        }
         _dummy.position.set(x, y, z);
         if (K.id.startsWith('pine') || UPRIGHT_KINDS.has(K.id)) {
           _dummy.rotation.set(0, rng() * 6.2832, 0);       // upright things stay upright
@@ -528,8 +537,9 @@ export class Props {
     // roadbed by a car's width on each side and no further: an arch you
     // cannot possibly hit is also an arch you cannot possibly notice.
     const scale = clamp((w * 2 + 13) / 26, 0.95, 1.7);
-    const geo = this._keepGeo((this.theme==='canyon'?erodedRockArchGeo:rockArchGeo)(this.palette, (this.def.seed | 0) + 179, 26, 13));
-    const archMaterial=this.theme==='canyon'?this._keepMat(rockMaterial(0xa08066,this.recipe.dust,this.environmentAssets.cliff)):this.dressMat;
+    const sandstoneArch=this.theme==='canyon'||this.theme==='thunder';
+    const geo = this._keepGeo((sandstoneArch?erodedRockArchGeo:rockArchGeo)(this.palette, (this.def.seed | 0) + 179, 26, 13));
+    const archMaterial=sandstoneArch?this._keepMat(rockMaterial(0xa08066,this.recipe.dust,this.environmentAssets.cliff)):this.dressMat;
     const m = new THREE.Mesh(geo, archMaterial);
     m.position.set(p.x, this.terrain.heightAt(p.x, p.z) - 0.25, p.z);
     m.rotation.y = Math.atan2(d.x, d.z);
@@ -539,7 +549,7 @@ export class Props {
     this.group.add(m);
     this.archMesh = m;
     m.receiveShadow=true;
-    if(this.theme==='canyon') {
+    if(sandstoneArch) {
       // Fit the downhill and uphill feet independently to their full footprint.
       const feet={};m.updateMatrixWorld(true);
       for(const side of [-1,1]) {
@@ -661,7 +671,7 @@ export class Props {
       const mine = sites.filter((_, i) => (i & 1) === v);
       if (!mine.length) continue;
       const mat = this._keepMat(new THREE.MeshStandardMaterial({
-        map: this._keepTex(sponsorTex(v ? 'RIDGEBACK' : 'SUNSTRIKE', accent, v)),
+        map: this._keepTex(sponsorTex(v ? 'RIDGEBACK' : 'SUNSTRIKE', accent, v, this.environmentAssets.banner)),
         roughness: 0.84, metalness: 0.03, side: THREE.FrontSide
       }));
       const im = new THREE.InstancedMesh(
@@ -886,12 +896,12 @@ export class Props {
     const span = w * 2.6 + 6;
     const origin=sp.posAt(s,{}),base=this.terrain.heightAt(origin.x,origin.z);
     const feet=[-1,1].map(side=>{const q=sp.offsetPoint(s,side*span*.5,{});return this.terrain.heightAt(q.x,q.z)-base;});
-    const H = ['forest','volcano'].includes(this.theme)?Math.max(8.4,Math.max(...feet)+4.5):8.4;
+    const H = Math.max(11,Math.max(...feet)+7);
     const g = new THREE.Group();
     const legGeo = this._keepGeo(new THREE.CylinderGeometry(0.22, 0.30, H, 9));
     for (const side of [-1, 1]) {
       const leg = new THREE.Mesh(legGeo, this.postMat);
-      const foot=['forest','volcano'].includes(this.theme)?feet[side<0?0:1]-.18:0;
+      const foot=feet[side<0?0:1]-.18;
       leg.scale.y=(H-foot)/H;
       leg.position.set(side * span * 0.5, (H+foot) * 0.5, 0);
       leg.castShadow = true;
@@ -907,7 +917,7 @@ export class Props {
     const banner = new THREE.Mesh(
       this._keepGeo(new THREE.PlaneGeometry(span * 0.92, 1.9)),
       this._keepMat(new THREE.MeshStandardMaterial({
-        map: this._keepTex(bannerTex(label, accent)),
+        map: this._keepTex(bannerTex(label, accent, this.environmentAssets.banner)),
         side: THREE.DoubleSide, roughness: 0.86, metalness: 0,
       })));
     banner.position.y = H - 1.25;
@@ -1050,7 +1060,7 @@ export class Props {
     const beam = new THREE.Mesh(beamGeo, this.postMat);
     beam.position.y = H; beam.castShadow = true; g.add(beam);
 
-    const tex = this._keepTex(gantryTex(accent));
+    const tex = this._keepTex(gantryTex(accent, this.environmentAssets.banner));
     const banner = new THREE.Mesh(
       this._keepGeo(new THREE.PlaneGeometry(span * 0.94, 1.5)),
       this._keepMat(new THREE.MeshStandardMaterial({
@@ -1081,7 +1091,7 @@ export class Props {
   buildGates(accent) {
     const sp = this.data.spline;
     const postGeo = this._keepGeo(new THREE.CylinderGeometry(0.16, 0.2, 4.4, 8));
-    const gateTex = this._keepTex(bannerTex('CHECK', accent));
+    const gateTex = this._keepTex(bannerTex('CHECK', accent, this.environmentAssets.banner));
     const gateMat = this._keepMat(new THREE.MeshStandardMaterial({
       map: gateTex, side: THREE.DoubleSide, roughness: 0.88, metalness: 0
     }));
@@ -1099,19 +1109,21 @@ export class Props {
       if (ds < 45) continue;
       const w = sp.widthAt(c.s);
       const span = w * 2 + 2.6;
-      const {left,right,lift}=['canyon','forest','volcano'].includes(this.theme)
-        ?gateTerrainProfile(this.terrain,sp,c,span):{left:0,right:0,lift:0};
+      const {left,right,lift}=gateTerrainProfile(this.terrain,sp,c,span);
+      const nearJump=(this.data.jumps||[]).some(j=>{const d=Math.abs(sp.wrapS(c.s)-sp.wrapS(j.s));return Math.min(d,L-d)<90;});
+      const top=Math.max(left,right)+lift+(nearJump?10:6.5);
       const g = new THREE.Group();
       for (const s of [-1, 1]) {
         const post = new THREE.Mesh(postGeo, this.postMat);
-        post.position.set(s * span * 0.5, (s<0?left:right)+2.2+lift*.5, 0);
-        post.scale.y=1+lift/4.4;
+        const foot=s<0?left:right;
+        post.position.set(s*span*.5,(foot+top)*.5,0);
+        post.scale.y=(top-foot)/4.4;
         post.castShadow = true;
         g.add(post);
       }
-      const bn = new THREE.Mesh(this._keepGeo(new THREE.PlaneGeometry(Math.hypot(span,right-left), 0.9)), gateMat);
-      bn.position.y = (left+right)*.5+4.0+lift;
-      bn.rotation.z = -Math.atan2(right-left,span);
+      const bn = new THREE.Mesh(this._keepGeo(new THREE.PlaneGeometry(span, 0.9)), gateMat);
+      bn.position.y = top-.45;
+      bn.rotation.z = 0;
       bn.rotation.y = Math.PI;          // face oncoming traffic, not the exit
       g.add(bn);
       const d = sp.dirAt(c.s, _dd);
@@ -1153,7 +1165,7 @@ export class Props {
         let prev = null;
         for (let i = 0; i <= n; i++) {
           const s = s0 + span * (i / n);
-          const off = side * (sp.widthAt(s) * 1.32 + 0.7);
+          const off=side*raceCorridorHalfWidth(sp,this.data.jumps,s);
           const q = sp.offsetPoint(s, off, _pp);
           const y = this.terrain.heightAt(q.x, q.z);
           if(this.theme !== 'training') posts.push([q.x, y, q.z]);
@@ -1163,7 +1175,7 @@ export class Props {
               ? concreteBarrierGeo(prev,[q.x,y,q.z])
               : railQuad(prev[0], prev[1] + 0.78, prev[2], q.x, y + 0.78, q.z, 0.55));
             this.barriers.push({
-              ax: prev[0], az: prev[2], bx: q.x, bz: q.z, r: 0.45, kind: 'barrier'
+              ax: prev[0], az: prev[2], bx: q.x, bz: q.z, r: 0.45, maxY:Math.max(prev[1],y)+1.15, kind: 'barrier'
             });
           }
           prev = [q.x, y, q.z];
@@ -1203,9 +1215,9 @@ export class Props {
   buildSigns() {
     const sp = this.data.spline, L = sp.length;
     const mats = [
-      this._keepMat(new THREE.MeshStandardMaterial({ map: this._keepTex(arrowTex(-1)), roughness: 0.8, side: THREE.DoubleSide })),
-      this._keepMat(new THREE.MeshStandardMaterial({ map: this._keepTex(arrowTex(1)), roughness: 0.8, side: THREE.DoubleSide })),
-      this._keepMat(new THREE.MeshStandardMaterial({ map: this._keepTex(arrowTex(0)), roughness: 0.8, side: THREE.DoubleSide }))
+      this._keepMat(new THREE.MeshStandardMaterial({ map: (this.environmentAssets.warningSigns?.[0] || this._keepTex(arrowTex(-1))), roughness: 0.8, side: THREE.DoubleSide })),
+      this._keepMat(new THREE.MeshStandardMaterial({ map: (this.environmentAssets.warningSigns?.[1] || this._keepTex(arrowTex(1))), roughness: 0.8, side: THREE.DoubleSide })),
+      this._keepMat(new THREE.MeshStandardMaterial({ map: (this.environmentAssets.warningSigns?.[2] || this._keepTex(arrowTex(0))), roughness: 0.8, side: THREE.DoubleSide }))
     ];
     const boardGeo = this._keepGeo(new THREE.PlaneGeometry(1.5, 1.5));
     const legGeo = this._keepGeo(new THREE.CylinderGeometry(0.07, 0.07, 1.7, 6));
@@ -1370,6 +1382,7 @@ export class Props {
         }
       } else {
         const b = this.barriers[-id - 1];
+        if(Number.isFinite(b.maxY) && v.pos.y-(v.spec?.comHeight??v.collideR??.3)>b.maxY+.25)continue;
         const ex = b.bx - b.ax, ez = b.bz - b.az;
         const el2 = ex * ex + ez * ez;
         if (el2 < 1e-9) continue;
@@ -1442,6 +1455,7 @@ export class Props {
     stepDynamicPool(this._dyn, dt, this.terrain);
     if(this.volcanoVFX) this.volcanoVFX.time.value+=dt;
     if (!camera) return;
+    this.thunderPolish?.update(dt,camera);
     this._bobCrowd(t, camera);
     this._runGeysers(dt, camera);
     this._runFalls(dt, camera);

@@ -322,7 +322,7 @@ export function planHeroModels(p) {
     loadModel(url).then((g) => {
       if (!g) { status.state = 'failed'; return; }
       if (p._disposed) { disposeModel(g); return; }
-      g.rotation.set(0, site.yaw, 0);
+      g.rotation.set(h.id==='tailsection'?-.14:0, site.yaw, h.id==='tailsection'?.12:0);
       g.scale.setScalar(h.scale);
       if (h.size) {
         g.scale.setScalar(1);
@@ -342,7 +342,7 @@ export function planHeroModels(p) {
          a slope. */
       _box.setFromObject(g);
       g.position.set(site.x - (_box.min.x+_box.max.x)*0.5,
-        site.y - _box.min.y - 0.04, site.z - (_box.min.z+_box.max.z)*0.5);
+        (h.id==='tailsection'?p.terrain.heightAt(site.x,site.z)-1.1:site.y-.04) - _box.min.y, site.z - (_box.min.z+_box.max.z)*0.5);
       g.name = h.id;
       g.traverse((o) => {
         if (!o.isMesh) return;

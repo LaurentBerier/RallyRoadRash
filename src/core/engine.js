@@ -52,9 +52,7 @@ const FinalShader = {
   uniforms: {
     tDiffuse: { value: null },
     uTime: { value: 0 },
-    // daylight defaults: these are tuned for a sunlit rally stage, so the grain
-    // and the aberration sit low and exposure is neutral. Push them up only for
-    // a deliberately degraded look — the shader still supports it.
+    // Daylight defaults: neutral exposure, restrained aberration, no film grain.
     uExposure: { value: 1.0 },
     /* Per-STAGE grade, distinct from uExposure on purpose. uExposure is
        feel.js's: it sits at exactly 1.0 and dips for a few frames on a hard
@@ -70,7 +68,8 @@ const FinalShader = {
        own. Same reasoning that gave the per-stage grade its own uniform. */
     uBlind: { value: 0 },
     uVignette: { value: 0.85 },
-    uGrain: { value: 0.35 },
+    uGrain: { value: 0 }, // legacy uniform; film grain removed
+    uUserContrast: { value: 1.08 },
     uAberr: { value: 0.5 },
     /* Sensor tear on a hit. Owned by whoever routes damage — one impulse,
        decayed to zero by the caller; nothing here animates it. */
@@ -79,7 +78,7 @@ const FinalShader = {
     uLetterbox: { value: 0.0 },
     /* Per-STAGE look, all three set once from SKY_THEMES by setLightTheme and
        never animated — the same reasoning that gave uGrade its own uniform. */
-    uShaft: { value: 0.0 },      // god-ray strength toward uSunUV
+    uShaft: { value: 0.0 },      // legacy theme input; scene-colour shafts disabled
     uSat: { value: 1.0 },
     uCon: { value: 1.0 },
     /* Radial speed smear, 0..1, written per frame by the race loop off road
@@ -105,6 +104,7 @@ const FinalShader = {
     precision highp float;
     varying vec2 vUv;
     uniform sampler2D tDiffuse;
+    uniform float uUserContrast;
     uniform float uTime, uExposure, uVignette, uGrain, uAberr, uGlitch, uFlash, uLetterbox;
     uniform vec3 uGrade;
     uniform float uBlind, uShaft, uSat, uCon, uSpeedBlur, uNitro;
@@ -165,7 +165,11 @@ const FinalShader = {
          would read as "already flat out". Same six taps: the cost is the
          branch it was already taking at speed. */
       float amt = clamp((uSpeedBlur + uNitro * 2.2) * r2 * 2.2, 0.0, 0.22 + uNitro * 0.16);
-      if (amt > 0.002){
+      // Keep neighbouring taps within one source pixel. Long sparse marches
+      // stamp separate copies of bright trim, especially during nitro.
+      float blurPixels = length(d * uRes) * amt;
+      amt *= min(1.0, 6.0 / max(blurPixels, 1e-4));
+      if (amt > 0.00001){
         vec3 acc = col;
         for (int i = 1; i <= 6; i++){
           acc += texture2D(tDiffuse, mix(uv, vec2(0.5), float(i) * (1.0/6.0) * amt)).rgb;
@@ -195,35 +199,10 @@ const FinalShader = {
         col += vec3(0.75,0.42,0.25) * exp(-length((g2-uSunUV.xy)*vec2(aspect,1.0))*22.0) * 0.10 * uSunUV.z;
       }
 
-      /* Sun shafts. Twelve taps marching from this pixel TOWARD the sun,
-         each one keeping only what it finds above a luminance threshold —
-         so the rays are cast by the things that are actually bright (the
-         disc, a ridge line lit from behind, a dust cloud) and the ground
-         under the car contributes nothing. Weight decays along the march,
-         which is what makes a ray taper instead of ending in a hard stripe.
-
-         This is the cheapest of the three big skies-and-light wins and the
-         one that reads instantly on a low sun, so it is per-theme: a noon
-         airfield gets none, a caldera dusk gets a lot. */
-      if (uShaft > 0.001 && uSunUV.z > 0.001){
-        vec2 sd = (uSunUV.xy - uv) * (1.0/12.0) * 0.70;
-        vec2 sp2 = uv;
-        vec3 acc = vec3(0.0);
-        float w = 1.0, wsum = 0.0;
-        for (int i = 0; i < 12; i++){
-          sp2 += sd;
-          // clamped: with the sun just off frame the march runs past the edge,
-          // and an unclamped tap smears the edge COLUMN across the shafts
-          vec3 s = texture2D(tDiffuse, clamp(sp2, 0.0, 1.0)).rgb;
-          acc += s * max(dot(s, vec3(0.299,0.587,0.114)) - 0.62, 0.0) * w;
-          wsum += w;
-          w *= 0.90;
-        }
-        // fade with angular distance so the shafts belong to the sun and do
-        // not tint the opposite corner of the frame
-        vec2 sv = (uSunUV.xy - uv) * vec2(aspect, 1.0);
-        col += acc / max(wsum, 1e-4) * uShaft * uSunUV.z * exp(-length(sv) * 1.35);
-      }
+      // Do not ray-march scene colour for sun shafts: metallic vehicle
+      // highlights become repeated silhouettes along the sampling direction.
+      // The analytic sun glare above supplies atmosphere without copying
+      // foreground geometry (and avoids twelve full-resolution texture taps).
 
       /* The dust storm: warm grit over the lens and the contrast crushed
          out of it. Before the grade, so a stage's own key still applies. */
@@ -256,16 +235,12 @@ const FinalShader = {
         * smoothstep(0.28 - uNitro * 0.16, 0.92 - uNitro * 0.22, r2*1.65);
       col *= vig;
 
-      /* sensor noise: rises where the signal is low, exactly like a real CMOS */
-      float lum = dot(col, vec3(0.299,0.587,0.114));
-      float n = hash(gl_FragCoord.xy + vec2(floor(uTime*61.0), floor(uTime*37.0))) - 0.5;
-      col += n * uGrain * (0.012 + 0.034*(1.0 - smoothstep(0.0, 0.26, lum)));
-
       /* photo-mode letterbox */
       float lb = step(uv.y, uLetterbox*0.5) + step(1.0-uLetterbox*0.5, uv.y);
       col *= 1.0 - lb;
 
       col = pow(max(col, 0.0), vec3(1.0/2.2));
+      col = clamp((col - 0.5) * uUserContrast + 0.5, 0.0, 1.0);
       gl_FragColor = vec4(col, 1.0);
     }`
 };
@@ -398,8 +373,9 @@ export class Engine {
   /** Device pixel ratio, clamped so the framebuffer never exceeds the budget. */
   _pixelRatio() {
     const w = Math.max(1, window.innerWidth), h = Math.max(1, window.innerHeight);
-    let px = Math.min(window.devicePixelRatio || 1, this.quality.maxDpr);
-    const over = (w * h * px * px) / this.quality.pixels;
+    const mobile = typeof matchMedia==='function' && matchMedia('(pointer: coarse)').matches;
+    let px = Math.min(window.devicePixelRatio || 1, this.quality.maxDpr, mobile ? 1.5 : Infinity);
+    const over = (w * h * px * px) / Math.min(this.quality.pixels, mobile ? 1400000 : Infinity);
     if (over > 1) px /= Math.sqrt(over);
     return Math.max(0.5, px * this.renderScale);
   }
@@ -494,7 +470,7 @@ export class Engine {
     const contact=this.terrain?.uniforms?.uContactShadow;
     if(contact) {
       const h=target.y-this.terrain.heightAt(target.x,target.z);
-      const strength=!this.sun.castShadow && this.terrain.theme==='training'
+      const strength=!this.sun.castShadow && ['training','thunder'].includes(this.terrain.theme)
         ? 0.55*Math.max(0,1-Math.max(0,h-0.8)/4) : 0;
       contact.value.set(target.x,target.y,target.z,strength);
     }

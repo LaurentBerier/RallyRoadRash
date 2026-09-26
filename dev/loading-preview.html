@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head><base href="../" />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>RALLY ROAD RASH — Off-Road Championship</title>
+<meta name="description" content="Arcade off-road rally: four machines, five dramatic stages, rockets, drift boosts and big air. Race directly in your browser." />
+<meta name="theme-color" content="#0a0a0c" />
+<!-- ?v= is a cache buster: static hosts serve assets with max-age=600, so a
+     returning player keeps the old layout for ten minutes after a deploy.
+     Bump this whenever styles.css changes in a way players must see. -->
+<link rel="stylesheet" href="src/ui/styles.css?v=12" />
+<link rel="stylesheet" href="src/ui/menu-polish.css?v=3" />
+<link rel="stylesheet" href="src/ui/cinematic-screens.css?v=2" />
+<link rel="preload" as="image" href="assets/art/splash-championship.jpg" crossorigin="anonymous" fetchpriority="high" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/examples/jsm/"
+  }
+}
+</script>
+<link rel="icon" type="image/png" href="assets/sandscape-favicon.png" />
+<link rel="apple-touch-icon" href="assets/sandscape-apple-touch-icon.png" />
+</head>
+<body><div id="boot" class="overlay boot">
+  <!-- Stage key art behind the bake bar when assets/ has any; empty and
+       invisible otherwise, which is the normal case (ARCHITECTURE §6.11). -->
+  <div class="boot-art" id="bootArt"><img id="bootKeyArt" src="assets/art/splash-championship.jpg" crossorigin="anonymous" fetchpriority="high" alt="" /></div>
+  <div class="boot-inner">
+    <canvas class="logo" id="bootLogo" width="620" height="210"
+            data-lines="RALLY ROAD|RASH" aria-label="RALLY ROAD RASH"></canvas>
+    <p class="strap">OFF-ROAD CHAMPIONSHIP</p>
+    <div class="load-heading"><span>PREPARING THE GRID</span><strong id="bootPercent">0%</strong></div>
+    <div class="loadbar" role="progressbar" aria-label="Loading game assets" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bootBar"></i></div>
+    <p class="loadmsg" id="bootMsg">warming up the engine…</p>
+    <aside class="first-launch-note" id="firstLaunchNotice" role="note" aria-label="First launch loading time">
+      <strong>FIRST LAUNCH? GIVE US A MOMENT.</strong>
+      <p>The first launch may take a little longer while game files download. Your browser caches downloaded files, so future launches should be faster.</p>
+    </aside>
+    <p class="boot-legal">FOUR MACHINES · FIVE STAGES · NO EASY FINISHES</p>
+  </div>
+</div>
+
+<script type="module">import { UI } from "./src/ui/ui.js"; const ui = new UI(); ui.boot(.65,"PREPARING PROVING GROUNDS");</script></body></html>
+

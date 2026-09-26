@@ -1,28 +1,140 @@
 {
-  "backdrop/canyon": { "url": "sky/canyon-panorama-v1.webp", "lowUrl": "sky/canyon-panorama-v1-low.webp", "kind": "color" },
-  "backdrop/forest": { "url": "sky/forest-panorama-v1.webp", "lowUrl": "sky/forest-panorama-v1-low.webp", "kind": "color" },
-  "backdrop/volcano": { "url": "sky/volcano-panorama-v1.webp", "lowUrl": "sky/volcano-panorama-v1-low.webp", "kind": "color" },
-  "backdrop/thunder": { "url": "sky/thunder-panorama-v1.webp", "lowUrl": "sky/thunder-panorama-v1-low.webp", "kind": "color" },
-  "terrain/forest-ground": { "url": "ground/forest-color.webp", "lowUrl": "ground/forest-color-low.webp", "kind": "tile" },
-  "terrain/forest-normal": { "url": "ground/forest-normal.webp", "lowUrl": "ground/forest-normal-low.webp", "kind": "data-tile" },
-  "backdrop/training": { "url": "sky/quarry-panorama-v3.webp", "kind": "color" },
-  "clouds/training": { "url": "sky/quarry-clouds-4k.webp", "lowUrl": "sky/quarry-clouds-2k.webp", "kind": "color" },
-  "foliage/training": { "url": "foliage/quarry-tussock-v3.webp", "kind": "color" },
-  "foliage/training-sagebrush": { "url": "foliage/quarry-sagebrush-v1.webp", "kind": "color" },
-  "terrain/quarry-ground": { "url": "ground/quarry-trail-color.webp", "lowUrl": "ground/quarry-trail-color-low.webp", "kind": "tile" },
-  "terrain/quarry-normal": { "url": "ground/quarry-trail-normal.webp", "lowUrl": "ground/quarry-trail-normal-low.webp", "kind": "data-tile" },
-  "terrain/quarry-cliff": { "url": "ground/quarry-cliff-color.webp", "lowUrl": "ground/quarry-cliff-color-low.webp", "kind": "tile" },
-  "terrain/quarry-cliff-normal": { "url": "ground/quarry-cliff-normal.webp", "lowUrl": "ground/quarry-cliff-normal-low.webp", "kind": "data-tile" },
-  "models/quarry/boulder-high": { "url": "models/quarry/boulder-high.glb", "kind": "model" },
-  "models/quarry/boulder-low": { "url": "models/quarry/boulder-low.glb", "kind": "model" },
-  "models/quarry/boulder-mobile": { "url": "models/quarry/boulder-mobile.glb", "kind": "model" },
-  "foliage/spruce": { "url": "foliage/spruce-bough.webp", "kind": "color" },
-  "foliage/scrub": { "url": "foliage/quarry-scrub.webp", "kind": "color" },
-  "terrain/cliff": { "url": "ground/cliff-v2.webp", "kind": "tile" },
-
+  "art/splash": {
+    "url": "art/splash-championship.jpg",
+    "kind": "color"
+  },
+  "art/loading": {
+    "url": "art/splash-championship.jpg",
+    "kind": "color"
+  },
+  "signage/road-rash-finished": {
+    "url": "signage/road-rash-finished.jpg",
+    "kind": "color"
+  },
+  "signage/track-banners-atlas": {
+    "url": "signage/track-banners-atlas.jpg",
+    "kind": "color"
+  },
+  "vehicles/hopper-livery": {
+    "url": "vehicles/hopper-livery.jpg",
+    "kind": "color"
+  },
+  "vehicles/ridgeback-livery": {
+    "url": "vehicles/ridgeback-livery.jpg",
+    "kind": "color"
+  },
+  "vehicles/redline-livery": {
+    "url": "vehicles/redline-livery.jpg",
+    "kind": "color"
+  },
+  "vehicles/moto-livery": {
+    "url": "vehicles/moto-livery.jpg",
+    "kind": "color"
+  },
+  "signage/rally-banner-fabric": {
+    "url": "signage/rally-banner-fabric.jpg",
+    "kind": "color"
+  },
+  "backdrop/canyon": {
+    "url": "sky/canyon-panorama-v1.webp",
+    "lowUrl": "sky/canyon-panorama-v1-low.webp",
+    "kind": "color"
+  },
+  "backdrop/forest": {
+    "url": "sky/forest-panorama-v1.webp",
+    "lowUrl": "sky/forest-panorama-v1-low.webp",
+    "kind": "color"
+  },
+  "backdrop/volcano": {
+    "url": "sky/volcano-panorama-v1.webp",
+    "lowUrl": "sky/volcano-panorama-v1-low.webp",
+    "kind": "color"
+  },
+  "backdrop/thunder": {
+    "url": "sky/thunder-afternoon-v2.webp",
+    "lowUrl": "sky/thunder-afternoon-v2-low.webp",
+    "kind": "color"
+  },
+  "terrain/forest-ground": {
+    "url": "ground/forest-color.webp",
+    "lowUrl": "ground/forest-color-low.webp",
+    "kind": "tile"
+  },
+  "terrain/forest-normal": {
+    "url": "ground/forest-normal.webp",
+    "lowUrl": "ground/forest-normal-low.webp",
+    "kind": "data-tile"
+  },
+  "backdrop/training": {
+    "url": "sky/quarry-panorama-v3.webp",
+    "kind": "color"
+  },
+  "clouds/training": {
+    "url": "sky/quarry-clouds-4k.webp",
+    "lowUrl": "sky/quarry-clouds-2k.webp",
+    "kind": "color"
+  },
+  "foliage/training": {
+    "url": "foliage/quarry-tussock-v3.webp",
+    "kind": "color"
+  },
+  "foliage/training-sagebrush": {
+    "url": "foliage/quarry-sagebrush-v1.webp",
+    "kind": "color"
+  },
+  "terrain/quarry-ground": {
+    "url": "ground/quarry-trail-color.webp",
+    "lowUrl": "ground/quarry-trail-color-low.webp",
+    "kind": "tile"
+  },
+  "terrain/quarry-normal": {
+    "url": "ground/quarry-trail-normal.webp",
+    "lowUrl": "ground/quarry-trail-normal-low.webp",
+    "kind": "data-tile"
+  },
+  "terrain/quarry-cliff": {
+    "url": "ground/quarry-cliff-color.webp",
+    "lowUrl": "ground/quarry-cliff-color-low.webp",
+    "kind": "tile"
+  },
+  "terrain/quarry-cliff-normal": {
+    "url": "ground/quarry-cliff-normal.webp",
+    "lowUrl": "ground/quarry-cliff-normal-low.webp",
+    "kind": "data-tile"
+  },
+  "models/quarry/boulder-high": {
+    "url": "models/quarry/boulder-high.glb",
+    "kind": "model"
+  },
+  "models/quarry/boulder-low": {
+    "url": "models/quarry/boulder-low.glb",
+    "kind": "model"
+  },
+  "models/quarry/boulder-mobile": {
+    "url": "models/quarry/boulder-mobile.glb",
+    "kind": "model"
+  },
+  "foliage/spruce": {
+    "url": "foliage/spruce-bough.webp",
+    "kind": "color"
+  },
+  "foliage/scrub": {
+    "url": "foliage/quarry-scrub.webp",
+    "kind": "color"
+  },
+  "terrain/cliff": {
+    "url": "ground/cliff-v2.webp",
+    "kind": "tile"
+  },
   "ground": {
     "kind": "layers",
-    "seamless": [0, 1, 2, 3, 5],
+    "seamless": [
+      0,
+      1,
+      2,
+      3,
+      5
+    ],
     "layers": [
       "ground/soil-v2.webp",
       "ground/sand-v2.webp",
@@ -32,40 +144,157 @@
       "ground/gravel-v2.webp"
     ]
   },
-
-
-  "models/heroes/training-hero": { "url": "models/heroes/training-hero.glb", "kind": "model" },
-  "models/heroes/canyon-hero": { "url": "models/heroes/canyon-hero.glb", "kind": "model" },
-  "models/heroes/forest-hero": { "url": "models/heroes/forest-hero.glb", "kind": "model" },
-  "models/heroes/volcano-hero": { "url": "models/heroes/volcano-hero.glb", "kind": "model" },
-  "models/heroes/thunder-hero": { "url": "models/heroes/thunder-hero.glb", "kind": "model" },
-
-  "models/heroes/training-conveyor": { "url": "models/heroes/training-conveyor.glb", "kind": "model" },
-  "models/heroes/canyon-arch": { "url": "models/heroes/canyon-arch.glb", "kind": "model" },
-  "models/heroes/forest-trestle": { "url": "models/heroes/forest-trestle.glb", "kind": "model" },
-  "models/heroes/volcano-pipe": { "url": "models/heroes/volcano-pipe.glb", "kind": "model" },
-  "models/heroes/thunder-timing": { "url": "models/heroes/thunder-timing.glb", "kind": "model" },
-
-  "models/hopper-carcass": { "url": "models/hopper-carcass.glb", "kind": "model" },
-  "models/ridgeback-carcass": { "url": "models/ridgeback-carcass.glb?v=2", "kind": "model" },
-  "models/redline-carcass": { "url": "models/redline-carcass.glb", "kind": "model" },
-  "models/moto-carcass": { "url": "models/moto-carcass.glb", "kind": "model" },
-  "models/hopper-carcass-high": { "url": "models/hopper-carcass-high.glb", "kind": "model" },
-  "models/ridgeback-carcass-high": { "url": "models/ridgeback-carcass-high.glb?v=2", "kind": "model" },
-  "models/redline-carcass-high": { "url": "models/redline-carcass-high.glb", "kind": "model" },
-  "models/moto-carcass-high": { "url": "models/moto-carcass-high.glb", "kind": "model" },
-
-  "art/menu-garage": { "url": "art/garage-backdrop.webp", "kind": "color" },
-  "art/training": { "url": "art/training.webp", "kind": "color" },
-  "art/canyon": { "url": "art/canyon.webp", "kind": "color" },
-  "art/forest": { "url": "art/forest.webp", "kind": "color" },
-  "art/volcano": { "url": "art/volcano.webp", "kind": "color" },
-  "art/thunder": { "url": "art/thunder.webp", "kind": "color" },
-  "art/title": { "url": "art/title.webp", "kind": "color" },
-  "art/menu-hero": { "url": "art/menu-hero.webp", "kind": "color" },
-
-  "art/veh-hopper": { "url": "art/veh-hopper.webp", "kind": "color" },
-  "art/veh-ridgeback": { "url": "art/veh-ridgeback.webp", "kind": "color" },
-  "art/veh-redline": { "url": "art/veh-redline.webp", "kind": "color" },
-  "art/veh-moto": { "url": "art/veh-moto.webp", "kind": "color" }
+  "models/heroes/training-hero": {
+    "url": "models/heroes/training-hero.glb",
+    "kind": "model"
+  },
+  "models/heroes/canyon-hero": {
+    "url": "models/heroes/canyon-hero.glb",
+    "kind": "model"
+  },
+  "models/heroes/forest-hero": {
+    "url": "models/heroes/forest-hero.glb",
+    "kind": "model"
+  },
+  "models/heroes/volcano-hero": {
+    "url": "models/heroes/volcano-hero.glb",
+    "kind": "model"
+  },
+  "models/heroes/thunder-hero": {
+    "url": "models/heroes/thunder-hero.glb",
+    "kind": "model"
+  },
+  "models/heroes/training-conveyor": {
+    "url": "models/heroes/training-conveyor.glb",
+    "kind": "model"
+  },
+  "models/heroes/canyon-arch": {
+    "url": "models/heroes/canyon-arch.glb",
+    "kind": "model"
+  },
+  "models/heroes/forest-trestle": {
+    "url": "models/heroes/forest-trestle.glb",
+    "kind": "model"
+  },
+  "models/heroes/volcano-pipe": {
+    "url": "models/heroes/volcano-pipe.glb",
+    "kind": "model"
+  },
+  "models/heroes/thunder-timing": {
+    "url": "models/heroes/thunder-timing.glb",
+    "kind": "model"
+  },
+  "models/hopper-carcass": {
+    "url": "models/hopper-sunstrike-stream.glb",
+    "kind": "model"
+  },
+  "models/ridgeback-carcass": {
+    "url": "models/ridgeback-custom-stream.glb",
+    "kind": "model"
+  },
+  "models/redline-carcass": {
+    "url": "models/redline-custom-stream.glb",
+    "kind": "model"
+  },
+  "models/moto-carcass": {
+    "url": "models/moto-custom-stream.glb",
+    "kind": "model"
+  },
+  "models/hopper-carcass-high": {
+    "url": "models/hopper-sunstrike-stream.glb",
+    "kind": "model"
+  },
+  "models/ridgeback-carcass-high": {
+    "url": "models/ridgeback-custom-stream.glb",
+    "kind": "model"
+  },
+  "models/redline-carcass-high": {
+    "url": "models/redline-custom-stream.glb",
+    "kind": "model"
+  },
+  "models/moto-carcass-high": {
+    "url": "models/moto-custom-stream.glb",
+    "kind": "model"
+  },
+  "art/menu-garage": {
+    "url": "art/garage-backdrop.webp",
+    "kind": "color"
+  },
+  "art/training": {
+    "url": "art/training.webp",
+    "kind": "color"
+  },
+  "art/canyon": {
+    "url": "art/canyon-gameplay-v1.webp",
+    "kind": "color"
+  },
+  "art/forest": {
+    "url": "art/forest.webp",
+    "kind": "color"
+  },
+  "art/volcano": {
+    "url": "art/volcano.webp",
+    "kind": "color"
+  },
+  "art/thunder": {
+    "url": "art/thunder.webp",
+    "kind": "color"
+  },
+  "art/title": {
+    "url": "art/title.webp",
+    "kind": "color"
+  },
+  "art/menu-hero": {
+    "url": "art/menu-hero.webp",
+    "kind": "color"
+  },
+  "art/veh-hopper": {
+    "url": "art/veh-hopper.webp",
+    "kind": "color"
+  },
+  "art/veh-ridgeback": {
+    "url": "art/veh-ridgeback.webp",
+    "kind": "color"
+  },
+  "art/veh-redline": {
+    "url": "art/veh-redline.webp",
+    "kind": "color"
+  },
+  "art/veh-moto": {
+    "url": "art/veh-moto.webp",
+    "kind": "color"
+  },
+  "fx/exhaust-frames": {
+    "url": "fx/exhaust-frames.png",
+    "kind": "color"
+  },
+  "signage/warning-left": {
+    "url": "signage/warning-left.jpg",
+    "kind": "color"
+  },
+  "signage/warning-right": {
+    "url": "signage/warning-right.jpg",
+    "kind": "color"
+  },
+  "signage/warning-jump": {
+    "url": "signage/warning-jump.jpg",
+    "kind": "color"
+  },
+  "fx/vehicle-explosion": {
+    "url": "fx/vehicle-explosion.png",
+    "kind": "color"
+  },
+  "models/hornet-rider": {
+    "url": "models/hornet-rider-stream.glb",
+    "kind": "model"
+  },
+  "terrain/thunder-ground": {
+    "url": "ground/thunder-dirt.webp",
+    "lowUrl": "ground/thunder-dirt-low.webp",
+    "kind": "tile"
+  },
+  "foliage/thunder": {
+    "url": "foliage/quarry-tussock-v3.webp",
+    "kind": "color"
+  }
 }

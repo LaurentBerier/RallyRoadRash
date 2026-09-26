@@ -42,10 +42,10 @@ const TAU = Math.PI * 2;
    CHASE tuning. Every distance is metres, every angle radians.
    ------------------------------------------------------------ */
 const CH = {
-  dist: 7.2,              // m — boom length at rest. Zoom moves this, speed scales it.
+  dist: 6.8,              // m — boom length at rest. Zoom moves this, speed scales it.
   distMin: 5.2,           // m — zoom limits. Session-only; nobody persists them.
   distMax: 11.0,
-  distSpeed: 0.22,        // fraction added to the boom at speedRef and above.
+  distSpeed: 0.10,        // fraction added to the boom at speedRef and above.
   speedRef: 40,           // m/s — "flat out" reference. Faster than any car's top
                           //       speed on purpose, so the scaling never saturates
                           //       before the car does.
@@ -56,7 +56,7 @@ const CH = {
                           //     not body up: the pivot must not pitch with the car.
 
   pitch0: 9 * D2R,        // boom elevation at rest…
-  pitch1: 14 * D2R,       // …and flat out. Rising elevation is what keeps the road
+  pitch1: 12 * D2R,       // …and flat out. Rising elevation is what keeps the road
                           //   visible once look-ahead has run the aim point 13 m
                           //   past the nose.
   pitchLo: 8, pitchHi: 34,        // m/s over which pitch0 → pitch1
@@ -73,9 +73,9 @@ const CH = {
   slopeLP: 2.2,           // 1/s — the slope signal is the noisiest input the rig has.
 
   aheadBase: 2.2,         // m — look-ahead at a standstill…
-  aheadSpeed: 0.28,       // …+ this per m/s. At 38 m/s the aim sits 12.8 m up the road.
+  aheadSpeed: 0.20,       // …+ this per m/s. At 38 m/s the aim sits 9.8 m up the road.
   aheadMax: 18,
-  lateral: 1.6,           // m — full-lock lateral shift of the aim point. This is the
+  lateral: 0.8,           // m — full-lock lateral shift of the aim point. This is the
                           //     one that makes corners "open up" before you turn in.
   latLo: 3, latHi: 18,    // m/s over which the lateral shift fades in (no view swing
                           //     while parking).
@@ -140,10 +140,8 @@ const CH = {
   pivotXZ: 22,            // 1/s — keep translation tight; weight comes from yaw/aim lag.
   pivotY: 13,             // 1/s — vertical follow on the ground. Loose enough that
                           //     suspension chatter never reaches the lens.
-  pivotYAir: 3.4,         // 1/s — vertical follow in the air. THIS is what makes a jump
-                          //     read: the car climbs out of the frame and drops back in.
-                          //     Lowered further still: the car climbs even further out of
-                          //     frame on a big jump, and that IS the jump reading bigger.
+  pivotYAir: 5.0,         // 1/s — vertical follow in the air. enough lag to show the jump,
+                          //     while retaining the vehicle in the shot.
   airBlend: 6.5,            // 1/s — how fast the airborne settings fade in and back out.
                           //     ~0.5 s of recovery after touchdown, which is the whole
                           //     "no snap on landing" requirement.
@@ -156,11 +154,11 @@ const CH = {
                           //   times a second — which is most of what "the camera goes
                           //   unstable when I go fast" actually is. A real jump clears
                           //   airHi in the first 12 frames and is unaffected.
-  airDist: 1.22,          // boom length multiplier while airborne.
-  airFov: 8,              // deg of extra FOV while airborne.
+  airDist: 1.10,          // boom length multiplier while airborne.
+  airFov: 2.5,              // deg of extra FOV while airborne.
 
   fovBase: 58,            // deg (× fovScale)
-  fovSpeed: 13,           // deg added by speed…
+  fovSpeed: 7,           // deg added by speed…
   fovLo: 12, fovHi: 40,   // …over this m/s window.
   fovRate: 5,             // 1/s — FOV follow. Feel's transients bypass this (see below).
 
@@ -212,8 +210,8 @@ const RS = {
   rotA: 24.1, rotB: 13.7,   // yaw pair  — 3.8 Hz / 2.2 Hz
   rotC: 19.9, rotD: 10.3,   // pitch pair — 3.2 Hz / 1.6 Hz
   posA: 27.7, posB: 22.3,   // 4.4 Hz / 3.5 Hz
-  rumRot: 0.009,            // rad per unit rumble (was 0.016)
-  rumPos: 0.018,            // m   per unit rumble (was 0.035)
+  rumRot: 0.006,            // rad per unit rumble (was 0.016)
+  rumPos: 0.012,            // m   per unit rumble (was 0.035)
 };
 
 /* ============================================================

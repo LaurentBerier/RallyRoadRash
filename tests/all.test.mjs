@@ -17,6 +17,14 @@ import path from 'node:path';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const run = (args) => execFileSync(process.execPath, args, { cwd: ROOT, stdio: 'pipe' });
 
+test('deep: generated vehicle decals and fabric banner integration', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/vehicle-decals-check.mjs']);
+});
+
+test('deep: Hornet race handling, lightweight collisions and exhaust alignment', () => {
+  run(['--experimental-loader', './dev/loader.mjs', 'dev/hornet-handling-check.mjs']);
+});
+
 /* ---------------- layer 1: pure-module unit tests ---------------- */
 
 test('surfaces table is complete and sane', async () => {
@@ -193,4 +201,44 @@ test('deep: canyon vista foundations against baked terrain', () => {
 
 test('deep: volcanic geology foundations and course clearance', () => {
   run(['--experimental-loader', './dev/loader.mjs', 'dev/volcano-foundation-check.mjs']);
+});
+
+test('deep: Ridgeback imported body clears tyre tread', () => {
+  run(['dev/ridgeback-clearance-check.mjs']);
+});
+
+test('deep: mechanical audio playback and engine transitions', () => { run(['dev/audio-playback-check.mjs']); });
+
+test('deep: checkpoint clearance and bounded airborne debris',()=>{run(['--experimental-loader','./dev/loader.mjs','dev/polish-check.mjs']);});
+
+
+test('rocket wreck: minimum spectacle time, grounded recovery and airborne deadline', async () => {
+  const {beginWreck,tickWreck,WRECK_CTL}=await import('../src/game/wreck.js');
+  const v={contacts:4};
+  assert.equal(beginWreck(v,100),true);
+  for(let i=0;i<28;i++)assert.equal(tickWreck(v,.1),false);
+  assert.equal(beginWreck(v,200),false);
+  assert.equal(v.wreckS,100);
+  assert.equal(tickWreck(v,.11),true);
+  const air={contacts:0};beginWreck(air,50);
+  assert.equal(tickWreck(air,3.9),false);
+  assert.equal(tickWreck(air,.11),true);
+  assert.equal(WRECK_CTL.throttle,0);assert.equal(WRECK_CTL.steer,0);assert.equal(WRECK_CTL.roll,0);
+});
+
+test('deep: rocket direct hits, reset and bounded effects',()=>{run(['--experimental-loader','./dev/loader.mjs','dev/rocket-polish-check.mjs']);});
+
+test('deep: race progress on shoulders, jumps and alternate routes',()=>{run(['dev/race-progress-check.mjs']);});
+
+test('deep: safe rocket recovery across baked tracks',()=>{run(['--experimental-loader','./dev/loader.mjs','dev/recovery-check.mjs']);});
+
+test('Proving Grounds uses three laps and preserves legacy progress',async()=>{
+ const {default:track}=await import('../src/world/tracks/training.js');
+ const {normalizeProfile,applyResult}=await import('../src/game/progression.js');
+ assert.equal(track.laps,3);
+ const p=normalizeProfile({unlockedTracks:['training','canyon'],results:{training:{medal:'gold',bestTotal:80,bestLap:79,wins:1,plays:1}}});
+ assert.equal(p.results.training.bestTotal,null);assert.equal(p.results.training.legacyBestTotal,80);
+ assert.equal(p.results.training.bestLap,79);assert.equal(p.results.training.medal,'gold');
+ const next=applyResult(p,'training',1,220,70).profile;
+ assert.equal(normalizeProfile(next).results.training.bestTotal,220);
 });

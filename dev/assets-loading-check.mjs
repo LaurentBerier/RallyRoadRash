@@ -28,5 +28,18 @@ try {
  assert.equal(low.get('normal').wrapS,low.get('ground').wrapS,'both tile kinds repeat');
  const high=await loadAssets('assets/manifest.json',()=>{},'HIGH');
  assert.equal(high.get('normal').image.url,'assets/normal-2k.webp');
+ globalThis.fetch=async()=>({ok:true,json:async()=>({
+  'art/menu':{kind:'color',url:'menu.webp'},'art/loading':{kind:'color',url:'menu.webp'},
+  'terrain/forest':{kind:'tile',url:'forest.webp'},car:{kind:'model',url:'car.glb'}
+ })});
+ const before=decoded.length;
+ const staged=await loadAssets('assets/manifest.json',()=>{},'HIGH',id=>id.startsWith('art/'));
+ assert.equal(decoded.length-before,1,'menu aliases decode once');
+ assert.equal(staged.get('art/menu'),staged.get('art/loading'));
+ assert.equal(staged.has('terrain/forest'),false,'other tracks do not block first menu');
+ assert.equal(staged.get('car'),'assets/car.glb','model URLs available before downloads');
+ await Promise.all([staged.ensure(id=>id.startsWith('terrain/')),staged.ensure(id=>id.startsWith('terrain/'))]);
+ assert.equal(decoded.length-before,2,'concurrent preload requests share work');
+ assert.ok(staged.get('terrain/forest').isTexture);
  console.log('PASS: decoded readiness, missing image fallback, bounded slow request, progress, lazy model URL');
 } finally { globalThis.setTimeout=timers; }

@@ -16,8 +16,9 @@
    red canyon dirt, black mud and grey rock without a second material.
    ============================================================ */
 import * as THREE from 'three';
+import {themePalette, THEMES} from './terrain-shader.js';
 import { G } from '../game/config.js';
-import { clamp } from '../core/rng.js';
+import { clamp, vnoise } from '../core/rng.js';
 import { makeDustAtlas } from './textures.js';
 
 export const DUST_KIND = { PUFF: 0, CLOD: 1, EMBER: 2 };
@@ -37,13 +38,11 @@ export const DUST_THEMES = {
   canyon:   { wind: [1.80, -0.80], sunCol: [2.55, 1.72, 1.02], amb: [0.22, 0.16, 0.10], sky: [0.14, 0.20, 0.34] },
   forest:   { wind: [0.60, 0.50], sunCol: [2.05, 1.60, 1.05], amb: [0.14, 0.17, 0.11], sky: [0.20, 0.26, 0.34] },
   volcano:  { wind: [2.40, -1.10], sunCol: [1.65, 0.62, 0.24], amb: [0.20, 0.09, 0.07], sky: [0.14, 0.09, 0.10] },
-  // THUNDER MESA: the canyon's air an hour later. Same wind off the same
-  // mesa, but the key has swung orange and the sky fill has gone violet —
-  // which is what makes a dust plume read as backlit at nine degrees.
-  thunder:  { wind: [2.10, -0.60], sunCol: [2.30, 1.24, 0.52], amb: [0.22, 0.14, 0.12], sky: [0.16, 0.15, 0.32] }
+  // Thunder's warm afternoon key and cool skylight match the concept pass.
+  thunder:  { wind: [2.10, -0.60], sunCol: [2.70, 2.08, 1.40], amb: [0.19, 0.18, 0.16], sky: [0.22, 0.29, 0.40] }
 };
 
-const DEFAULT_COL = [0.58, 0.46, 0.32];      // DIRT, for callers that pass nothing
+const DEFAULT_COL = [0.27, 0.19, 0.11];      // DIRT, for callers that pass nothing
 
 export class Dust {
   /**
@@ -85,8 +84,9 @@ export class Dust {
         uSunCol: { value: new THREE.Vector3(2.55, 2.32, 2.02) },
         uAmb: { value: new THREE.Vector3(0.16, 0.15, 0.13) },
         uSky: { value: new THREE.Vector3(0.18, 0.25, 0.40) },
+        uHaze: { value: new THREE.Vector3(.43,.46,.49) },
         uWrap: { value: 0.45 },
-        uOpacity: { value: 0.78 },   // full-opacity puffs read as solid spheres
+        uOpacity: { value: 0.52 },   // full-opacity puffs read as solid spheres
         uTime: { value: 0 },
         uViewH: { value: 1080 },
         uMaxPx: { value: 512 }
@@ -95,15 +95,20 @@ export class Dust {
         attribute vec3 aVel, aCol, aParam;      // aParam = (sizeMetres, kind, spinRate)
         attribute float aLife, aSeed;
         varying vec3 vCol; varying vec2 vTile;
-        varying float vL, vKind, vAng, vStretch, vSeed;
+        varying float vL, vKind, vAng, vStretch, vSeed, vDistance;
+        varying vec3 vSunView;
+        uniform vec3 uSunDir;
         uniform float uTime, uViewH, uMaxPx;
         void main(){
           vL = aLife; vSeed = aSeed; vCol = aCol; vKind = aParam.y;
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vDistance=length(mv.xyz);
+          vSunView=normalize(mat3(viewMatrix)*uSunDir);
 
           float age = 1.0 - aLife;
           float isPuff = step(aParam.y, 0.5);
           float sizeM = aParam.x * mix(1.0, 1.0 + 0.95 * age, isPuff);
+          sizeM*=mix(1.,.68,smoothstep(45.,220.,vDistance)*isPuff);
 
           vec3 vv = (viewMatrix * vec4(aVel, 0.0)).xyz;
           vStretch = mix(1.0, clamp(1.0 + length(vv.xy) * 0.030, 1.0, 1.8), isPuff);
@@ -121,9 +126,10 @@ export class Dust {
       fragmentShader: /* glsl */`
         precision mediump float;
         varying vec3 vCol; varying vec2 vTile;
-        varying float vL, vKind, vAng, vStretch, vSeed;
+        varying float vL, vKind, vAng, vStretch, vSeed, vDistance;
+        varying vec3 vSunView;
         uniform sampler2D uTex;
-        uniform vec3 uSunDir, uSunCol, uAmb, uSky;
+        uniform vec3 uSunDir, uSunCol, uAmb, uSky, uHaze;
         uniform float uWrap, uOpacity;
         void main(){
           vec2 pc = gl_PointCoord - 0.5;
@@ -141,21 +147,27 @@ export class Dust {
           vec2 nc = (gl_PointCoord - 0.5) * 2.0;
           float r2 = min(dot(nc, nc), 1.0);
           vec3 N = vec3(nc.x, -nc.y, sqrt(max(1.0 - r2, 0.0)));
-          vec3 S = normalize(uSunDir);
+          vec3 S = normalize(vSunView);
           float lam = clamp((dot(N, S) + uWrap) / (1.0 + uWrap), 0.0, 1.0);
 
           vec3 alb = vCol * t.rgb * (0.86 + 0.28 * vSeed);
-          vec3 col = alb * (lam * uSunCol + uAmb + uSky * (0.5 + 0.5 * N.y));
+          vec3 col = alb * (mix(.38,lam,.42) * uSunCol + uAmb + uSky * (0.5 + 0.5 * N.y));
 
           float aIn  = smoothstep(0.0, 0.14, 1.0 - vL);
           float aOut = smoothstep(0.0, 0.32, vL);
-          float alpha = t.a * aIn * aOut * uOpacity;
+          float alpha = t.a * aIn * aOut * (vKind < 0.5 ? uOpacity : 0.78);
+          if(vKind<.5){
+            float farDust=smoothstep(30.,210.,vDistance);
+            alpha*=mix(1.,.20,farDust)*(1.-smoothstep(230.,380.,vDistance));
+            alpha*=smoothstep(1.1,3.4,vDistance);
+            col=mix(col,uHaze,farDust*.38);
+          }
 
           if (vKind > 1.5){
             // cooling ember: bright enough to clear the bloom threshold while hot
             float heat = pow(vL, 1.6);
             col = mix(vec3(0.05, 0.010, 0.004), vCol * vec3(2.8, 1.0, 0.38), heat) * (1.8 + 9.0 * heat);
-            alpha = t.a * aOut * uOpacity * (0.30 + 0.70 * heat);
+            alpha = t.a * aOut * 0.78 * (0.30 + 0.70 * heat);
           }
           gl_FragColor = vec4(col, alpha);
         }`
@@ -207,10 +219,15 @@ export class Dust {
 
   /** name from SKY_THEMES, or an explicit { wind, sunCol, amb, sky } override. */
   setTheme(nameOrOpts) {
+    this.groundPalette=themePalette(typeof nameOrOpts==='string'?nameOrOpts:'training').map(c=>{
+      const earth=clamp(c[0]*.55+c[1]*.35+c[2]*.10,.075,.28);
+      return nameOrOpts==='thunder'?[earth,earth*.84,earth*.66]:[earth,earth*.72,earth*.43];
+    });
     const t = typeof nameOrOpts === 'string'
       ? (DUST_THEMES[nameOrOpts] || DUST_THEMES.training)
       : (nameOrOpts || DUST_THEMES.training);
     const u = this.mat.uniforms;
+    u.uHaze.value.fromArray((THEMES[typeof nameOrOpts==='string'?nameOrOpts:'training']||THEMES.training).haze);
     if (t.wind) this.setWind(t.wind[0], t.wind[1]);
     if (t.sunCol) u.uSunCol.value.fromArray(t.sunCol);
     if (t.amb) u.uAmb.value.fromArray(t.amb);
@@ -220,6 +237,29 @@ export class Dust {
 
   /** Drawing-buffer height in pixels — point sizes are metres until it is set. */
   setViewport(heightPx) { this.mat.uniforms.uViewH.value = Math.max(64, heightPx | 0); }
+
+  // Resolve the actual ground under the emitter against the shader's theme
+  // palette; no pixel readback, texture sampling or per-particle allocation.
+  groundColorAt(x,z,fallback=DEFAULT_COL){
+    const sid=this.terrain?.surfaceAt?.(x,z);
+    const base=this.groundPalette?.[sid]||fallback;
+    const out=this._groundSample||(this._groundSample=[0,0,0]);
+    // Modest luminance variation follows broad ground patches; avoid reading
+    // the framebuffer or turning every puff into a differently coloured blob.
+    let luma=.96+.10*vnoise(x*.018,z*.018,53);
+    if(this.terrain?.normalAt){
+      const n=this._groundNormal||(this._groundNormal=new THREE.Vector3());
+      this.terrain.normalAt(x,z,.8,n);
+      luma*=.93+.09*Math.max(0,n.dot(this.mat.uniforms.uSunDir.value));
+    }
+    const vis=this.terrain?.sunVis?.(x,z,this.mat.uniforms.uSunDir.value)??1;
+    // Use the same terrain occlusion as vehicles: dust in a shaded cutting
+    // receives cool sky fill instead of keeping a sunlit orange glow.
+    out[0]=base[0]*luma*(.42+.58*vis);
+    out[1]=base[1]*luma*(.53+.47*vis);
+    out[2]=base[2]*luma*(.70+.30*vis);
+    return out;
+  }
 
   /* ---------------- emission ---------------- */
 
@@ -249,8 +289,8 @@ export class Dust {
       let out, vy, size, life, drg, spin;
       if (k === 1) {
         out = (0.45 + r3 * 1.30) * force * 1.30;
-        vy = (1.05 + r4 * 1.55) * force;
-        size = 0.10 + r2 * 0.26;
+        vy = (1.65 + r4 * 2.15) * force;
+        size = 0.065 + r2 * 0.16;
         life = 1.00 + r3 * 1.30;
         drg = 0.012 + r4 * 0.038;
         spin = (4.0 + r1 * 7.0) * (r2 < 0.5 ? -1 : 1);
@@ -278,7 +318,8 @@ export class Dust {
       this.vel[i3] = Math.cos(a) * out;
       this.vel[i3 + 1] = vy;
       this.vel[i3 + 2] = Math.sin(a) * out;
-      this.col[i3] = cr; this.col[i3 + 1] = cg; this.col[i3 + 2] = cb;
+      const shade=k===1?.48:1;
+      this.col[i3] = cr*shade; this.col[i3 + 1] = cg*shade; this.col[i3 + 2] = cb*shade;
       this.param[i3] = size; this.param[i3 + 1] = k; this.param[i3 + 2] = spin;
       this.seed[i] = r1;
       this.maxLife[i] = life;
@@ -300,10 +341,11 @@ export class Dust {
   burst(x, y, z, heading = 0, force = 1, col = DEFAULT_COL) {
     const f = clamp(force, 0.30, 3.40);
     const dx = Math.sin(heading), dz = Math.cos(heading);
+    col=this.groundColorAt(x,z,col);
     const cr = col[0], cg = col[1], cb = col[2];
     this.spawn(Math.round(10 + f * 16), x, y, z, 0.9 + f * 1.5, 0.55 + f * 0.55,
       0, 0, cr, cg, cb, 0);
-    this.spawn(Math.round(4 + f * 9), x, y + 0.10, z, 1.4 + f * 2.2, 0.35,
+    this.spawn(Math.round(3 + f * 4), x, y + 0.10, z, 1.4 + f * 2.2, 0.35,
       -dx, -dz, cr, cg, cb, 1);
   }
 

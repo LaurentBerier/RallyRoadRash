@@ -25,7 +25,8 @@
         each frame into a buffer that never grows.
      3. ONE InstancedMesh of rings.
 
-   And no fourth: SMOKE IS NOT A NEW SYSTEM. A dark puff is
+   Vehicle hits add two pooled draw calls in vehicle-hit-fx.js (atlas + shards).
+   SMOKE IS NOT A NEW SYSTEM. A dark puff is
    dust.spawn(..., PUFF) with a dark colour, which already has drag, wind,
    ground contact and the right lighting. Adding a smoke pool here would be
    a second answer to a solved problem and a fourth draw call.
@@ -35,6 +36,7 @@
    the simulation, so a race stays reproducible with the sparks on.
    ============================================================ */
 import * as THREE from 'three';
+import { VehicleHitFX } from './vehicle-hit-fx.js';
 import { G } from '../game/config.js';
 import { clamp } from '../core/rng.js';
 import { makeVfxAtlas, VFX_TILE } from './textures.js';
@@ -90,6 +92,7 @@ export class VFX {
     this.MAX = TIER_POOL[(quality && quality.name) || 'HIGH'] || TIER_POOL.HIGH;
     this.n = 0;
 
+    this.hits = new VehicleHitFX(scene, dust?.terrain, quality?.name === 'LOW');
     this.atlas = makeVfxAtlas(128);
     this._buildPoints();
     this._buildRibbons();
@@ -597,7 +600,10 @@ export class VFX {
   /* ============================================================
      5.  FRAME
      ============================================================ */
+  vehicleHit(x,y,z,color) { this.hits.hit(x,y,z,color); }
+
   update(dt, camera) {
+    this.hits.update(dt);
     if (dt <= 0) return;
     const ut = this.pMat.uniforms.uTime;
     ut.value = (ut.value + dt) % 1024;
@@ -817,6 +823,7 @@ export class VFX {
 
   /** Everything gone, this frame. The grid, a restart, a track change. */
   clear() {
+    this.hits.clear();
     this.n = 0;
     this.pGeo.setDrawRange(0, 0);
     this.kN = 0;
@@ -826,6 +833,7 @@ export class VFX {
 
   dispose() {
     this.clear();
+    this.hits.dispose();
     if (this.points.parent) this.points.parent.remove(this.points);
     if (this.ribbonMesh.parent) this.ribbonMesh.parent.remove(this.ribbonMesh);
     if (this.rings.parent) this.rings.parent.remove(this.rings);

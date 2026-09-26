@@ -155,7 +155,9 @@ export function normalizeProfile(raw) {
       if (!r || typeof r !== 'object') continue;
       p.results[id] = {
         medal: MEDAL_RANK[r.medal] ? r.medal : null,
-        bestTotal: numOrNull(r.bestTotal),
+        bestTotal: id==='training' && r.raceLaps!==3 ? null : numOrNull(r.bestTotal),
+        raceLaps: 3,
+        legacyBestTotal: numOrNull(id==='training' && r.raceLaps!==3 ? r.bestTotal : r.legacyBestTotal),
         bestLap: numOrNull(r.bestLap),
         /* Was this record set with power-ups on? The two records improve
            independently, so they carry independent flags. MANDATORY here:
@@ -287,6 +289,7 @@ export function applyResult(profile, trackId, placement, total, bestLap, itemsOn
       medal: null, bestTotal: null, bestLap: null, wins: 0, plays: 0,
       itemsTotal: false, itemsLap: false,
     });
+  rec.raceLaps=3;
   rec.plays++;
   if (pos === 1 && finished) rec.wins++;
   if (finished && (rec.bestTotal == null || total < rec.bestTotal)) {

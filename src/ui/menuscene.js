@@ -535,7 +535,7 @@ export class MenuScene {
        the way out, through exactly the path the LOW-tier and motionFx-0 cases
        have always used. Nothing new in the lifecycle. */
     if (this.kind !== 'garage') return false;
-    if (!(this.motionFx > 0)) return false;
+    // Inspecting the selected vehicle is essential UI, not a motion effect.
     const q = this.engine.quality;
     // Its own bounded pixel budget keeps this preview independent of race quality.
     return true;
@@ -799,7 +799,9 @@ export class MenuScene {
        you see the WRONG picture through the one that has not painted yet. */
     const get = (!this._live && kind === 'main' && this.assets && this.assets.get)
       ? (id) => this.assets.get(id) : () => null;
-    const tex = get('art/menu-hero') || get('art/title');
+    const splash = get('art/splash');
+    const tex = splash || get('art/menu-hero') || get('art/title');
+    document.body.classList.toggle('cinematic-title', !!splash);
     const img = tex && tex.image;
     const src = img && img.nodeName === 'IMG' ? img.src : '';
     if (src !== this._artSrc) {

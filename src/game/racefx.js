@@ -33,7 +33,7 @@ const BOOST = TUNE.boost;
 const BOOST_HEAR = 70;              // m — a rival's boost you can still hear
 const CRASH_HEAR = 55;              // m — a rival's crash you can still hear
 const LAND_HEAR = 70;               // m — a rival's landing you can still hear
-const TOUCHDOWN_AIR = 0.25;         // s of air before a landing is an event
+const TOUCHDOWN_AIR = 0.12;         // s of air before a landing is an event
 const AIRTIME_BRAG = 1.3;           // s of air worth a HUD flourish. Hang-time
                                     //   gravity makes 1 s airs routine; the brag
                                     //   has to stay something you earn.
@@ -142,13 +142,13 @@ export class RaceFX {
    */
   touchdown(r, v, camD, emit) {
     if (r.airPeak <= TOUCHDOWN_AIR) return;
-    const hit = v.hardHit;
+    const hit = Math.max(v.hardHit, Math.max(0,-(v._airVy||0)), 2.5);
     if (r.isPlayer) {
       if (this.feel) this.feel.landing(hit);
-      this.audio.land(clamp(hit * 0.22, 0.2, 2.2), v.surfaceId);
+      this.audio.land(clamp(hit * 0.22, 0.2, 2.2), v.surfaceId, v.spec.id, 0, true);
       if (r.airPeak > AIRTIME_BRAG) this.hud.airtime(r.airPeak);
     } else if (camD < LAND_HEAR) {
-      this.audio.land(clamp(hit * 0.22, 0.2, 2.2) * clamp(1 - camD / LAND_HEAR, 0.1, 0.6), v.surfaceId);
+      this.audio.land(clamp(hit * 0.22, 0.2, 2.2) * clamp(1 - camD / LAND_HEAR, 0.1, 0.6), v.surfaceId, v.spec.id, 0, false);
     }
     const S = SURFACES[v.surfaceId] || SURFACES[SURF.DIRT];
     if (emit > 0) {

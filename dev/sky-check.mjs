@@ -81,7 +81,7 @@ const GOLDEN_SUN = {
   canyon: [0.723270, 0.469472, -0.506444],
   forest: [-0.435229, 0.374607, 0.818656],
   volcano: [-0.866729, 0.190809, -0.460847],
-  thunder: [-0.463692, 0.156434, -0.872076]
+  thunder: [0.719846, 0.342020, 0.604023]
 };
 
 head('1. SUN DIRECTION — the terrain is baked against these');

@@ -30,7 +30,8 @@ import { VFX } from './world/vfx.js';
 import { setGroundTexture } from './world/terrain-shader.js';
 import { TRACKS, getTrack } from './world/tracks/index.js';
 import { VEHICLES, VEHICLE_BY_ID, statBars } from './game/vehicles.js';
-import { setCarcassSource, setCarcassRenderer } from './game/vehicle-art.js';
+import { setVehicleExplosionAtlas } from './world/vehicle-hit-fx.js';
+import { setRiderSource, setCarcassSource, setCarcassRenderer, setVehicleDecalSource, setExhaustAtlas } from './game/vehicle-art.js';
 import { CameraRig } from './game/camera.js';
 import { Feel } from './game/feel.js';
 import { Race } from './game/race.js';
@@ -49,7 +50,7 @@ const AS = { BOOT: 0, MENU: 1, TRACKS: 2, GARAGE: 3, LOADING: 4, RACE: 5 };
 const DEFAULTS = {
   quality: 'high', fov: 58, sens: 1.0, invertY: false,
   volSfx: 0.8, volMusic: 0.6, music: true, items: true,
-  camMode: 0, hudScale: 1, grain: 0.35, autoCentre: 1, showTouch: 'auto',
+  camMode: 0, hudScale: 1, contrast: 1.08, autoCentre: 1, showTouch: 'auto',
   /* motionFx scales the optional camera-and-post flourishes (speed blur,
      the live menu scene). Coarse pointers default to half: the effects
      that cost the most are the ones a phone can least afford. */
@@ -65,8 +66,8 @@ const DEFAULTS = {
    the settings hint says "from the next race". */
 const RIVALS = {
   easy: { diff: -0.20, band: { aheadSec: 2, aheadMul: 0.92, behindSec: 7, behindMul: 1.03, ramp: 4, cap: [0.86, 1.05] } },
-  normal: { diff: 0, band: { aheadSec: 3, aheadMul: 0.95, behindSec: 5, behindMul: 1.05, ramp: 4, cap: [0.90, 1.08] } },
-  hard: { diff: 0.18, band: { aheadSec: 4, aheadMul: 0.97, behindSec: 4, behindMul: 1.06, ramp: 4, cap: [0.95, 1.08] } },
+  normal: { diff: 0, band: { aheadSec: 3, aheadMul: 0.98, behindSec: 5, behindMul: 1.05, ramp: 4, cap: [0.90, 1.08] } },
+  hard: { diff: 0.18, band: { aheadSec: 4, aheadMul: 0.99, behindSec: 4, behindMul: 1.06, ramp: 4, cap: [0.95, 1.08] } },
 };
 
 const App = {
@@ -114,6 +115,8 @@ async function boot() {
     (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
       ? { motionFx: 0.5 } : null),
     Save.settings());
+  delete App.settings.grain; // Ignore saved film-grain preferences.
+  App.settings.contrast = Math.max(.9, Math.min(1.2, Number(App.settings.contrast) || 1.08));
   App.profile = normalizeProfile(Save.readProfile());
   App.trackId = nextTrackFor(App.profile);
   App.vehicleId = App.profile.unlockedVehicles[App.profile.unlockedVehicles.length - 1] || 'hopper';
@@ -143,17 +146,25 @@ async function boot() {
   // Resolve and decode the image set behind the loading screen. Failed files
   // settle to the procedural fallback; they cannot repaint a visible menu.
   const map = await loadAssets('assets/manifest.json', p =>
-    App.ui.boot(0.08 + p * 0.88, 'preparing menu assets'), App.engine.quality.name);
+    App.ui.boot(0.08 + p * 0.88, 'preparing menu assets'), App.engine.quality.name, id=>id.startsWith('art/'));
   App.assets = new Assets(map);
+  setVehicleDecalSource(id => App.assets.get('vehicles/' + id + '-livery'));
+  setExhaustAtlas(App.assets.get('fx/exhaust-frames'));
+  setVehicleExplosionAtlas(App.assets.get('fx/vehicle-explosion'));
   App.ui.setAssets(App.assets);
   App.menuScene.assets = App.assets;
-  setCarcassSource((id, level) => App.assets.url('models/' + id + '-carcass' + (level === 'high' ? '-high' : '')));
+  setRiderSource(()=>App.assets.url('models/hornet-rider'));
+setCarcassSource((id, level) => App.assets.url('models/' + id + '-carcass' + (level === 'high' ? '-high' : '')));
   setCarcassRenderer(App.engine.renderer);
   setHeroSource(key => App.assets.url(key));
   wireLifecycle();
   showScreen('main');
   App.ui.boot(1, 'ready');
   await new Promise(resolve => requestAnimationFrame(resolve));
+  // Remember a completed launch, never a failed or interrupted download.
+  try { localStorage.setItem('rally-road-rash:first-launch-complete', '1'); } catch { /* Storage is optional. */ }
+  const firstLaunchNotice = document.getElementById('firstLaunchNotice');
+  if (firstLaunchNotice) firstLaunchNotice.hidden = true;
   App.ui.bootDone();
 
   App.tick = tick;
@@ -171,7 +182,8 @@ function persist() { Save.saveSettings(App.settings); }
 /** Everything a settings value touches, applied live. */
 function applySettings() {
   const S = App.settings, e = App.engine;
-  e.final.uniforms.uGrain.value = S.grain;
+  e.final.uniforms.uUserContrast.value = S.contrast;
+  document.documentElement.style.setProperty('--scene-contrast', S.contrast);
   App.rig.fovScale = S.fov / 58;
   App.rig.sens = S.sens;
   App.rig.invertY = !!S.invertY;
@@ -195,7 +207,7 @@ function applyQuality(key) {
     w.dust.setQuality(q);
   }
   // setQuality rebuilds the composer, so the final-pass uniforms are new
-  // objects — re-apply or grain silently resets.
+  // objects — re-apply the saved display contrast.
   applySettings();
   syncViewport();
 }
@@ -215,7 +227,11 @@ function applySetting(key, value) {
     case 'sens': S.sens = +value; App.rig.sens = S.sens; break;
     case 'invertY': S.invertY = !!value; App.rig.invertY = S.invertY; break;
     case 'autoCentre': S.autoCentre = value | 0; App.rig.autoCentre = S.autoCentre; break;
-    case 'grain': S.grain = +value; App.engine.final.uniforms.uGrain.value = S.grain; break;
+    case 'contrast':
+      S.contrast = Math.max(.9, Math.min(1.2, +value || 1.08));
+      App.engine.final.uniforms.uUserContrast.value = S.contrast;
+      document.documentElement.style.setProperty('--scene-contrast', S.contrast);
+      break;
     case 'hudScale':
       S.hudScale = +value;
       document.documentElement.style.setProperty('--hud-k', S.hudScale);
@@ -251,7 +267,10 @@ function applySetting(key, value) {
    ============================================================ */
 /* ui.show() already hides the other screens, so this never calls ui.hide()
    first — doing so drops `ui-open` for a frame and the focus ring with it. */
+let garageEntry=0;
 function showScreen(name) {
+  const entry=++garageEntry;
+  if(name!=='garage')App.ui.bootDone();
   switch (name) {
     case 'main':
       App.state = AS.MENU;
@@ -274,6 +293,7 @@ function showScreen(name) {
       break;
 
     case 'garage':
+      App.ui.boot(.05, 'preparing the garage');
       App.state = AS.GARAGE;
       App.ui.show('garage', {
         vehicles: vehicleList(), trackId: App.trackId,
@@ -284,6 +304,7 @@ function showScreen(name) {
         vehicleId: App.vehicleId,
       });
       menuScene('garage');
+      prepareGarage(entry);
       break;
 
     case 'settings':
@@ -294,6 +315,21 @@ function showScreen(name) {
       App.ui.show(name, {});
       break;
   }
+}
+
+async function prepareGarage(entry) {
+  const preview=App.menuScene?.preview;
+  try {
+    if(preview){
+      await preview.preloadFleet(VEHICLES.flatMap(v=>[
+        App.assets.url('models/'+v.id+'-carcass'),App.assets.url('models/'+v.id+'-carcass-high'),App.assets.url('models/hornet-rider')
+      ]),p=>{if(entry===garageEntry)App.ui.boot(.1+p*.65,'loading vehicle materials');});
+      if(entry!==garageEntry)return;
+      App.ui.boot(.85,'preparing garage lighting');
+      await preview.ready;
+    }
+  } catch(error){console.warn('[garage] preload failed; using available assets',error);}
+  finally {if(entry===garageEntry)App.ui.bootDone();}
 }
 
 function recordTable() {
@@ -417,7 +453,15 @@ function startRace(trackId, vehicleId) {
 
   App.ui.boot(0.01, `surveying ${def.name}`, def.id);
 
-  pumpBake(def).then((baked) => {
+  const stageAssets=App.assets.ensure(id=>{
+    if(id.startsWith('art/'))return false;
+    if(/^(backdrop|clouds|sky|env)\//.test(id))return id.endsWith('/'+def.theme);
+    if(id.startsWith('terrain/forest-'))return def.theme==='forest';
+    return true;
+  });
+  Promise.all([pumpBake(def),stageAssets,App.audio.preloadRaceTheme(def.theme)]).then(([baked]) => {
+    setExhaustAtlas(App.assets.get('fx/exhaust-frames'));
+    setVehicleExplosionAtlas(App.assets.get('fx/vehicle-explosion'));
     buildWorld(def, baked);
     App.ui.boot(1, 'grid is forming');
     App.ui.bootDone();
@@ -518,7 +562,7 @@ function buildWorld(def, baked) {
   engine.attachTerrain(terrain);
   /* Optional photographic ground detail. Null is the normal case and the
      shader's own grain is the fallback; see core/assets.js. */
-  const groundProfile=def.theme==='forest'?'forest':'quarry';
+  const groundProfile=def.theme==='thunder'?'thunder':def.theme==='forest'?'forest':'quarry';
   setGroundTexture(terrain, App.assets.get('ground'),App.assets.get('terrain/'+groundProfile+'-ground'),
     App.assets.get('terrain/'+groundProfile+'-normal'),
     App.assets.get('terrain/quarry-cliff'),App.assets.get('terrain/quarry-cliff-normal'));
@@ -537,6 +581,9 @@ function buildWorld(def, baked) {
 
   const props = new Props(engine.scene, terrain, engine.quality, def, terrain.trackData,
     App.assets.get('foliage/spruce'), { scrub: App.assets.get('foliage/'+def.theme) || App.assets.get('foliage/scrub'), sagebrush: ['training','canyon','thunder'].includes(def.theme)?App.assets.get('foliage/training-sagebrush'):null, cliff: App.assets.get('terrain/cliff'),
+      warningSigns:['left','right','jump'].map(n=>App.assets.get('signage/warning-'+n)),
+      banner: { fabric: App.assets.get('signage/rally-banner-fabric'),
+        gantry: App.assets.get('signage/road-rash-finished'), atlas: App.assets.get('signage/track-banners-atlas') },
       rockHigh:App.assets.url('models/quarry/boulder-high'),rockLow:App.assets.url('models/quarry/boulder-low'),rockMobile:App.assets.url('models/quarry/boulder-mobile') });
   const dust = new Dust(engine.scene, terrain, sky.sunDir, engine.quality.dust, theme);
   const vfx = new VFX(engine.scene, dust, engine.quality, theme);
